@@ -742,9 +742,19 @@
                                 <nil key="textColor"/>
                                 <nil key="highlightedColor"/>
                             </label>
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="時間割" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="OPF-ZO-R0d">
+                                <rect key="frame" x="172.66666666666666" y="279" width="48" height="21"/>
+                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                <nil key="textColor"/>
+                                <nil key="highlightedColor"/>
+                            </label>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="IQh-t3-qbB"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                        <constraints>
+                            <constraint firstItem="OPF-ZO-R0d" firstAttribute="centerX" secondItem="99e-IT-ob9" secondAttribute="centerX" id="4AX-9u-lcO"/>
+                            <constraint firstItem="OPF-ZO-R0d" firstAttribute="top" secondItem="IQh-t3-qbB" secondAttribute="top" constant="161" id="jlq-KS-guJ"/>
+                        </constraints>
                     </view>
                     <tabBarItem key="tabBarItem" title="時間割" image="calendar" catalog="system" id="4v2-L8-2pS"/>
                 </viewController>

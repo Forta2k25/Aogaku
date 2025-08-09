@@ -4,6 +4,7 @@
 //
 //  Created by 米沢怜生 on 2025/08/04.
 //
+// 追記　確認用
 
 import UIKit
 

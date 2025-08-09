@@ -302,6 +302,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="v9j-dx-0bw"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="u79-H2-eDJ" userLabel="金2">
                                 <rect key="frame" x="318" y="482" width="75" height="60"/>
@@ -316,6 +319,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="FLY-E6-ppk"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="H1s-NV-1rY">
                                 <rect key="frame" x="318" y="544" width="75" height="60"/>
@@ -330,6 +336,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="SQb-uw-mUa"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="WQv-VC-CMa">
                                 <rect key="frame" x="318" y="605" width="75" height="60"/>
@@ -344,6 +353,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="GVm-58-i1k"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="knh-dD-Ezi">
                                 <rect key="frame" x="318" y="668" width="75" height="60"/>
@@ -358,6 +370,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="gyY-e3-382"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="stI-dc-HHW">
                                 <rect key="frame" x="235" y="420" width="75" height="60"/>
@@ -372,6 +387,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="WfU-GD-LSJ"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="4Yl-fX-dAq">
                                 <rect key="frame" x="235" y="482" width="75" height="60"/>
@@ -386,6 +404,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="zxh-Y6-vIy"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="KXi-H9-SgI">
                                 <rect key="frame" x="235" y="544" width="75" height="60"/>
@@ -400,6 +421,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="B6U-EA-6jt"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Xrj-Sy-xhI">
                                 <rect key="frame" x="235" y="605" width="75" height="60"/>
@@ -414,6 +438,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="4ld-s2-Q64"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="2Jl-aa-qfh">
                                 <rect key="frame" x="235" y="668" width="75" height="60"/>
@@ -428,6 +455,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="fk4-In-R4S"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="FiQ-OJ-zTH">
                                 <rect key="frame" x="157" y="420" width="75" height="60"/>
@@ -442,6 +472,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="qBi-8d-DSj"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="j7c-qV-APg">
                                 <rect key="frame" x="157" y="482" width="75" height="60"/>
@@ -456,6 +489,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="yOf-ue-TsM"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="4Xa-BD-11R">
                                 <rect key="frame" x="157" y="544" width="75" height="60"/>
@@ -470,6 +506,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="SxO-dv-SV6"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="AZE-sX-mKa">
                                 <rect key="frame" x="157" y="605" width="75" height="60"/>
@@ -484,6 +523,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="6ux-YQ-nv2"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="jsN-W4-e5D">
                                 <rect key="frame" x="157" y="668" width="75" height="60"/>
@@ -498,6 +540,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="k10-Nc-MDl"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="npC-PC-knb">
                                 <rect key="frame" x="78" y="420" width="75" height="60"/>
@@ -512,6 +557,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="cMb-Mw-MDd"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="PAB-fK-QZF">
                                 <rect key="frame" x="78" y="482" width="75" height="60"/>
@@ -526,6 +574,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="n1i-OW-3n8"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="S7X-70-dcU">
                                 <rect key="frame" x="78" y="544" width="75" height="60"/>
@@ -540,6 +591,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="jA8-Td-tFP"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="kgW-3D-YAm">
                                 <rect key="frame" x="78" y="605" width="75" height="60"/>
@@ -554,6 +608,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="lhp-V6-eqn"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Rq0-ys-egi">
                                 <rect key="frame" x="78" y="668" width="75" height="60"/>
@@ -568,6 +625,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="PVI-dV-iSd"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="fs1-FL-NFs">
                                 <rect key="frame" x="0.0" y="420" width="75" height="60"/>
@@ -582,6 +642,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="XZh-F6-5JJ"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="XEB-3O-i9s">
                                 <rect key="frame" x="0.0" y="482" width="75" height="60"/>
@@ -596,6 +659,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="ffJ-GD-7Jn"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="LnR-B3-Sf4">
                                 <rect key="frame" x="0.0" y="544" width="75" height="60"/>
@@ -610,6 +676,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="SeE-h1-dhI"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="aO7-ux-6Y1">
                                 <rect key="frame" x="0.0" y="605" width="75" height="60"/>
@@ -624,6 +693,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="0Kj-cr-fHA"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="3nV-F8-Wct">
                                 <rect key="frame" x="0.0" y="668" width="75" height="60"/>
@@ -638,6 +710,9 @@
                                         <integer key="value" value="1"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="Eda-in-Ep1"/>
+                                </connections>
                             </button>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="kPl-wp-qWl"/>

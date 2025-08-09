@@ -63,6 +63,27 @@ class syllabus_search: UIViewController {
     override func viewDidLoad() {
       super.viewDidLoad()
         
+        for b in slotButtons {
+                // 初期見た目
+                var cfg = b.configuration ?? .plain()
+                cfg.baseBackgroundColor = .white
+                cfg.baseForegroundColor = .lightGray
+                b.configuration = cfg
+
+                // 押下時の見た目は isSelected に同期
+                b.configurationUpdateHandler = { btn in
+                    var c = btn.configuration
+                    if btn.isSelected {
+                        c?.baseBackgroundColor = .systemGreen
+                        c?.baseForegroundColor = .white
+                    } else {
+                        c?.baseBackgroundColor = .white
+                        c?.baseForegroundColor = .lightGray
+                    }
+                    btn.configuration = c
+                }
+            }
+        
         // 1) container 側の AutoResizing はオフに
                 gridContainerView.translatesAutoresizingMaskIntoConstraints = false
                 // 2) ボタンもオフに
@@ -224,17 +245,12 @@ class syllabus_search: UIViewController {
     }
 
     @IBAction func slotTapped(_ sender: UIButton) {
-        let idx = sender.tag                  // 何番目のボタンか
-        selectedStates[idx].toggle()          // Bool を反転
+        sender.isSelected.toggle()
 
-        if selectedStates[idx] {
-            // 選択されたとき
-            sender.backgroundColor = .systemGreen
-            sender.setTitleColor(.white, for: .normal)
-        } else {
-            // 選択解除されたとき
-            sender.backgroundColor = .white    // 元に戻す
-            sender.setTitleColor(.lightGray, for: .normal)
+        // 必要なら内部配列も同期
+        let idx = sender.tag
+        if selectedStates.indices.contains(idx) {
+            selectedStates[idx] = sender.isSelected
         }
     }
 

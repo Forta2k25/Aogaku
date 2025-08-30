@@ -109,7 +109,7 @@ final class AddCourseViewController: UITableViewController {
 
         // 必須：科目分類（セグメント）
         guard categorySeg.selectedSegmentIndex != UISegmentedControl.noSegment else {
-            let a = UIAlertController(title: "科目分類が未選択です。", message: "科目分類を選んでください。", preferredStyle: .alert)
+            let a = UIAlertController(title: "科目分類が未選択です。", message: "科目分類(青スタ・学科科目等)を選んでください。", preferredStyle: .alert)
             a.addAction(UIAlertAction(title: "OK", style: .default))
             present(a, animated: true); return
         }

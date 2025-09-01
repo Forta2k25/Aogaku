@@ -17,7 +17,7 @@
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
                             <tableView clipsSubviews="YES" contentMode="scaleToFill" alwaysBounceVertical="YES" dataMode="prototypes" style="plain" separatorStyle="default" rowHeight="-1" estimatedRowHeight="-1" sectionHeaderHeight="-1" estimatedSectionHeaderHeight="-1" sectionFooterHeight="-1" estimatedSectionFooterHeight="-1" translatesAutoresizingMaskIntoConstraints="NO" id="IGG-Mg-aDD">
-                                <rect key="frame" x="0.0" y="162" width="393" height="573"/>
+                                <rect key="frame" x="0.0" y="266" width="393" height="469"/>
                                 <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                                 <prototypes>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" insetsLayoutMarginsFromSafeArea="NO" selectionStyle="blue" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" reuseIdentifier="class" rowHeight="90" id="Woq-ow-eaA" customClass="syllabusTableViewCell" customModule="Aogaku" customModuleProvider="target">
@@ -105,38 +105,63 @@
                                     </tableViewCell>
                                 </prototypes>
                             </tableView>
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text=" " textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="Est-uD-lV5">
+                                <rect key="frame" x="194" y="177" width="5" height="40"/>
+                                <constraints>
+                                    <constraint firstAttribute="height" constant="40" id="Idh-cc-XLR"/>
+                                </constraints>
+                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                <nil key="textColor"/>
+                                <nil key="highlightedColor"/>
+                            </label>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="8L0-BC-VKc">
+                                <rect key="frame" x="273" y="202" width="104" height="44"/>
+                                <state key="normal" title="Button"/>
+                                <buttonConfiguration key="configuration" style="filled" title="学部・分類">
+                                    <color key="baseForegroundColor" red="0.61960786580000005" green="0.61960786580000005" blue="0.61960786580000005" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                                    <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                </buttonConfiguration>
+                                <connections>
+                                    <action selector="categoryButtonTapped:" destination="Ach-8h-faD" eventType="touchUpInside" id="4lN-U7-aSU"/>
+                                </connections>
+                            </button>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="fLA-wl-cgD"/>
-                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                        <color key="backgroundColor" red="0.92143100499999997" green="0.92145264149999995" blue="0.92144101860000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
-                            <constraint firstItem="IGG-Mg-aDD" firstAttribute="top" secondItem="fLA-wl-cgD" secondAttribute="top" id="32N-c4-8QU"/>
-                            <constraint firstItem="IGG-Mg-aDD" firstAttribute="top" secondItem="fLA-wl-cgD" secondAttribute="top" id="Nuf-Zl-gdA"/>
+                            <constraint firstItem="8L0-BC-VKc" firstAttribute="top" secondItem="Aep-Mu-875" secondAttribute="top" constant="202" id="4Y6-wd-HBS"/>
+                            <constraint firstItem="Est-uD-lV5" firstAttribute="centerX" secondItem="Aep-Mu-875" secondAttribute="centerX" id="62f-Zn-Z18"/>
+                            <constraint firstAttribute="bottom" secondItem="8L0-BC-VKc" secondAttribute="bottom" constant="606" id="TRS-Lh-UMo"/>
                             <constraint firstItem="fLA-wl-cgD" firstAttribute="trailing" secondItem="IGG-Mg-aDD" secondAttribute="trailing" id="WQs-BN-hlh"/>
+                            <constraint firstItem="IGG-Mg-aDD" firstAttribute="top" secondItem="8L0-BC-VKc" secondAttribute="bottom" constant="20" id="YFx-XL-j1C"/>
+                            <constraint firstItem="Est-uD-lV5" firstAttribute="top" secondItem="fLA-wl-cgD" secondAttribute="top" constant="15" id="Zht-5j-KlF"/>
                             <constraint firstItem="IGG-Mg-aDD" firstAttribute="leading" secondItem="fLA-wl-cgD" secondAttribute="leading" id="dPE-lV-pIq"/>
+                            <constraint firstAttribute="trailing" secondItem="8L0-BC-VKc" secondAttribute="trailing" constant="16" id="f9x-4O-gMv"/>
                             <constraint firstItem="fLA-wl-cgD" firstAttribute="bottom" secondItem="IGG-Mg-aDD" secondAttribute="bottom" id="fVq-fZ-8Mz"/>
-                            <constraint firstItem="IGG-Mg-aDD" firstAttribute="top" secondItem="fLA-wl-cgD" secondAttribute="top" id="mlC-vO-PnQ"/>
+                            <constraint firstItem="8L0-BC-VKc" firstAttribute="leading" secondItem="Aep-Mu-875" secondAttribute="leading" constant="273" id="hLv-4c-HQe"/>
                         </constraints>
                     </view>
                     <navigationItem key="navigationItem" id="jGL-Yh-hmj">
-                        <barButtonItem key="rightBarButtonItem" style="plain" id="arg-pF-Kui">
-                            <button key="customView" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" id="OUD-Mj-056">
-                                <rect key="frame" x="290" y="4.6666666666666679" width="87" height="35"/>
+                        <barButtonItem key="rightBarButtonItem" style="plain" id="va9-Iy-LLa">
+                            <button key="customView" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" id="Cod-gn-tbm">
+                                <rect key="frame" x="320" y="4.6666666666666679" width="57" height="35"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="gray" title="詳細"/>
-                                <connections>
-                                    <action selector="search_button:" destination="Ach-8h-faD" eventType="touchUpInside" id="P6b-gH-lcV"/>
-                                </connections>
+                                <buttonConfiguration key="configuration" style="gray" image="sunrise.fill" catalog="system" title=""/>
                             </button>
+                            <connections>
+                                <segue destination="XWM-mO-tUM" kind="show" id="38x-Ii-Kr3"/>
+                            </connections>
                         </barButtonItem>
                     </navigationItem>
                     <connections>
+                        <outlet property="categoryButton" destination="8L0-BC-VKc" id="BsU-hY-yXP"/>
                         <outlet property="syllabus_table" destination="IGG-Mg-aDD" id="hJc-LO-z67"/>
                     </connections>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="9NY-Df-sKO" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
-            <point key="canvasLocation" x="63" y="272"/>
+            <point key="canvasLocation" x="61.832061068702288" y="271.83098591549299"/>
         </scene>
         <!--Syllabus search-->
         <scene sceneID="6cz-HZ-YGz">
@@ -286,7 +311,7 @@
                                 </segments>
                             </segmentedControl>
                             <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="UaY-RP-5cg">
-                                <rect key="frame" x="20" y="422" width="353" height="243"/>
+                                <rect key="frame" x="20" y="422" width="353" height="194"/>
                                 <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                             </view>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="3jh-Od-Uzi">
@@ -716,7 +741,7 @@
                             </button>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="kPl-wp-qWl"/>
-                        <color key="backgroundColor" red="0.94117647410000005" green="0.94117647410000005" blue="0.94117647410000005" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                        <color key="backgroundColor" red="0.92143100499999997" green="0.92145264149999995" blue="0.92144101860000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
                             <constraint firstItem="TA5-hm-Avx" firstAttribute="top" secondItem="uIl-fM-EPP" secondAttribute="bottom" constant="15" id="4BZ-7h-cra"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="Qp9-AC-aMn" secondAttribute="trailing" constant="20" id="4Qw-jv-KTX"/>
@@ -764,6 +789,7 @@
                             </button>
                         </barButtonItem>
                     </toolbarItems>
+                    <navigationItem key="navigationItem" id="J3M-Y1-3dV"/>
                     <simulatedToolbarMetrics key="simulatedBottomBarMetrics"/>
                     <connections>
                         <outlet property="campusSegmentedControl" destination="Qp9-AC-aMn" id="Mf7-E9-4Zl"/>
@@ -877,6 +903,7 @@
         <image name="list.bullet" catalog="system" width="128" height="87"/>
         <image name="magnifyingglass" catalog="system" width="128" height="117"/>
         <image name="slider.horizontal.3" catalog="system" width="128" height="99"/>
+        <image name="sunrise.fill" catalog="system" width="128" height="104"/>
         <systemColor name="systemBackgroundColor">
             <color white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
         </systemColor>

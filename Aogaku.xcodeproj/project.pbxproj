@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		B3F4DAFE2E62B5BD00A0A27E /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = B3F4DAFD2E62B5BD00A0A27E /* FirebaseCore */; };
+		B3F4DB002E6490B000A0A27E /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = B3F4DAFF2E6490B000A0A27E /* FirebaseFirestore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,6 +71,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B3F4DAFE2E62B5BD00A0A27E /* FirebaseCore in Frameworks */,
+				B3F4DB002E6490B000A0A27E /* FirebaseFirestore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -139,6 +141,7 @@
 			name = Aogaku;
 			packageProductDependencies = (
 				B3F4DAFD2E62B5BD00A0A27E /* FirebaseCore */,
+				B3F4DAFF2E6490B000A0A27E /* FirebaseFirestore */,
 			);
 			productName = Aogaku;
 			productReference = B3A17B1F2E40A19700ACCA3A /* Aogaku.app */;
@@ -599,6 +602,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B3F4DAFB2E62B3DC00A0A27E /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCore;
+		};
+		B3F4DAFF2E6490B000A0A27E /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B3F4DAFB2E62B3DC00A0A27E /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

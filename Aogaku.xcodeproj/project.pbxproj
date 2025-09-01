@@ -7,8 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+<<<<<<< HEAD
 		B3F4DAFE2E62B5BD00A0A27E /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = B3F4DAFD2E62B5BD00A0A27E /* FirebaseCore */; };
 		B3F4DB002E6490B000A0A27E /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = B3F4DAFF2E6490B000A0A27E /* FirebaseFirestore */; };
+=======
+		A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F02E62D45500947976 /* FirebaseCore */; };
+>>>>>>> main
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,8 +74,12 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+<<<<<<< HEAD
 				B3F4DAFE2E62B5BD00A0A27E /* FirebaseCore in Frameworks */,
 				B3F4DB002E6490B000A0A27E /* FirebaseFirestore in Frameworks */,
+=======
+				A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */,
+>>>>>>> main
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -92,13 +100,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		A4EA88EF2E62D45500947976 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		B3A17B162E40A19700ACCA3A = {
 			isa = PBXGroup;
 			children = (
 				B3A17B212E40A19700ACCA3A /* Aogaku */,
 				B3A17B382E40A19A00ACCA3A /* AogakuTests */,
 				B3A17B422E40A19A00ACCA3A /* AogakuUITests */,
-				B3F4DAFC2E62B5BD00A0A27E /* Frameworks */,
+				A4EA88EF2E62D45500947976 /* Frameworks */,
 				B3A17B202E40A19700ACCA3A /* Products */,
 			);
 			sourceTree = "<group>";
@@ -111,13 +126,6 @@
 				B3A17B3F2E40A19A00ACCA3A /* AogakuUITests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		B3F4DAFC2E62B5BD00A0A27E /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -140,8 +148,12 @@
 			);
 			name = Aogaku;
 			packageProductDependencies = (
+<<<<<<< HEAD
 				B3F4DAFD2E62B5BD00A0A27E /* FirebaseCore */,
 				B3F4DAFF2E6490B000A0A27E /* FirebaseFirestore */,
+=======
+				A4EA88F02E62D45500947976 /* FirebaseCore */,
+>>>>>>> main
 			);
 			productName = Aogaku;
 			productReference = B3A17B1F2E40A19700ACCA3A /* Aogaku.app */;
@@ -226,7 +238,7 @@
 			mainGroup = B3A17B162E40A19700ACCA3A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				B3F4DAFB2E62B3DC00A0A27E /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B3A17B202E40A19700ACCA3A /* Products */;
@@ -587,7 +599,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		B3F4DAFB2E62B3DC00A0A27E /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+		A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
 			requirement = {
@@ -598,9 +610,9 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		B3F4DAFD2E62B5BD00A0A27E /* FirebaseCore */ = {
+		A4EA88F02E62D45500947976 /* FirebaseCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = B3F4DAFB2E62B3DC00A0A27E /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCore;
 		};
 		B3F4DAFF2E6490B000A0A27E /* FirebaseFirestore */ = {

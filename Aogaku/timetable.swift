@@ -107,6 +107,9 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
     }
     
     
+    private let scrollView = UIScrollView()
+    private let contentView = UIView()   // スクロールの「中身」用コンテナ
+    
     private var registeredCourses: [Int: Course] = [:]
     
     private var bgObserver: NSObjectProtocol?
@@ -120,6 +123,17 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
     private let rightB = UIButton(type: .system)
     private let rightC = UIButton(type: .system)
 
+    
+    // 1限〜7限までの開始・終了（必要に応じて編集）
+    private let timePairs: [(start: String, end: String)] = [
+        ("9:00",  "10:30"),
+        ("11:00", "12:30"),
+        ("13:20", "14:50"),
+        ("15:05", "16:35"),
+        ("16:50", "18:20"),
+        ("18:30", "20:00"),
+        ("20:10", "21:40")
+    ]
     // 5%用の「数値制約」に変更（ここを更新して確実に反映させる）
     private var headerTopConstraint: NSLayoutConstraint!
 
@@ -131,7 +145,7 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
 
     // Grid の上下制約（あとで定数を調整）
     private var gridTopConstraint: NSLayoutConstraint!
-    private var gridBottomConstraint: NSLayoutConstraint!
+    //private var gridBottomConstraint: NSLayoutConstraint! スクロール形式にするため削除
     
     
     private var settings = TimetableSettings.load()
@@ -155,10 +169,10 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
         return (loc.period - 1) * dayLabels.count + loc.day
     }
     
-    private let spacing: CGFloat = 8
+    private let spacing: CGFloat = 6
     private let cellPadding: CGFloat = 4
     private let headerRowHeight: CGFloat = 36
-    private let timeColWidth: CGFloat = 28
+    private let timeColWidth: CGFloat = 48
     private let topRatio: CGFloat = 0.02   // ← 上端から SafeArea 高さの 5%
     
     // MARK: - Persistence (UserDefaults)
@@ -298,8 +312,8 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
         print("✅ layout safeH=\(Int(safeHeight))  beforeTop=\(Int(headerTopConstraint.constant))")
         
         headerTopConstraint.constant = safeHeight * topRatio    // ← ここで 5% を確実に適用
-        gridTopConstraint.constant = 0                          // ヘッダー直下から開始
-        gridBottomConstraint.constant = -8                      // 下端にぴったり（余白8）
+        //gridTopConstraint.constant = 0                          // ヘッダー直下から開始
+        //gridBottomConstraint.constant = -8                      // 下端にぴったり（余白8）
         
         // デバッグ
             print("header h=\(Int(headerBar.frame.height))  gridTop=\(Int(gridContainerView.frame.minY))")
@@ -451,22 +465,51 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
 
     }
 
-    // MARK: Grid container（縦いっぱい）
+    // 置き換え
     private func layoutGridContainer() {
         let g = view.safeAreaLayoutGuide
-        gridContainerView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(gridContainerView)
 
-        gridTopConstraint = gridContainerView.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 0)
-        gridBottomConstraint = gridContainerView.bottomAnchor.constraint(equalTo: g.bottomAnchor, constant: -8)
+        // ① scrollView をヘッダーの下に敷く（画面いっぱい）
+        scrollView.alwaysBounceVertical = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scrollView)
 
         NSLayoutConstraint.activate([
-            gridTopConstraint,
-            gridContainerView.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 16),
-            gridContainerView.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
-            gridBottomConstraint
+            scrollView.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: g.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: g.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: g.bottomAnchor)
+        ])
+
+        // ② contentView を scrollView の contentLayoutGuide に貼る
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.addSubview(contentView)
+        NSLayoutConstraint.activate([
+            contentView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            contentView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            contentView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+
+            // 横方向は画面幅に合わせる（横スクロールを防ぐ）
+            contentView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor)
+        ])
+
+        // ③ gridContainerView を contentView 内に余白付きで配置
+        gridContainerView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(gridContainerView)
+        
+        gridTopConstraint = gridContainerView.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 0)
+        //gridBottomConstraint = gridContainerView.bottomAnchor.constraint(equalTo: g.bottomAnchor, constant: -8)
+
+
+        NSLayoutConstraint.activate([
+            gridContainerView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            gridContainerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 4),
+            gridContainerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            gridContainerView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8)
         ])
     }
+
 
     // MARK: 比率ガイド
     private func buildGridGuides() {
@@ -506,6 +549,41 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
     }
     
     
+    // 「開始時刻」「番号」「終了時刻」を縦に並べたビューを作る
+    private func makeTimeMarker(for period: Int) -> UIView {
+        let v = UIStackView()
+        v.axis = .vertical
+        v.alignment = .center          // ← 中央揃え
+        v.spacing = 2
+        v.translatesAutoresizingMaskIntoConstraints = false
+
+        let top = UILabel()
+        top.font = .systemFont(ofSize: 11, weight: .regular)
+        top.textColor = .secondaryLabel
+        top.textAlignment = .center
+
+        let mid = UILabel()
+        mid.font = .systemFont(ofSize: 16, weight: .semibold)
+        mid.textAlignment = .center
+        mid.text = "\(period)"
+
+        let bottom = UILabel()
+        bottom.font = .systemFont(ofSize: 11, weight: .regular)
+        bottom.textColor = .secondaryLabel
+        bottom.textAlignment = .center
+
+        if period-1 < timePairs.count {
+            top.text    = timePairs[period-1].start
+            bottom.text = timePairs[period-1].end
+        } else {
+            // 時刻未定義のコマは時限番号のみ
+            top.text = nil; bottom.text = nil
+        }
+
+        [top, mid, bottom].forEach { v.addArrangedSubview($0) }
+        return v
+    }
+
 
     // MARK: 見出し
     private func placeHeaders() {
@@ -518,13 +596,18 @@ final class timetable: UIViewController, CourseListViewControllerDelegate, Cours
             ])
         }
         for r in 0..<periodLabels.count {
-            let l = headerLabel(periodLabels[r])
-            gridContainerView.addSubview(l)
+            let marker = makeTimeMarker(for: r + 1)
+            gridContainerView.addSubview(marker)
             NSLayoutConstraint.activate([
-                l.centerXAnchor.constraint(equalTo: colGuides[0].centerXAnchor),
-                l.centerYAnchor.constraint(equalTo: rowGuides[r+1].centerYAnchor)
+                // 列0の**中央**に幅固定で置く → 数字がど真ん中に来る
+                marker.centerXAnchor.constraint(equalTo: colGuides[0].centerXAnchor),
+                marker.widthAnchor.constraint(equalToConstant: timeColWidth),
+
+                // 行の中央に
+                marker.centerYAnchor.constraint(equalTo: rowGuides[r+1].centerYAnchor)
             ])
         }
+
     }
     private func headerLabel(_ text: String) -> UILabel {
         let l = UILabel()

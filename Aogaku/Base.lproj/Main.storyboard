@@ -833,10 +833,10 @@
             </objects>
             <point key="canvasLocation" x="62" y="-375"/>
         </scene>
-        <!--View-->
+        <!--Tab Bar Controller-->
         <scene sceneID="I36-gX-mAv">
             <objects>
-                <tabBarController id="ehP-GV-50T" customClass="View" sceneMemberID="viewController">
+                <tabBarController id="ehP-GV-50T" sceneMemberID="viewController">
                     <tabBar key="tabBar" contentMode="scaleToFill" insetsLayoutMarginsFromSafeArea="NO" id="FqR-lU-tAs">
                         <rect key="frame" x="0.0" y="0.0" width="393" height="49"/>
                         <autoresizingMask key="autoresizingMask"/>

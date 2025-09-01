@@ -7,6 +7,23 @@
 
 import Foundation
 
+enum CreditBucket { case aosuta, major, elective, other }
+
+func normalizeCategory(_ s: String?) -> CreditBucket {
+    // nil/空は other
+    let raw = (s ?? "")
+        .replacingOccurrences(of: " ", with: "")   // 半角スペース除去
+        .replacingOccurrences(of: "　", with: "")  // 全角スペース除去
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    if raw.isEmpty { return .other }
+    if raw.contains("青山スタンダード") || raw.contains("青スタ") { return .aosuta }
+    if raw.contains("自由選択") { return .elective }               // ← 科目の有無に関係なく拾う
+    if raw.contains("学科") || raw.contains("学部") { return .major }
+    return .other
+}
+
+
 struct CourseStore {
     private static let key = "customCourses_v1"
 

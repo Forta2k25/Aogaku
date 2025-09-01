@@ -208,6 +208,10 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
             guard let self = self else { return }
             self.delegate?.courseList(self, didSelect: course, at: self.location)
             self.backToTimetable()
+            
+            
+            print("▶︎ select:", course.title, "categoryRaw=", course.category ?? "nil", "credits=", course.credits ?? -1)
+            
         }))
         present(alert, animated: true)
     }

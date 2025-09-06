@@ -574,6 +574,28 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         if isOwnDepartmentCourse(c) { return .department }
         return .free
     }
+    
+    // すべての学期候補を作る（前期/後期の並び）
+    private func makeFullTermChoices() -> [String] {
+        // 現在の学期の年を中心に、最長6年（例：-3年〜+2年）をベースにする
+        let centerYear = currentTerm.year
+        var minY = centerYear - 3
+        var maxY = centerYear + 2
+
+        // 既に保存されている学期の年があれば、それも範囲に含める
+        let saved = TermStore.allSavedTerms()
+        if let yMin = saved.map({ $0.year }).min() { minY = min(minY, yMin) }
+        if let yMax = saved.map({ $0.year }).max() { maxY = max(maxY, yMax) }
+
+        // 表示文字列で返す（アプリ内の表記に合わせて）
+        var out: [String] = []
+        for y in minY...maxY {
+            out.append("\(y) 年前期")
+            out.append("\(y) 年後期")
+        }
+        return out
+    }
+
 
     // 一覧カテゴリ（見出し用）も同じロジックで
     private func classifyDisplay(_ c: Course) -> DisplayCategory {
@@ -913,13 +935,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         let m = list[idx]
         
 
-        // セレクタ用に学期候補（表示名）を組む
-        var terms = TermStore.allSavedTerms().sorted(by: <).map { $0.displayTitle }
-        if terms.isEmpty { terms = [currentTerm.displayTitle] }
-        if !terms.contains(currentTerm.displayTitle) {
-            terms.insert(currentTerm.displayTitle, at: 0)
-        }
-
+        let terms = makeFullTermChoices()
         // Seg4 <-> index 変換（UIはセグメントで0..3）
         let segOrder: [Seg4] = [.aoyama, .language, .department, .free]
         let initial = ManualCreditEditorViewController.Input(
@@ -955,13 +971,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     // ★ ここから追加：手動追加 UI
     // MARK: - 手動追加 画面遷移（アラート→専用画面）
     @objc private func showManualEditor() {
-        // ピッカーに出す学期候補（表示文字列）
-        var terms = TermStore.allSavedTerms().sorted(by: <).map { $0.displayTitle }
-        if terms.isEmpty { terms = [currentTerm.displayTitle] }
-        if !terms.contains(currentTerm.displayTitle) {
-            terms.insert(currentTerm.displayTitle, at: 0)
-        }
-
+        // ここを一行でOK
+        let terms = makeFullTermChoices()
         // 画面を組み立て
         let vc = ManualCreditEditorViewController(termChoices: terms, initial: nil) { [weak self] input in
             guard let self else { return }

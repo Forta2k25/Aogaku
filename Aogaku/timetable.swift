@@ -1,3 +1,4 @@
+
 import UIKit
 import Foundation
 
@@ -9,13 +10,17 @@ struct SlotLocation {
     var dayName: String { ["月","火","水","木","金","土"][day] }
 }
 
-// MARK: - Controller
+// MARK: - timetable
 
 final class timetable: UIViewController,
                        CourseListViewControllerDelegate,
                        CourseDetailViewControllerDelegate {
-    
-    private let periodRowMinHeight: CGFloat = 120   // 時限行の最小高さ（好みで調整）
+
+    // ====== 行数の上限（必要ならここだけ変えればOK） ======
+    private let titleMaxLines = 5
+    private let subtitleMaxLines = 2
+
+    private let periodRowMinHeight: CGFloat = 120   // 時限行の最小高さ
 
     // ===== Scroll root =====
     private let scrollView = UIScrollView()
@@ -71,30 +76,35 @@ final class timetable: UIViewController,
     private let headerRowHeight: CGFloat = 36
     private let timeColWidth: CGFloat = 48
     private let topRatio: CGFloat = 0.02
+    
+    // 追加: 現在の学期
+    private var currentTerm: TermKey = TermStore.loadSelected()
 
     // MARK: - Persistence (UserDefaults)
-    private let saveKey = "assignedCourses.v1"
+    //private let saveKey = "assignedCourses.v1"
 
     private func saveAssigned() {
         do {
             let data = try JSONEncoder().encode(assigned)
-            UserDefaults.standard.set(data, forKey: saveKey)
+            UserDefaults.standard.set(data, forKey: currentTerm.storageKey)
+            TermStore.saveSelected(currentTerm) // 現在選択の学期も保持
         } catch {
             print("Save error:", error)
         }
     }
 
-    private func loadAssigned() {
-        guard let data = UserDefaults.standard.data(forKey: saveKey) else { return }
-        do {
-            let loaded = try JSONDecoder().decode([Course?].self, from: data)
-            if loaded.count == assigned.count {
-                assigned = loaded
-            } else {
-                for i in 0..<min(assigned.count, loaded.count) { assigned[i] = loaded[i] }
-            }
-        } catch { print("Load error:", error) }
+    private func loadAssigned(for term: TermKey) {
+        let key = term.storageKey
+        if let data = UserDefaults.standard.data(forKey: key),
+           let loaded = try? JSONDecoder().decode([Course?].self, from: data) {
+            assigned = loaded
+        } else {
+            // データがまだない学期 → 空配列（現在の行列サイズに合わせて初期化）
+            assigned = Array(repeating: nil, count: dayLabels.count * periodLabels.count)
+        }
+        normalizeAssigned()
     }
+
 
     // MARK: - Lifecycle
 
@@ -102,8 +112,8 @@ final class timetable: UIViewController,
         super.viewDidLoad()
 
         normalizeAssigned()
-        loadAssigned()
-
+        loadAssigned(for: currentTerm)    // ← ここだけ置換
+        
         view.backgroundColor = .systemBackground
         buildHeader()
         layoutGridContainer()
@@ -197,7 +207,7 @@ final class timetable: UIViewController,
         headerBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(headerBar)
 
-        leftButton.setTitle("2025年前期", for: .normal)
+        leftButton.setTitle(currentTerm.displayTitle, for: .normal)
         leftButton.addTarget(self, action: #selector(tapLeft), for: .touchUpInside)
 
         titleLabel.text = "時間割"
@@ -363,10 +373,9 @@ final class timetable: UIViewController,
             rowGuides[i].topAnchor.constraint(equalTo: rowGuides[i-1].bottomAnchor, constant: spacing).isActive = true
             if i >= 2 { rowGuides[i].heightAnchor.constraint(equalTo: rowGuides[1].heightAnchor).isActive = true }
         }
-        // ★ ここがポイント：基準になる rowGuides[1] に最小高さを与える
+        // 基準行に最小高さを与える（セルが伸びないための土台）
         rowGuides[1].heightAnchor.constraint(greaterThanOrEqualToConstant: periodRowMinHeight).isActive = true
     }
-
 
     // MARK: - Headers / Time markers
 
@@ -383,7 +392,7 @@ final class timetable: UIViewController,
             let marker = makeTimeMarker(for: r + 1)
             gridContainerView.addSubview(marker)
             NSLayoutConstraint.activate([
-                marker.centerXAnchor.constraint(equalTo: colGuides[0].centerXAnchor),  // ど真ん中
+                marker.centerXAnchor.constraint(equalTo: colGuides[0].centerXAnchor),
                 marker.widthAnchor.constraint(equalToConstant: timeColWidth),
                 marker.centerYAnchor.constraint(equalTo: rowGuides[r+1].centerYAnchor)
             ])
@@ -432,7 +441,7 @@ final class timetable: UIViewController,
         return v
     }
 
-    // MARK: - Buttons (统一見た目)
+    // MARK: - Buttons
 
     private func baseCellConfig(bg: UIColor, fg: UIColor,
                                 stroke: UIColor? = nil, strokeWidth: CGFloat = 0) -> UIButton.Configuration {
@@ -441,7 +450,7 @@ final class timetable: UIViewController,
         cfg.baseForegroundColor = fg
         cfg.contentInsets = .init(top: 8, leading: 10, bottom: 8, trailing: 10)
         cfg.background.cornerRadius = 12
-        cfg.background.backgroundInsets = .zero   // ← 内側に縮まない
+        cfg.background.backgroundInsets = .zero
         cfg.background.strokeColor = stroke
         cfg.background.strokeWidth = strokeWidth
         return cfg
@@ -454,6 +463,9 @@ final class timetable: UIViewController,
         b.layer.cornerRadius = 0
 
         guard assigned.indices.contains(idx), let course = assigned[idx] else {
+            // ＋セル：自前ビューは外す
+            b.removeTimetableContentView()
+
             var cfg = baseCellConfig(bg: .secondarySystemBackground,
                                      fg: .systemBlue,
                                      stroke: UIColor.separator, strokeWidth: 1)
@@ -470,7 +482,7 @@ final class timetable: UIViewController,
             return
         }
 
-        // 登録済みセル
+        // 登録済みセル（背景は Configuration、文字は自前ビューで制御）
         let cols = dayLabels.count
         let row  = idx / cols
         let col  = idx % cols
@@ -478,27 +490,18 @@ final class timetable: UIViewController,
         let colorKey = SlotColorStore.color(for: loc) ?? .teal
 
         var cfg = baseCellConfig(bg: colorKey.uiColor, fg: .white)
-        cfg.title = course.title
-        cfg.subtitle = course.room
-        cfg.titleAlignment = .center
-        cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { inAttr in
-            var out = inAttr
-            out.font = .systemFont(ofSize: 10, weight: .semibold)
-            let p = NSMutableParagraphStyle()
-            p.alignment = .center
-            p.lineBreakMode = .byWordWrapping
-            out.paragraphStyle = p
-            return out
-        }
-        cfg.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { inAttr in
-            var out = inAttr
-            out.font = .systemFont(ofSize: 11, weight: .medium)
-            let p = NSMutableParagraphStyle(); p.alignment = .center
-            out.paragraphStyle = p
-            return out
-        }
+        cfg.title = nil           // ←内部ラベルは使わない
+        cfg.subtitle = nil
         b.configuration = cfg
+
+        // 自前ビューに文字を設定（ここで折り返し・省略を完全管理）
+        let content = b.ensureTimetableContentView()
+        content.titleLabel.text = course.title
+        content.roomLabel.text  = course.room
+        content.titleLabel.textColor = .white
+        content.roomLabel.textColor  = .white
     }
+
 
     private func reloadAllButtons() {
         for b in slotButtons { configureButton(b, at: b.tag) }
@@ -516,7 +519,6 @@ final class timetable: UIViewController,
             for c in 0..<cols {
                 let b = UIButton(type: .system)
                 b.translatesAutoresizingMaskIntoConstraints = false
-                // ここでは layer/background を触らない（Configuration で統一）
                 gridContainerView.addSubview(b)
 
                 let rowG = rowGuides[r+1], colG = colGuides[c+1]
@@ -569,15 +571,52 @@ final class timetable: UIViewController,
 
     // MARK: - Actions
 
-    @objc private func tapLeft()   { print("左ボタン") }
+    @objc private func tapLeft() {
+        // 年度候補（必要に応じて増やしてください）
+        let thisYear = Calendar.current.component(.year, from: Date())
+        let years = Array(((thisYear - 4)...(thisYear + 1)).reversed())  // ← [Int]　// 直近5年＋来年
+
+        // ピッカーの入った下からのシート
+        let vc = TermPickerViewController(years: years,
+                                          selected: currentTerm) { [weak self] picked in
+            guard let self = self, let picked = picked else { return }
+            self.changeTerm(to: picked)
+        }
+        if let sheet = vc.sheetPresentationController {
+            if #available(iOS 16.0, *) {
+                let ds: [UISheetPresentationController.Detent] = [.medium(), .large()]
+                sheet.detents = ds
+            } else {
+                sheet.detents = [UISheetPresentationController.Detent.medium()]
+            }
+            sheet.prefersGrabberVisible = true
+        }
+
+        present(vc, animated: true)
+    }
+    
+    private func changeTerm(to newTerm: TermKey) {
+        guard newTerm != currentTerm else { return }
+        currentTerm = newTerm
+        leftButton.setTitle(newTerm.displayTitle, for: .normal)
+        loadAssigned(for: newTerm)
+        reloadAllButtons()
+        saveAssigned() // 選択学期記憶
+    }
 
     @objc private func tapRightA() {
-        let courses = uniqueCoursesInAssigned()
-        let vc = CreditsFullViewController(courses: courses)
+        let term = TermStore.loadSelected()                  // いま表示中の学期
+
+        // ✅ 余計な引数は渡さない
+        let vc = CreditsFullViewController(currentTerm: term)
+
         let nav = UINavigationController(rootViewController: vc)
-        nav.modalPresentationStyle = .fullScreen
+        // ✅ 明示的に書くと安全（.fullScreen でもOK）
+        nav.modalPresentationStyle = UIModalPresentationStyle.fullScreen
+
         present(nav, animated: true)
     }
+
 
     @objc private func tapRightB() { print("右B") }
 
@@ -703,10 +742,222 @@ final class timetable: UIViewController,
         var seen = Set<String>()
         var out: [Course] = []
         for c in assigned.compactMap({ $0 }) {
-            // id が空/nil の場合のフォールバックも用意
             let key = (c.id.isEmpty ? "" : c.id) + "#" + c.title
             if seen.insert(key).inserted { out.append(c) }
         }
         return out
+    }
+}
+
+
+
+// MARK: - 専用ボタンクラス（ラベルの行数と省略・CJK 改行を毎回強制）
+// MARK: - timetable コマ内専用ボタン（3行までで末尾のみ「…」）
+
+final class TimetableCellButton: UIButton {
+
+    /// タイトルは最大 5行、教室は 1 行だけ
+    var titleMaxLines: Int = 5
+    var subtitleMaxLines: Int = 2
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        // configuration にも「折り返し可」を指示（ここが重要）
+        if #available(iOS 15.0, *) {
+            if configuration?.titleLineBreakMode != .byWordWrapping {
+                configuration?.titleLineBreakMode = .byWordWrapping
+            }
+            if configuration?.subtitleLineBreakMode != .byTruncatingTail {
+                configuration?.subtitleLineBreakMode = .byTruncatingTail
+            }
+        }
+
+        // 内部 UILabel を取得
+        let labels = allSubviews.compactMap { $0 as? UILabel }
+        guard !labels.isEmpty else { return }
+
+        // 大きいフォント＝タイトル想定
+        let sorted = labels.sorted { $0.font.pointSize > $1.font.pointSize }
+        let contentW = max(0,
+                           bounds.width
+                           - (configuration?.contentInsets.leading ?? 10)
+                           - (configuration?.contentInsets.trailing ?? 10))
+
+        // タイトル
+        if let title = sorted.first {
+            title.numberOfLines = titleMaxLines
+            title.textAlignment = .center
+            // 折り返しを許可しつつ、上限超え時のみ末尾省略
+            title.lineBreakMode = .byTruncatingTail
+            if #available(iOS 15.0, *) { title.lineBreakStrategy = .hangulWordPriority } // CJK向け
+            title.preferredMaxLayoutWidth = contentW
+            title.setContentHuggingPriority(.defaultLow, for: .vertical)
+            title.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        }
+
+        // サブタイトル（教室など）
+        for sub in sorted.dropFirst() {
+            sub.numberOfLines = subtitleMaxLines
+            sub.textAlignment = .center
+            sub.lineBreakMode = .byTruncatingTail
+            if #available(iOS 15.0, *) { sub.lineBreakStrategy = .hangulWordPriority }
+            sub.preferredMaxLayoutWidth = contentW
+            sub.setContentHuggingPriority(.defaultLow, for: .vertical)
+            sub.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        }
+    }
+}
+
+private extension UIView {
+    var allSubviews: [UIView] { subviews + subviews.flatMap { $0.allSubviews } }
+}
+
+// MARK: - TimetableCellContentView（コマ内のタイトル/教室を自前で描画）
+
+final class TimetableCellContentView: UIView {
+    let titleLabel = UILabel()
+    let roomLabel  = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+
+        // ★ これを追加：表示専用にしてタッチはボタンへ
+        isUserInteractionEnabled = false
+
+        let v = UIStackView(arrangedSubviews: [titleLabel, roomLabel])
+        v.axis = .vertical
+        v.alignment = .center
+        v.spacing = 4
+        v.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(v)
+
+        NSLayoutConstraint.activate([
+            v.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            v.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            v.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            v.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
+        ])
+
+        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.textAlignment = .center
+        titleLabel.numberOfLines = 3
+        titleLabel.lineBreakMode = .byTruncatingTail
+
+        roomLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        roomLabel.textAlignment = .center
+        roomLabel.numberOfLines = 1
+        roomLabel.lineBreakMode = .byTruncatingTail
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+
+private extension UIButton {
+    /// 既に入っている自前ビューを取得 or 生成
+    func ensureTimetableContentView() -> TimetableCellContentView {
+        let tag = 987654
+        if let v = viewWithTag(tag) as? TimetableCellContentView { return v }
+        let v = TimetableCellContentView()
+        v.tag = tag
+        v.translatesAutoresizingMaskIntoConstraints = false
+        
+        // ★ 念押し（どのみち init で無効化しているが保険）
+        v.isUserInteractionEnabled = false
+        
+        addSubview(v)
+        NSLayoutConstraint.activate([
+            v.leadingAnchor.constraint(equalTo: leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: trailingAnchor),
+            v.topAnchor.constraint(equalTo: topAnchor),
+            v.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+        return v
+    }
+
+    /// 自前ビューを外す（「＋」セル用）
+    func removeTimetableContentView() {
+        viewWithTag(987654)?.removeFromSuperview()
+    }
+}
+
+// MARK: - 学期ピッカー（年度＋前期/後期）
+final class TermPickerViewController: UIViewController, UIPickerViewDataSource, UIPickerViewDelegate {
+
+    private let years: [Int]
+    private var selectedYear: Int
+    private var selectedSemester: Semester
+    private let onDone: (TermKey?) -> Void
+
+    private let picker = UIPickerView()
+    private let toolbar = UIToolbar()
+
+    init(years: [Int], selected: TermKey, onDone: @escaping (TermKey?) -> Void) {
+        self.years = years
+        self.selectedYear = selected.year
+        self.selectedSemester = selected.semester
+        self.onDone = onDone
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .pageSheet
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+
+        // Toolbar
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        let cancel = UIBarButtonItem(title: "キャンセル", style: .plain, target: self, action: #selector(cancelTap))
+        let flex = UIBarButtonItem(systemItem: .flexibleSpace)
+        let done = UIBarButtonItem(title: "完了", style: .done, target: self, action: #selector(doneTap))
+        toolbar.items = [cancel, flex, done]
+        view.addSubview(toolbar)
+
+        // Picker
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        picker.dataSource = self
+        picker.delegate = self
+        view.addSubview(picker)
+
+        NSLayoutConstraint.activate([
+            toolbar.topAnchor.constraint(equalTo: view.topAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+
+            picker.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            picker.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            picker.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            picker.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
+        ])
+
+        // 初期選択
+        if let yi = years.firstIndex(of: selectedYear) {
+            picker.selectRow(yi, inComponent: 0, animated: false)
+        }
+        if let si = Semester.allCases.firstIndex(of: selectedSemester) {
+            picker.selectRow(si, inComponent: 1, animated: false)
+        }
+    }
+
+    @objc private func cancelTap() { onDone(nil); dismiss(animated: true) }
+    @objc private func doneTap() {
+        onDone(TermKey(year: selectedYear, semester: selectedSemester))
+        dismiss(animated: true)
+    }
+
+    // MARK: Picker
+    func numberOfComponents(in pickerView: UIPickerView) -> Int { 2 }
+    func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
+        component == 0 ? years.count : Semester.allCases.count
+    }
+    func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
+        if component == 0 { return "\(years[row])年" }
+        return Semester.allCases[row].display
+    }
+    func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
+        if component == 0 { selectedYear = years[row] }
+        else { selectedSemester = Semester.allCases[row] }
     }
 }

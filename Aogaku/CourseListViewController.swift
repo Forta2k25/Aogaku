@@ -1,22 +1,13 @@
-//
 //  CourseListViewController.swift
 //  Aogaku
 //
-//  Created by shu m on 2025/08/21.
+//  Firebaseの授業一覧（曜日・時限で初回10件）
+//  検索バー入力中は自動ロードを止め、フッターの「さらに読み込む」で
+//  該当コースを追加10件ずつ取得（通信最小化）
 //
 
 import UIKit
-
-struct Course: Codable, Equatable {
-    let id: String
-    let title: String
-    let room: String          // 教室番号
-    let teacher: String       // 教師名
-    var credits: Int?          // 単位数
-    var campus: String?        // 例: "青山", "相模原"
-    var category: String?      // 例: "必修", "選択", "青山スタンダード科目"
-    var syllabusURL: String?    // ← これを追加
-}
+import FirebaseFirestore
 
 protocol CourseListViewControllerDelegate: AnyObject {
     func courseList(_ vc: CourseListViewController,
@@ -25,216 +16,372 @@ protocol CourseListViewControllerDelegate: AnyObject {
 }
 
 final class CourseListViewController: UITableViewController, AddCourseViewControllerDelegate {
-    func addCourseViewController(_ vc: AddCourseViewController, didCreate course: Course) {
-        reloadAllCourses()
-        // 検索中ならフィルタを反映
-        if let q = searchField.text, !q.trimmingCharacters(in: .whitespaces).isEmpty {
-            textChanged(searchField)
-        } else {
-            courses = allCourses
-            tableView.reloadData()
-        }
-    }
-    
-    
-    weak var delegate: CourseListViewControllerDelegate?   // ← 追加
-    // ...
-    
+
+    // MARK: - Input
+    weak var delegate: CourseListViewControllerDelegate?
     let location: SlotLocation
+
+    // MARK: - Firestore state
+    private let service = FirestoreService()
+    private var remote: [Course] = []                 // サーバーから得た一覧を蓄積
+    private var lastSnapshot: DocumentSnapshot?       // 次ページ用カーソル
+    private var hasMore: Bool = true                  // まだ次があるか
+    private var isLoading: Bool = false               // ロード中フラグ
+    private var keyword: String?                      // 検索キーワード（空/ nil なら非検索）
+
+    // MARK: - Currently displayed list (検索の有無で変わる)
     private var courses: [Course] = []
-    private var allCourses: [Course] = []
-    
+
     // MARK: - UI (Search)
     private let searchField: UITextField = {
         let tf = UITextField()
-        tf.placeholder = "科目名・教員・教室・科目番号で検索"
+        tf.placeholder = "科目名・教員・キャンパスで検索"
         tf.borderStyle = .roundedRect
         tf.clearButtonMode = .whileEditing
         tf.returnKeyType = .done
         tf.backgroundColor = .secondarySystemBackground
         tf.layer.cornerRadius = 10
         tf.layer.masksToBounds = true
-        
+
         // 左に🔍アイコン
         let icon = UIImageView(image: UIImage(systemName: "magnifyingglass"))
         icon.tintColor = .secondaryLabel
         icon.contentMode = .scaleAspectFit
         icon.frame = CGRect(x: 0, y: 0, width: 20, height: 20)
-        
+
         let left = UIView(frame: CGRect(x: 0, y: 0, width: 28, height: 36))
         icon.center = CGPoint(x: 14, y: 18)
         left.addSubview(icon)
-        
+
         tf.leftView = left
         tf.leftViewMode = .always
         return tf
     }()
-    
+
+    // MARK: - Footer（検索中のみ表示）
+    private let footerContainer = UIView(frame: .init(x: 0, y: 0, width: 0, height: 72))
+    private let moreButton = UIButton(type: .system)
+    private let spinner = UIActivityIndicatorView(style: .medium)
+
+    // MARK: - Init
     init(location: SlotLocation) {
         self.location = location
         super.init(style: .insetGrouped)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    
+
+    // MARK: - LifeCycle
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "\(location.dayName) \(location.period)限"
         navigationItem.largeTitleDisplayMode = .never
-        
-        // 戻る／閉じるボタン（常に右上に出す）
+
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             title: "戻る",
             style: .plain,
             target: self,
             action: #selector(backToTimetable)
         )
-        
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             title: "＋新規作成",
             style: .plain,
             target: self,
             action: #selector(tapAddCourse)
         )
-        
+
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-        
-        // ★ 追加: iOS 15 のセクションヘッダー上余白をなくす
-        if #available(iOS 15.0, *) {
-            tableView.sectionHeaderTopPadding = 0
-        }
-        
-        // ↓ ここはダミーデータ。実データがあれば置き換えてOK
-        allCourses = [
-            Course(id: "15408",
-                   title: "Integrated English III",
-                   room: "15306",
-                   teacher: "Smith",
-                   credits: 2,
-                   campus: "青山",
-                   category: "青山スタンダード科目",
-                   syllabusURL:  "https://syllabus.aoyama.ac.jp/shousai.ashx?YR=2025&FN=1611020-0005&KW=&BQ=3f5e5d46524048535c48584c495933294f4e5745515b42564a5e4f5659534a22067e7d756d6071747c687e6e6b68606a6270667c6608050701780d087a0c1866127c7073767060051d74081e7d6b05186d77191e69731d1e657f190b6d60313146382052590a08412f2b5b29335d5349373a304e52313a4a12185c1808114e4fa5b3b6c0d4cdb7a2babde8ffe2c6ebe1e3f0f9e6a9b0d3a1bdd8aebea5debbda9784e09781e494829aeff9cecddfcdc796e2e68e92e5f18a9ee9f9869aedf782"// ←差し替え
-                  ),
+        if #available(iOS 15.0, *) { tableView.sectionHeaderTopPadding = 0 }
+        tableView.keyboardDismissMode = .onDrag
 
-            Course(id: "17411",
-                   title: "歴史と人間",
-                   room: "N402",
-                   teacher: "佐藤",
-                   credits: 2,
-                   campus: "青山",
-                   category: "青山スタンダード科目",
-                   syllabusURL:  "https://syllabus.aoyama.ac.jp/shousai.ashx?YR=2025&FN=1611020-0002&KW=&BQ=3f5e5d46524048535c48584c495933294f4e5745515b42564a5e4f5659534a22067e7d756d6071747c687e6e6b68606a6270667c6608050701780d087a0c1866127c7073767060051d74081e7d6b05186d77191e69731d1e657f190b6d60313146382052590a08412f2b5b29335d5349373a304e52313a4a12185c1808114e4fa5b3b6c0d4cdb7a2babde8ffe2c6ebe1e3f0f9e6a9b0d3a1bdd8aebea5debbda9784e09781e494829aeff9cecddfcdc796e2e68e92e5f18a9ee9f9869aedf782"
-                  ),
-
-            Course(id: "17710",
-                   title: "グローバル文学理論",
-                   room: "A305",
-                   teacher: "Tanaka",
-                   credits: 2,
-                   campus: "青山",
-                   category: "法学部",
-                   syllabusURL:  "https://syllabus.aoyama.ac.jp/shousai.ashx?YR=2025&FN=1611020-0954&KW=&BQ=3f5e5d46524048535c48584c495933294f4e5745515b42564a5e4f5659534a22067e7d756d6071747c687e6e6b68606a6270667c6608050701780d087a0c1866127c7073767060051d74081e7d6b05186d77191e69731d1e657f190b6d60313146382052590a08412f2b5b29335d5349373a304e52313a4a12185c1808114e4fa5b3b6c0d4cdb7a2babde8ffe2c6ebe1e3f0f9e6a9b0d3a1bdd8aebea5debbda9784e09781e494829aeff9cecddfcdc796e2e68e92e5f18a9ee9f9869aedf782"
-                  )
-        ]
-        reloadAllCourses()
-        
-        allCourses = builtinCourses() + CourseStore.load()
-        courses = allCourses
-        tableView.reloadData()
-
-        
-        // 検索フィールドのイベント & ヘッダー設置
+        // 検索イベント
         searchField.addTarget(self, action: #selector(textChanged(_:)), for: .editingChanged)
         searchField.addTarget(self, action: #selector(endEditingNow), for: .editingDidEndOnExit)
-        buildSearchHeader() // ← メソッド名はそのまま使う
-    }
-    
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        courses.count
-    }
-    
-    override func tableView(_ tableView: UITableView,
-                            trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
-    -> UISwipeActionsConfiguration? {
-        let c = courses[indexPath.row]
-        guard CourseStore.isCustom(c) else { return nil }
 
-        let delete = UIContextualAction(style: .destructive, title: "削除") { _,_,done in
-            CourseStore.remove(id: c.id)
-            self.reloadAllCourses()
-            // 今の並び（検索適用有無）を保ったまま再構築
-            if let q = self.searchField.text, !q.trimmingCharacters(in: .whitespaces).isEmpty {
-                self.textChanged(self.searchField)
-            } else {
-                self.courses = self.allCourses
-                tableView.deleteRows(at: [indexPath], with: .automatic)
-            }
-            done(true)
-        }
-        return UISwipeActionsConfiguration(actions: [delete])
-    }
-
-    
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
-        let c = courses[indexPath.row]
-        var cfg = cell.defaultContentConfiguration()
-        cfg.text = c.title
-        cfg.textProperties.numberOfLines = 1
-
-        // ← ここだけ差し替え（2行レイアウト用）
-        cfg.secondaryText = metaTwoLines(for: c)
-        cfg.secondaryTextProperties.numberOfLines = 0           // 必要分だけ折り返し
-        cfg.secondaryTextProperties.lineBreakMode = .byWordWrapping
-        cfg.prefersSideBySideTextAndSecondaryText = false       // タイトルの下に配置
-        cfg.textToSecondaryTextVerticalPadding = 4
-        cfg.secondaryTextProperties.color = .secondaryLabel
-        
-        
-        cell.contentConfiguration = cfg
-        cell.accessoryType = .disclosureIndicator
-        return cell
-    }
-    
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
-        
-        let course = courses[indexPath.row]
-        let title = "登録しますか？"
-        let message = "\(location.dayName) \(location.period)限に\n「\(course.title)」を登録します。"
-        
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
-        alert.addAction(UIAlertAction(title: "登録", style: .default, handler: { [weak self] _ in
-            guard let self = self else { return }
-            self.delegate?.courseList(self, didSelect: course, at: self.location)
-            self.backToTimetable()
-            
-            
-            print("▶︎ select:", course.title, "categoryRaw=", course.category ?? "nil", "credits=", course.credits ?? -1)
-            
-        }))
-        present(alert, animated: true)
-    }
-    
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        reloadAllCourses()
+        // セクションヘッダーに検索フィールド
         tableView.reloadData()
+
+        // フッター（さらに読み込む）
+        setupFooter()
+
+        // 初回 10 件取得
+        loadFirstPage()
     }
 
-    
+    // MARK: - Footer
+    private func setupFooter() {
+        moreButton.setTitle("さらに読み込む", for: .normal)
+        moreButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+        moreButton.addTarget(self, action: #selector(tapLoadMore), for: .touchUpInside)
+        moreButton.layer.cornerRadius = 10
+        moreButton.backgroundColor = .secondarySystemBackground
+
+        spinner.hidesWhenStopped = true
+
+        moreButton.translatesAutoresizingMaskIntoConstraints = false
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        footerContainer.addSubview(moreButton)
+        footerContainer.addSubview(spinner)
+        NSLayoutConstraint.activate([
+            moreButton.centerXAnchor.constraint(equalTo: footerContainer.centerXAnchor),
+            moreButton.centerYAnchor.constraint(equalTo: footerContainer.centerYAnchor),
+            moreButton.heightAnchor.constraint(equalToConstant: 44),
+            moreButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+
+            spinner.centerXAnchor.constraint(equalTo: moreButton.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: moreButton.centerYAnchor),
+        ])
+
+        tableView.tableFooterView = UIView(frame: .zero) // 初期は非表示
+    }
+
+    private func showFooterIfNeeded() {
+        // 検索語あり＋サーバの続きがある時だけ表示
+        let q = (keyword ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty && hasMore {
+            tableView.tableFooterView = footerContainer
+        } else {
+            tableView.tableFooterView = UIView(frame: .zero)
+        }
+    }
+
+    // MARK: - 初回ロード
+    private func loadFirstPage() {
+        guard !isLoading else { return }
+        isLoading = true
+        setLoadingFooter(true)
+        hasMore = true
+        lastSnapshot = nil
+        remote.removeAll()
+        courses.removeAll()
+        tableView.reloadData()
+
+        service.fetchFirstPageForDay(
+            day: location.dayName,
+            period: location.period,
+            limit: 10
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isLoading = false
+                self.setLoadingFooter(false)
+
+                switch result {
+                case .success(let page):
+                    self.remote = page.courses
+                    self.lastSnapshot = page.lastSnapshot
+                    self.hasMore = (page.lastSnapshot != nil)
+
+                    // 検索中かどうかで表示配列を決定
+                    if let kw = self.keyword, !kw.isEmpty {
+                        self.courses = self.filter(remote: self.remote, keyword: kw)
+                    } else {
+                        self.courses = self.remote
+                    }
+                    self.tableView.reloadData()
+                    self.showFooterIfNeeded()
+
+                case .failure(let err):
+                    self.hasMore = false
+                    self.showError(err)
+                }
+            }
+        }
+    }
+
+    // MARK: - Paging: 自動追加（非検索時のみ）
+    override func tableView(_ tableView: UITableView,
+                            willDisplay cell: UITableViewCell,
+                            forRowAt indexPath: IndexPath) {
+        // 検索中はサーバーに取りに行かない（通信最小化）
+        if let kw = keyword, !kw.isEmpty { return }
+        guard hasMore, !isLoading else { return }
+
+        // 末尾2行手前でプリフェッチ
+        if indexPath.row >= courses.count - 2 {
+            loadMore()
+        }
+    }
+
+    private func setLoadingFooter(_ loading: Bool) {
+        if loading {
+            let sp = UIActivityIndicatorView(style: .medium)
+            sp.startAnimating()
+            sp.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 44)
+            tableView.tableFooterView = sp
+        } else {
+            tableView.tableFooterView = UIView(frame: .zero)
+        }
+    }
+
+    /// 非検索時の自動ページング
+    private func loadMore() {
+        guard let cursor = lastSnapshot, !isLoading, hasMore else { return }
+        isLoading = true
+        setLoadingFooter(true)
+
+        service.fetchNextPageForDay(
+            day: location.dayName,
+            period: location.period,
+            after: cursor,
+            limit: 10
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isLoading = false
+                self.setLoadingFooter(false)
+
+                switch result {
+                case .success(let page):
+                    if page.courses.isEmpty { self.hasMore = false }
+                    self.lastSnapshot = page.lastSnapshot
+                    self.hasMore = (page.lastSnapshot != nil)
+
+                    // サーバー配列に追加
+                    self.remote.append(contentsOf: page.courses)
+
+                    // 非検索時はそのまま挿入
+                    let start = self.courses.count
+                    self.courses.append(contentsOf: page.courses)
+                    let idxs = (start..<self.courses.count).map { IndexPath(row: $0, section: 0) }
+                    self.tableView.insertRows(at: idxs, with: .fade)
+
+                case .failure(let err):
+                    self.hasMore = false
+                    self.showError(err)
+                }
+            }
+        }
+    }
+
+    // MARK: - 「さらに読み込む」（検索中のみ可）
+    @objc private func tapLoadMore() {
+        guard !(keyword ?? "").isEmpty, hasMore, !isLoading else { return }
+        isLoading = true
+        moreButton.isHidden = true
+        spinner.startAnimating()
+
+        // “該当コース”を10件ぶん増やすまで、サーバページを必要分だけ読む
+        var need = 10
+
+        func handle(_ result: Result<FirestorePage, Error>) {
+            DispatchQueue.main.async {
+                switch result {
+                case .failure(let err):
+                    self.isLoading = false
+                    self.spinner.stopAnimating()
+                    self.moreButton.isHidden = false
+                    self.showError(err)
+
+                case .success(let page):
+                    self.remote.append(contentsOf: page.courses)
+                    self.lastSnapshot = page.lastSnapshot
+                    self.hasMore = (page.lastSnapshot != nil)
+
+                    // 取得分から“該当”のみを抽出して courses に追加
+                    let add = self.filter(remote: page.courses, keyword: self.keyword ?? "")
+                    if !add.isEmpty {
+                        let start = self.courses.count
+                        let picked = Array(add.prefix(need))
+                        self.courses.append(contentsOf: picked)
+                        let idxs = (start..<self.courses.count).map { IndexPath(row: $0, section: 0) }
+                        self.tableView.insertRows(at: idxs, with: .fade)
+                        need -= picked.count
+                    }
+
+                    if need > 0, self.hasMore, let cursor = self.lastSnapshot {
+                        // まだ不足 → 次のページを続けて取得（limit 少し大きめ）
+                        self.service.fetchNextPageForDay(
+                            day: self.location.dayName,
+                            period: self.location.period,
+                            after: cursor,
+                            limit: 25,
+                            completion: handle
+                        )
+                    } else {
+                        // 完了
+                        self.isLoading = false
+                        self.spinner.stopAnimating()
+                        self.moreButton.isHidden = false
+                        self.showFooterIfNeeded()
+                    }
+                }
+            }
+        }
+
+        if let cursor = lastSnapshot {
+            service.fetchNextPageForDay(
+                day: location.dayName, period: location.period,
+                after: cursor, limit: 25, completion: handle
+            )
+        } else {
+            service.fetchFirstPageForDay(
+                day: location.dayName, period: location.period,
+                limit: 25, completion: handle
+            )
+        }
+    }
+
+    // MARK: - 検索（ローカルのみ）
+    @objc private func textChanged(_ sender: UITextField) {
+        let q = (sender.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        keyword = q.isEmpty ? nil : q
+
+        if let kw = keyword {
+            courses = filter(remote: remote, keyword: kw)
+        } else {
+            courses = remote
+        }
+        tableView.reloadData()
+        showFooterIfNeeded()
+    }
+
+    /// 検索対象は「授業名・教師名・キャンパス・カテゴリー」のみ
+    private func filter(remote: [Course], keyword: String) -> [Course] {
+        let keys = keyword
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .map { $0.lowercased() }
+
+        return remote.filter { c in
+            let hay = [
+                c.title,
+                c.teacher,
+                c.campus ?? "",
+                c.category ?? ""
+            ].joined(separator: " ").lowercased()
+            return keys.allSatisfy { hay.contains($0) }
+        }
+    }
+
+    @objc private func endEditingNow() { view.endEditing(true) }
+
+    // MARK: - Add custom course
+    func addCourseViewController(_ vc: AddCourseViewController, didCreate course: Course) {
+        // サーバー結果の手前にローカル追加して“見える化”
+        remote.insert(course, at: 0)
+
+        if let kw = keyword, !kw.isEmpty {
+            // 検索中はフィルタを掛け直して全体を更新
+            courses = filter(remote: remote, keyword: kw)
+            tableView.reloadData()
+            showFooterIfNeeded()
+        } else {
+            // 非検索中は先頭に1行だけ差し込む
+            courses.insert(course, at: 0)
+            tableView.insertRows(at: [IndexPath(row: 0, section: 0)], with: .automatic)
+            tableView.scrollToRow(at: IndexPath(row: 0, section: 0), at: .top, animated: true)
+        }
+    }
+
+    // MARK: - Navigation actions
     @objc private func backToTimetable() {
         if let nav = navigationController {
-            if nav.viewControllers.first === self {
-                dismiss(animated: true)
-            } else {
-                nav.popViewController(animated: true)
-            }
+            if nav.viewControllers.first === self { dismiss(animated: true) }
+            else { nav.popViewController(animated: true) }
         } else {
             dismiss(animated: true)
         }
     }
-    
     @objc private func tapAddCourse() {
         let addVC = AddCourseViewController()
         addVC.delegate = self
@@ -242,99 +389,13 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         present(nav, animated: true)
     }
 
-    
-    @objc private func textChanged(_ sender: UITextField) {
-        let q = (sender.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if q.isEmpty {
-            courses = allCourses
-        } else {
-            // 空白区切り AND 検索
-            let keys = q.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-            courses = allCourses.filter { c in
-                let hay = [
-                    c.title, c.teacher, c.room, c.id,
-                    c.campus ?? "", c.category ?? ""
-                ].joined(separator: " ").lowercased()
-
-                return keys.allSatisfy { hay.contains($0.lowercased()) }
-            }
-        }
-        tableView.reloadData()
-    }
-    
-    @objc private func endEditingNow() {
-        view.endEditing(true)
-    }
-    
-    
-    // もともと入れている内蔵データ（既存 allCourses 初期化部分を関数化）
-    private func builtinCourses() -> [Course] {
-        return [
-            Course(id: "15408", title: "Integrated English III", room: "15306", teacher: "Smith",
-                   credits: 2, campus: "青山", category: "青山スタンダード科目", syllabusURL: nil),
-            Course(id: "17411", title: "歴史と人間", room: "N402", teacher: "佐藤",
-                   credits: 2, campus: "青山", category: "青山スタンダード科目", syllabusURL: nil),
-            Course(id: "17710", title: "グローバル文学理論", room: "A305", teacher: "Tanaka",
-                   credits: 2, campus: "青山", category: "法学部", syllabusURL: nil),
-        ]
-    }
-
-    private func reloadAllCourses() {
-        let custom = CourseStore.load()
-        allCourses = builtinCourses() + custom
-    }
-
-    
-    // 2行表示（リスト用）—追加
-    private func metaTwoLines(for c: Course) -> String {
-        // 1行目：担当・教室・登録番号
-        let line1 = "\(c.teacher) ・ \(c.room) ・ 登録番号 \(c.id)"
-
-        // 2行目：キャンパス・単位数・区分（nil/空はスキップ）
-        var tail: [String] = []
-        if let campus = c.campus, !campus.isEmpty { tail.append(campus) }
-        if let credits = c.credits { tail.append("\(credits)単位") }
-        if let category = c.category, !category.isEmpty { tail.append(category) }
-
-        return tail.isEmpty ? line1 : line1 + "\n" + tail.joined(separator: " ・ ")
-    }
-
-    // 1行表示（既存）—残しておく
-    private func metaString(for c: Course) -> String {
-        let idText = c.id.isEmpty ? "-" : c.id
-        
-        var line1: [String] = [
-            c.teacher,         // 担当
-            c.room,            // 教室
-            "登録番号 \(idText)"
-        ]
-        let first = line1.joined(separator: " ・ ")
-
-        var line2: [String] = []
-        if let campus = c.campus, !campus.isEmpty { line2.append(campus) }
-        if let credits = c.credits { line2.append("\(credits)単位") }
-        if let category = c.category, !category.isEmpty { line2.append(category) }
-
-        return [first, line2.joined(separator: " ・ ")].joined(separator: "\n")
-
-    }
-
-    
-    // MARK: - Header (Search)
-    // ★ 変更: tableHeaderView は使わず、セクションヘッダーで表示
-    private func buildSearchHeader() {
-        tableView.keyboardDismissMode = .onDrag
-        tableView.reloadData() // ヘッダーを描画させる
-    }
-    
-    // ★ 追加: セクションヘッダーに検索フィールドをレイアウト
+    // MARK: - Table
     override func numberOfSections(in tableView: UITableView) -> Int { 1 }
-    
-    override func tableView(_ tableView: UITableView,
-                            viewForHeaderInSection section: Int) -> UIView? {
+
+    override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         let header = UIView()
         header.backgroundColor = .clear
-        
+
         let container = UIView()
         container.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(container)
@@ -344,7 +405,7 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
             container.topAnchor.constraint(equalTo: header.topAnchor),
             container.bottomAnchor.constraint(equalTo: header.bottomAnchor)
         ])
-        
+
         searchField.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(searchField)
         container.directionalLayoutMargins = .init(top: 8, leading: 16, bottom: 8, trailing: 16)
@@ -358,11 +419,66 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         ])
         return header
     }
-    
+
     override func tableView(_ tableView: UITableView,
                             heightForHeaderInSection section: Int) -> CGFloat {
-        return 52 // 36 + 上下8の余白
+        52
     }
-    
 
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        courses.count
+    }
+
+    override func tableView(_ tableView: UITableView,
+                            cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
+        let c = courses[indexPath.row]
+        var cfg = cell.defaultContentConfiguration()
+        cfg.text = c.title
+        cfg.textProperties.numberOfLines = 2
+        cfg.secondaryText = metaTwoLines(for: c)
+        cfg.secondaryTextProperties.numberOfLines = 0
+        cfg.secondaryTextProperties.lineBreakMode = .byWordWrapping
+        cfg.prefersSideBySideTextAndSecondaryText = false
+        cfg.textToSecondaryTextVerticalPadding = 4
+        cfg.secondaryTextProperties.color = .secondaryLabel
+        cell.contentConfiguration = cfg
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let course = courses[indexPath.row]
+        let title = "登録しますか？"
+        let message = "\(location.dayName) \(location.period)限に\n「\(course.title)」を登録します。"
+
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        alert.addAction(UIAlertAction(title: "登録", style: .default, handler: { [weak self] _ in
+            guard let self = self else { return }
+            self.delegate?.courseList(self, didSelect: course, at: self.location)
+            self.backToTimetable()
+        }))
+        present(alert, animated: true)
+    }
+
+    // MARK: - Helpers
+    private func showError(_ err: Error) {
+        let ac = UIAlertController(title: "読み込みエラー",
+                                   message: err.localizedDescription,
+                                   preferredStyle: .alert)
+        ac.addAction(UIAlertAction(title: "OK", style: .default))
+        present(ac, animated: true)
+    }
+
+    // リスト2行表示用
+    private func metaTwoLines(for c: Course) -> String {
+        let line1 = "\(c.teacher) ・ \(c.room.isEmpty ? "-" : c.room) ・ 登録番号 \(c.id)"
+        var tail: [String] = []
+        if let campus = c.campus, !campus.isEmpty { tail.append(campus) }
+        if let credits = c.credits { tail.append("\(credits)単位") }
+        if let category = c.category, !category.isEmpty { tail.append(category) }
+        return tail.isEmpty ? line1 : line1 + "\n" + tail.joined(separator: " ・ ")
+    }
 }

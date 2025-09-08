@@ -52,6 +52,20 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
     private let saveButton = UIButton(type: .system)
 
     private var selectedTermRow: Int = 0
+    
+    // キーボード上部の「完了」ボタン
+    private lazy var kbToolbar: UIToolbar = {
+        let bar = UIToolbar()
+        bar.sizeToFit()
+        let flex = UIBarButtonItem(systemItem: .flexibleSpace)
+        let done = UIBarButtonItem(title: "閉じる", style: .done, target: self, action: #selector(dismissKeyboard))
+        bar.items = [flex, done]
+        return bar
+    }()
+
+    @objc private func dismissKeyboard() {
+        view.endEditing(true)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -71,6 +85,10 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
         creditsField.placeholder = "単位数（整数）"
         creditsField.borderStyle = .roundedRect
         creditsField.keyboardType = .numberPad
+        
+        // キーボードに「閉じる」ボタンを載せる
+        titleField.inputAccessoryView = kbToolbar
+        creditsField.inputAccessoryView = kbToolbar
 
         seg.selectedSegmentIndex = 0
 
@@ -94,6 +112,7 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
             s.alignment = .center
             return s
         }
+        
 
         grid.addArrangedSubview(titleField)
         grid.addArrangedSubview(creditsField)
@@ -113,6 +132,11 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
             grid.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
             grid.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16)
         ])
+        
+        // 余白タップでキーボード閉じる
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
 
         // 初期値（編集用 or 既定）
         if let initial {

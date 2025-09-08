@@ -454,7 +454,14 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     // ★ ここから追加：カテゴリ上書き（コースごとに Seg4 を固定）
     private typealias OverrideMap = [String: String]   // key: courseKey → Seg4.rawValue
 
-    private func courseKey(_ c: Course) -> String { "\(c.id)#\(c.title)" }
+    //private func courseKey(_ c: Course) -> String { "\(c.id)#\(c.title)" }
+    // どの学期で取ったか表示用に保持
+    private var earnedTermText: [String: String] = [:]
+
+    private func courseKey(_ c: Course) -> String {
+        // ユニークキー（登録番号+科目名）
+        return (c.id.isEmpty ? "" : c.id) + "#" + c.title
+    }
 
     private func loadOverrides() -> OverrideMap {
         UserDefaults.standard.dictionary(forKey: Prefs.overrides) as? OverrideMap ?? [:]
@@ -630,6 +637,23 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         var planned = plannedCourses
         var earned  = earnedCourses
         
+        // --- ここから追加：取得学期マップを組み立てる ---
+        earnedTermText.removeAll()
+        // 過去学期分
+        for term in TermStore.allSavedTerms().sorted(by: <) where term < currentTerm {
+            let arr = TermStore.loadAssigned(for: term)
+            for c in arr {
+                earnedTermText[courseKey(c)] = term.displayTitle   // 例: "2024 年前期"
+            }
+        }
+        // 手動追加の過年度（isPlanned == false）の場合
+        for m in loadManualCredits() where m.isPlanned == false {
+            let fake = Course(id: "manual:\(m.id)", title: m.title,
+                              room: "", teacher: "", credits: m.credits,
+                              campus: "", category: nil, syllabusURL: "")
+            earnedTermText[courseKey(fake)] = m.termText   // 例: "2023 年前期"
+        }
+        // --- 追加ここまで ---
         
         for m in loadManualCredits() {
             // Course を最小限で合成（teacher はダミー）
@@ -1178,7 +1202,16 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         var cfg = cell.defaultContentConfiguration()
         cfg.text = c.title
-        cfg.secondaryText = "\(c.teacher) ・ \(((c.credits as Int?) ?? 0))単位"
+        var creditsText = "\(((c.credits as Int?) ?? 0))単位"
+        var subtitle = "\(c.teacher) ・ \(creditsText)"
+
+        // 取得済みセクションなら学期を間に挟む
+        if case .earned = sections[indexPath.section] {
+            if let t = earnedTermText[courseKey(c)] {
+                subtitle = "\(c.teacher) ・ \(t) ・ \(creditsText)"
+            }
+        }
+        cfg.secondaryText = subtitle
         cell.contentConfiguration = cfg
         return cell
     }

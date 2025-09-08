@@ -23,7 +23,9 @@ final class AddCourseViewController: UITableViewController {
 
     // 追加：セグメント（キャンパス＝任意、科目分類＝必須）
     private let campusSeg   = UISegmentedControl(items: ["青山", "相模原"])
-    private let categorySeg = UISegmentedControl(items: ["青スタ科目", "学科科目", "自由選択科目"])
+    private let categorySeg = UISegmentedControl(items: ["青スタ科目", "学科科目", "外国語科目", "自由選択科目"])
+    
+    
 
     // 便利：ビュー埋め込みヘルパ
     private func embed(_ v: UIView, into cell: UITableViewCell) {
@@ -66,11 +68,47 @@ final class AddCourseViewController: UITableViewController {
         // セグメント初期状態（キャンパス＝任意、分類＝必須）
         campusSeg.selectedSegmentIndex = UISegmentedControl.noSegment
         categorySeg.selectedSegmentIndex = UISegmentedControl.noSegment
+        
+
+        // --- 2回押しで選択解除できるようにする（同じボタンをもう一度タップで解除） ---
+        let campusTap = UITapGestureRecognizer(target: self, action: #selector(handleSegmentTap(_:)))
+        campusTap.cancelsTouchesInView = false   // ←これでもOKですが、うまく動かない場合は true にしてください
+        campusSeg.addGestureRecognizer(campusTap)
+
+        let categoryTap = UITapGestureRecognizer(target: self, action: #selector(handleSegmentTap(_:)))
+        categoryTap.cancelsTouchesInView = false // ←同上（true にすると標準の選択を“キャンセル”できます）
+        categorySeg.addGestureRecognizer(categoryTap)
+        // -------------------------------------------------------------------
+
 
         tableView.keyboardDismissMode = .onDrag
     }
 
     @objc private func close() { dismiss(animated: true) }
+    
+    // タップ位置 → セグメント番号（あなたの既存ヘルパのままでOK）
+    private func indexForTap(in seg: UISegmentedControl, point: CGPoint) -> Int {
+        guard seg.numberOfSegments > 0 else { return UISegmentedControl.noSegment }
+        let w = seg.bounds.width / CGFloat(seg.numberOfSegments)
+        let i = Int(floor(point.x / max(w, 1)))
+        return max(0, min(seg.numberOfSegments - 1, i))
+    }
+    
+    // 共通タップハンドラ：同じ場所をタップしたら選択解除
+    @objc private func handleSegmentTap(_ gr: UITapGestureRecognizer) {
+        guard gr.state == .ended, let seg = gr.view as? UISegmentedControl else { return }
+        let idx = indexForTap(in: seg, point: gr.location(in: seg))
+
+        // すでに選ばれている同じインデックスなら “解除”
+        if idx == seg.selectedSegmentIndex {
+            // 標準の処理が完了した直後に実行することで再選択を上書き
+            DispatchQueue.main.async {
+                seg.selectedSegmentIndex = UISegmentedControl.noSegment
+                seg.sendActions(for: .valueChanged) // 必要なら監視側に通知
+            }
+        }
+    }
+
 
     @objc private func save() {
         // 必須：科目名
@@ -107,12 +145,7 @@ final class AddCourseViewController: UITableViewController {
         }
         // --------------------
 
-        // 必須：科目分類（セグメント）
-        guard categorySeg.selectedSegmentIndex != UISegmentedControl.noSegment else {
-            let a = UIAlertController(title: "科目分類が未選択です。", message: "科目分類(青スタ・学科科目等)を選んでください。", preferredStyle: .alert)
-            a.addAction(UIAlertAction(title: "OK", style: .default))
-            present(a, animated: true); return
-        }
+
 
         // セグメント → 文字列
         let campusText: String? = {
@@ -122,8 +155,14 @@ final class AddCourseViewController: UITableViewController {
             default: return nil            // 任意
             }
         }()
-        let categoryText: String = {
-            ["青山スタンダード科目", "学科科目", "自由選択科目"][categorySeg.selectedSegmentIndex]
+        let categoryText: String? = {
+            switch categorySeg.selectedSegmentIndex {
+            case 0: return "青山スタンダード科目"   // 保存値は「青山スタンダード」を維持
+            case 1: return "学科科目"
+            case 2: return "外国語科目"
+            case 3: return "自由選択科目"
+            default: return nil
+            }
         }()
 
         // URL 文字列 → URL?
@@ -141,7 +180,7 @@ final class AddCourseViewController: UITableViewController {
             teacher: teacherTF.text ?? "",
             credits: creditsValue,   // 未入力なら nil
             campus: campusText,                   // 任意
-            category: categoryText,               // 必須
+            category: categoryText,                // 必須
             syllabusURL: syllabusString                      // URL? 型
         )
 

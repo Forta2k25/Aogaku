@@ -1,6 +1,7 @@
 
 import UIKit
 import Foundation
+import Photos
 
 // MARK: - Slot
 
@@ -71,10 +72,10 @@ final class timetable: UIViewController,
     private var assigned: [Course?] = Array(repeating: nil, count: 25)
 
     // MARK: Layout constants
-    private let spacing: CGFloat = 6
-    private let cellPadding: CGFloat = 4
-    private let headerRowHeight: CGFloat = 36
-    private let timeColWidth: CGFloat = 48
+    private let spacing: CGFloat = 1
+    private let cellPadding: CGFloat = 1 // コマの大きさ調整
+    private let headerRowHeight: CGFloat = 28
+    private let timeColWidth: CGFloat = 40
     private let topRatio: CGFloat = 0.02
     
     // 追加: 現在の学期
@@ -328,8 +329,8 @@ final class timetable: UIViewController,
         contentView.addSubview(gridContainerView)
         NSLayoutConstraint.activate([
             gridContainerView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            gridContainerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 4),
-            gridContainerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            gridContainerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 0),
+            gridContainerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
             gridContainerView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8)
         ])
     }
@@ -449,7 +450,7 @@ final class timetable: UIViewController,
         cfg.baseBackgroundColor = bg
         cfg.baseForegroundColor = fg
         cfg.contentInsets = .init(top: 8, leading: 10, bottom: 8, trailing: 10)
-        cfg.background.cornerRadius = 12
+        cfg.background.cornerRadius = 5 //コマの丸さ調整
         cfg.background.backgroundInsets = .zero
         cfg.background.strokeColor = stroke
         cfg.background.strokeWidth = strokeWidth
@@ -467,7 +468,7 @@ final class timetable: UIViewController,
             b.removeTimetableContentView()
 
             var cfg = baseCellConfig(bg: .secondarySystemBackground,
-                                     fg: .systemBlue,
+                                     fg: .tertiaryLabel,
                                      stroke: UIColor.separator, strokeWidth: 1)
             cfg.title = "＋"
             cfg.titleAlignment = .center
@@ -570,6 +571,118 @@ final class timetable: UIViewController,
     }
 
     // MARK: - Actions
+    
+    // MARK: - Share (screenshot + half sheet)
+
+    /// 時間割（グリッド全体）を画像にする
+    private func makeTimetableImage() -> UIImage {
+        // レイアウトを最新化
+        gridContainerView.layoutIfNeeded()
+
+        // 画像化する対象はグリッド全体（曜日ヘッダ・時限マーカー含む）
+        let targetView = gridContainerView
+        let size = targetView.bounds.size
+
+        // Retina解像度でレンダリング
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = UIScreen.main.scale
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+
+        let image = renderer.image { ctx in
+            // offscreenでも確実に描ける layer.render(in:) を使用
+            targetView.layer.render(in: ctx.cgContext)
+        }
+        return image
+    }
+
+    /// 共有シートをハーフシートで出す
+    private func shareCurrentTimetable() {
+        let image = makeTimetableImage()
+
+        let activityVC = UIActivityViewController(
+            activityItems: [image],
+            applicationActivities: nil
+        )
+        // ハーフシート（画面下から）の見た目にする
+        if let sheet = activityVC.sheetPresentationController {
+            if #available(iOS 16.0, *) {
+                sheet.detents = [.medium(), .large()]
+                sheet.selectedDetentIdentifier = .medium
+            } else {
+                // iOS15 は pageSheet相当の挙動。必要なら modalPresentationStyle を変えてもOK
+            }
+            sheet.prefersGrabberVisible = true
+            sheet.preferredCornerRadius = 16
+        }
+
+        // iPad対策（ポップオーバー起点）
+        if let pop = activityVC.popoverPresentationController {
+            pop.sourceView = rightB
+            pop.sourceRect = rightB.bounds
+        }
+
+        present(activityVC, animated: true)
+    }
+    // MARK: - Save to Photos
+
+    private func saveCurrentTimetableToPhotos() {
+        let image = makeTimetableImage()
+
+        func finish(_ ok: Bool, _ error: Error?) {
+            let title = ok ? "保存しました" : "保存に失敗しました"
+            let msg   = ok ? "写真アプリに保存されました" : (error?.localizedDescription ?? "写真への保存権限をご確認ください")
+            let ac = UIAlertController(title: title, message: msg, preferredStyle: .alert)
+            ac.addAction(UIAlertAction(title: "OK", style: .default))
+            present(ac, animated: true)
+        }
+
+        if #available(iOS 14, *) {
+            let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+            switch status {
+            case .notDetermined:
+                PHPhotoLibrary.requestAuthorization(for: .addOnly) { s in
+                    DispatchQueue.main.async {
+                        if s == .authorized || s == .limited {
+                            self.performSaveToPhotos(image, completion: finish)
+                        } else {
+                            finish(false, nil)
+                        }
+                    }
+                }
+            case .authorized, .limited:
+                performSaveToPhotos(image, completion: finish)
+            default:
+                finish(false, nil)
+            }
+        } else {
+            let status = PHPhotoLibrary.authorizationStatus()
+            if status == .notDetermined {
+                PHPhotoLibrary.requestAuthorization { s in
+                    DispatchQueue.main.async {
+                        if s == .authorized {
+                            self.performSaveToPhotos(image, completion: finish)
+                        } else {
+                            finish(false, nil)
+                        }
+                    }
+                }
+            } else if status == .authorized {
+                performSaveToPhotos(image, completion: finish)
+            } else {
+                finish(false, nil)
+            }
+        }
+    }
+
+    private func performSaveToPhotos(_ image: UIImage, completion: @escaping (Bool, Error?) -> Void) {
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.creationRequestForAsset(from: image)
+        }) { ok, err in
+            DispatchQueue.main.async { completion(ok, err) }
+        }
+    }
+
+
 
     @objc private func tapLeft() {
         // 年度候補（必要に応じて増やしてください）
@@ -595,6 +708,8 @@ final class timetable: UIViewController,
         present(vc, animated: true)
     }
     
+    
+    
     private func changeTerm(to newTerm: TermKey) {
         guard newTerm != currentTerm else { return }
         currentTerm = newTerm
@@ -618,7 +733,24 @@ final class timetable: UIViewController,
     }
 
 
-    @objc private func tapRightB() { print("右B") }
+    @objc private func tapRightB() {
+        let action = UIAlertController(title: "時間割を保存 / 共有", message: nil, preferredStyle: .actionSheet)
+        action.addAction(UIAlertAction(title: "写真に保存", style: .default) { [weak self] _ in
+            self?.saveCurrentTimetableToPhotos()
+        })
+        action.addAction(UIAlertAction(title: "共有…", style: .default) { [weak self] _ in
+            self?.shareCurrentTimetable()   // ← 既に実装済みの共有へ
+        })
+        action.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+
+        // iPad対策（ポップオーバーの起点）
+        if let pop = action.popoverPresentationController {
+            pop.sourceView = rightB
+            pop.sourceRect = rightB.bounds
+        }
+        present(action, animated: true)
+    }
+
 
     @objc private func tapRightC() {
         let vc = TimetableSettingsViewController()

@@ -8,11 +8,11 @@ struct SyllabusSearchCriteria {
     var category: String? = nil      // 学部（上位）
     var department: String? = nil    // 学科（完全一致）
     var campus: String? = nil        // "青山" / "相模原"
-    var place: String? = nil         // "対面" / "オンライン" / nil
+    var place: String? = nil         // "対面" / "オンライン" / nil（指定なし）
     var grade: String? = nil
-    var day: String? = nil           // 単一曜日のみの最適化用
+    var day: String? = nil           // 単一曜日のときだけ入る最適化用
     var periods: [Int]? = nil
-    var timeSlots: [(String, Int)]? = nil // 複数セル: (day, period)
+    var timeSlots: [(String, Int)]? = nil // 複数セル選択: (day, period)
 }
 
 final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelegate, UISearchResultsUpdating {
@@ -20,9 +20,10 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
     @IBOutlet weak var syllabus_table: UITableView!
     @IBOutlet weak var search_button: UIButton!
 
+    // Firestore
     private let db = Firestore.firestore()
 
-    // 学部→下位カテゴリ
+    // ===== 上位→下位カテゴリ展開 =====
     private let categoryExpansion: [String: [String]] = [
         "文学部": ["文学部","文学部共通","文学部外国語科目","英米文学科","フランス文学科","日本文学科","史学科","比較芸術学科"],
         "教育人間科学部": ["教育人間科学部","教育人間 外国語科目","教育人間 教育学科","教育人間 心理学科","教育人間　外国語科目","教育人間　教育学科","教育人間　心理学科"],
@@ -43,14 +44,15 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
     private var selectedCategory: String? = nil
     private var filterDepartment: String? = nil
     private var filterCampus: String? = nil
-    private var filterPlace: String? = nil
+    private var filterPlace: String? = nil      // 対面/オンライン
     private var filterGrade: String? = nil
     private var filterDay: String? = nil
     private var filterPeriods: [Int]? = nil
     private var filterTimeSlots: [(day: String, period: Int)]? = nil
 
-    // データ
+    // データ（← docID を持たせる）
     struct SyllabusData {
+        let docID: String
         let class_name: String
         let teacher_name: String
         let time: String
@@ -67,7 +69,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
     private var searchDebounce: DispatchWorkItem?
 
     // ページング
-    private var pageSize = 24
+    private var pageSizeBase = 10
     private var lastDoc: DocumentSnapshot?
     private var isLoading = false
     private var reachedEnd = false
@@ -80,6 +82,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         syllabus_table.dataSource = self
         syllabus_table.delegate = self
 
+        // 検索バー
         searchController.searchResultsUpdater = self
         searchController.obscuresBackgroundDuringPresentation = false
         searchController.searchBar.placeholder = "授業名や教員名で検索"
@@ -97,20 +100,23 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
     // 検索画面へ
     @IBAction func didTapSearchButton(_ sender: Any) {
         let sb = UIStoryboard(name: "Main", bundle: nil)
-        guard let vc = sb.instantiateViewController(withIdentifier: "syllabus_search") as? syllabus_search else { return }
-
+        guard let searchVC = sb.instantiateViewController(withIdentifier: "syllabus_search") as? syllabus_search else {
+            print("❌ failed to instantiate syllabus_search"); return
+        }
         // 初期値
-        vc.initialCategory   = selectedCategory
-        vc.initialDepartment = filterDepartment
-        vc.initialCampus     = filterCampus
-        vc.initialPlace      = filterPlace
-        vc.initialGrade      = filterGrade
-        vc.initialDay        = filterDay
-        vc.initialPeriods    = filterPeriods
+        searchVC.initialCategory   = selectedCategory
+        searchVC.initialDepartment = filterDepartment
+        searchVC.initialCampus     = filterCampus
+        searchVC.initialPlace      = filterPlace
+        searchVC.initialGrade      = filterGrade
+        searchVC.initialDay        = filterDay
+        searchVC.initialPeriods    = filterPeriods
 
-        vc.onApply = { [weak self] c in self?.apply(criteria: c) }
+        searchVC.onApply = { [weak self] criteria in
+            self?.apply(criteria: criteria)
+        }
 
-        let nav = UINavigationController(rootViewController: vc)
+        let nav = UINavigationController(rootViewController: searchVC)
         nav.modalPresentationStyle = .pageSheet
         if let sheet = nav.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
@@ -121,7 +127,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         present(nav, animated: true)
     }
 
-    // ===== 文字列ユーティリティ =====
+    // === 文字列正規化（キャンパス） ===
     private func canonicalizeCampusString(_ s: String) -> String? {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if t.contains("相模") || t.contains("sagamihara") || t == "s" { return "相模原" }
@@ -130,26 +136,19 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
     }
     private func docCampusSet(_ x: [String: Any]) -> Set<String> {
         var out: Set<String> = []
-        if let s = x["campus"] as? String, let c = canonicalizeCampusString(s) { out.insert(c) }
-        else if let arr = x["campus"] as? [String] {
+        if let s = x["campus"] as? String {
+            if let c = canonicalizeCampusString(s) { out.insert(c) }
+        } else if let arr = x["campus"] as? [String] {
             for v in arr { if let c = canonicalizeCampusString(v) { out.insert(c) } }
         }
         return out
     }
-    // 授業名の末尾が「オンライン」注記か（［］/【】/（）/[]/() を許容）
+
+    // 授業名の末尾が “オンライン” 注記かを判定
     private func isOnlineClassName(_ name: String) -> Bool {
         let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let pattern = "[\\[［\\(（【]\\s*オンライン\\s*[\\]］\\)）】]\\s*$"
         return t.range(of: pattern, options: .regularExpression) != nil
-    }
-    // 2gram
-    private func ngrams2(_ s: String) -> [String] {
-        let cs = Array(s)
-        guard !cs.isEmpty else { return [] }
-        if cs.count == 1 { return [String(cs[0])] }
-        var out: Set<String> = []
-        for i in 0..<(cs.count-1) { out.insert(String(cs[i]) + String(cs[i+1])) }
-        return Array(out)
     }
 
     private func apply(criteria: SyllabusSearchCriteria) {
@@ -162,9 +161,12 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         filterPeriods    = criteria.periods
         filterTimeSlots  = criteria.timeSlots
 
-        resetAndReload(keyword: criteria.keyword)
+        DispatchQueue.main.async { [weak self] in
+            self?.resetAndReload(keyword: criteria.keyword)
+        }
     }
 
+    // リロード共通
     private func resetAndReload(keyword: String?) {
         searchDebounce?.cancel()
         isLoading = false
@@ -172,8 +174,11 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         lastDoc = nil
         seenIds.removeAll()
 
-        // ページサイズは控えめ（厳しめクエリでページ数を減らす）
-        pageSize = 24
+        if (filterPlace != nil && !filterPlace!.isEmpty) || (filterTimeSlots != nil && !(filterTimeSlots?.isEmpty ?? true)) {
+            pageSizeBase = 50
+        } else {
+            pageSizeBase = 10
+        }
 
         data.removeAll()
         filteredData.removeAll()
@@ -191,92 +196,72 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         }
     }
 
-    // クライアント側の最終フィルタ（最小限）
+    // クライアント側の最終フィルタ
     private func docMatchesFilters(_ x: [String: Any]) -> Bool {
-        // campus
         if let c = filterCampus, !c.isEmpty {
             let want = canonicalizeCampusString(c) ?? c
             if !docCampusSet(x).contains(want) { return false }
         }
-        // place
         if let p = filterPlace, !p.isEmpty {
             let name = (x["class_name"] as? String) ?? ""
-            if p == "オンライン", !isOnlineClassName(name) { return false }
-            if p == "対面",       isOnlineClassName(name)  { return false }
+            if p == "オンライン" {
+                if !isOnlineClassName(name) { return false }
+            } else if p == "対面" {
+                if isOnlineClassName(name) { return false }
+            }
         }
-        // grade
         if let g = filterGrade, !g.isEmpty {
             let s = (x["grade"] as? String) ?? ""
             if !(s == g || s.contains(g)) { return false }
         }
-        // time：複数セル優先で厳密に
-        let t = x["time"] as? [String: Any]
-        let d = (t?["day"] as? String) ?? ""
-        let ps = (t?["periods"] as? [Int]) ?? []
+
+        let time = x["time"] as? [String: Any]
+        let docDay = (time?["day"] as? String) ?? ""
+        let docPeriods = (time?["periods"] as? [Int]) ?? []
+
         if let slots = filterTimeSlots, !slots.isEmpty {
-            if !slots.contains(where: { $0.0 == d && ps.contains($0.1) }) { return false }
+            let ok = slots.contains { $0.0 == docDay && docPeriods.contains($0.1) }
+            if !ok { return false }
         } else {
-            if let day = filterDay, !day.isEmpty, day != d { return false }
-            if let fp = filterPeriods {
-                if fp.count == 1  { if !ps.contains(fp[0]) { return false } }
-                else if fp.count > 1 { if !Set(fp).isSubset(of: Set(ps)) { return false } }
+            if let d = filterDay, !d.isEmpty, docDay != d { return false }
+            if let ps = filterPeriods {
+                if ps.count == 1 {
+                    if !docPeriods.contains(ps[0]) { return false }
+                } else if ps.count > 1 {
+                    if !Set(ps).isSubset(of: Set(docPeriods)) { return false }
+                }
             }
         }
         return true
     }
 
-    // 学部展開
+    // 上位→下位カテゴリ展開
     private func expandedCategories() -> [String]? {
         guard let c = selectedCategory, !c.isEmpty else { return nil }
         if let list = categoryExpansion[c], !list.isEmpty { return list }
         return [c]
     }
 
-    // ===== クエリを最大限絞る =====
+    // ベースクエリ
     private func baseQuery() -> Query {
         var q: Query = db.collection("classes")
 
-        // 学科 > 学部の順で反映
         if let dept = filterDepartment, !dept.isEmpty {
-            q = q.whereField("category", isEqualTo: dept)
+            q = q.whereField("category", isEqualTo: dept)  // 学科が最優先
         } else if let list = expandedCategories() {
             if list.count == 1 { q = q.whereField("category", isEqualTo: list[0]) }
             else if list.count <= 10 { q = q.whereField("category", in: list) }
             else { q = q.whereField("category", isEqualTo: list[0]) }
         }
 
-        if let g = filterGrade, !g.isEmpty {
-            q = q.whereField("grade", isEqualTo: g)
-        }
+        if let g = filterGrade,  !g.isEmpty { q = q.whereField("grade",  isEqualTo: g) }
 
-        // ■ 複数セル：day IN (...) と periods arrayContainsAny (...)
-        var usedArrayContains = false
-        if let slots = filterTimeSlots, !slots.isEmpty {
-            let days = Array(Set(slots.map { $0.0 })).sorted()
-            let periods = Array(Set(slots.map { $0.1 })).sorted()
-            if !days.isEmpty { q = q.whereField("time.day", in: Array(days.prefix(10))) }   // Firestore の in は最大10
-            if !periods.isEmpty {
-                q = q.whereField("time.periods", arrayContainsAny: Array(periods.prefix(10)))
-                usedArrayContains = true
-            }
-        } else {
-            // 単一最適化
-            if let d = filterDay, !d.isEmpty { q = q.whereField("time.day", isEqualTo: d) }
+        if (filterTimeSlots == nil || filterTimeSlots?.isEmpty == true) {
+            if let d = filterDay,    !d.isEmpty { q = q.whereField("time.day", isEqualTo: d) }
             if let ps = filterPeriods, ps.count == 1 {
                 q = q.whereField("time.periods", arrayContains: ps[0])
-                usedArrayContains = true
             }
         }
-
-        // ■ オンライン：可能なら ngrams2 で母集団を縮める（arrayContains 系の重複は避ける）
-        if let p = filterPlace, p == "オンライン", !usedArrayContains {
-            let grams = ngrams2("オンライン")
-            if !grams.isEmpty {
-                q = q.whereField("ngrams2", arrayContainsAny: Array(grams.prefix(10)))
-                // usedArrayContains = true  // 明示不要だが記載しておくならここ
-            }
-        }
-
         return q
     }
 
@@ -285,7 +270,8 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         guard !isLoading, !reachedEnd else { return }
         isLoading = true
 
-        var q: Query = baseQuery().order(by: "class_name").limit(to: pageSize)
+        let qBase = baseQuery().order(by: "class_name")
+        var q: Query = qBase.limit(to: pageSizeBase)
         if let last = lastDoc { q = q.start(afterDocument: last) }
 
         q.getDocuments { [weak self] snap, err in
@@ -293,6 +279,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
             self.isLoading = false
             if let err = err { print("Firestore error:", err); return }
             guard let snap = snap else { return }
+
             if snap.documents.isEmpty { self.reachedEnd = true; return }
 
             var chunk: [SyllabusData] = []
@@ -300,15 +287,21 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
                 guard self.seenIds.insert(d.documentID).inserted else { continue }
                 let raw = d.data()
                 if !self.docMatchesFilters(raw) { continue }
-                chunk.append(self.toModel(raw))
+                chunk.append(self.toModel(docID: d.documentID, raw))
             }
 
             self.lastDoc = snap.documents.last
-            if snap.documents.count < self.pageSize { self.reachedEnd = true }
+            if snap.documents.count < self.pageSizeBase { self.reachedEnd = true }
 
             self.data.append(contentsOf: chunk)
             self.filteredData = self.data
             DispatchQueue.main.async { self.syllabus_table.reloadData() }
+
+            if self.filteredData.isEmpty,
+               !self.reachedEnd,
+               (self.filterPlace != nil && !self.filterPlace!.isEmpty || (self.filterTimeSlots != nil && !(self.filterTimeSlots?.isEmpty ?? true))) {
+                self.loadNextPage()
+            }
 
             print("📦 page:", snap.documents.count, "added:", chunk.count, "total:", self.data.count,
                   "last:", self.lastDoc?.documentID ?? "nil")
@@ -333,6 +326,39 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat { 90 }
 
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let item = filteredData[indexPath.row]
+
+        let sb = UIStoryboard(name: "Main", bundle: nil)
+        guard let detail = sb.instantiateViewController(
+            withIdentifier: "SyllabusDetailViewController"
+        ) as? SyllabusDetailViewController else {
+            print("❌ failed to instantiate SyllabusDetailViewController"); return
+        }
+
+        // 渡す最小情報
+        detail.docID = item.docID
+        detail.initialTitle = item.class_name
+        detail.initialTeacher = item.teacher_name
+        detail.initialCredit = item.credit
+
+        // 💡 モーダル（シート）として表示（iOS15+でDetentを指定）
+        detail.modalPresentationStyle = .pageSheet
+        if let sheet = detail.sheetPresentationController {
+            sheet.detents = [.large(), .medium()]          // 伸縮：Large / Medium
+            sheet.selectedDetentIdentifier = .large        // ← 初期表示を「大」に
+            sheet.prefersGrabberVisible = true             // つまみを表示
+            sheet.preferredCornerRadius = 16
+            sheet.prefersScrollingExpandsWhenScrolledToEdge = true
+            // 下スワイプで閉じさせたくない場合のみ：
+            // detail.isModalInPresentation = true
+        }
+
+        present(detail, animated: true)
+    }
+
+    // 無限スクロール（検索中はオフ）
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         if searchController.isActive, let t = searchController.searchBar.text, !t.isEmpty { return }
         let offsetY = scrollView.contentOffset.y
@@ -341,8 +367,8 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         if offsetY > contentH - frameH - 400 { loadNextPage() }
     }
 
-    // Firestore -> Model
-    private func toModel(_ x: [String: Any]) -> SyllabusData {
+    // Firestore -> Model（← docID を受け取る形に）
+    private func toModel(docID: String, _ x: [String: Any]) -> SyllabusData {
         var timeStr = ""
         if let t = x["time"] as? [String: Any] {
             let day = (t["day"] as? String) ?? ""
@@ -359,6 +385,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
             return ""
         }()
         return SyllabusData(
+            docID: docID,
             class_name: x["class_name"] as? String ?? "",
             teacher_name: x["teacher_name"] as? String ?? "",
             time: timeStr,
@@ -369,9 +396,10 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         )
     }
 
-    // ===== 検索バー（テキスト検索は従来通りだが place=オンラインならトークンを合流） =====
+    // ===== 検索バー =====
     func updateSearchResults(for searchController: UISearchController) {
         let text = (searchController.searchBar.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
         searchDebounce?.cancel()
         if text.isEmpty {
             filteredData = data
@@ -383,14 +411,22 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
+    // 正規化 & 2-gram
     private func normalize(_ s: String) -> String {
         let lowered = s.lowercased()
         return lowered.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
     }
-    private func tokensForSearch(_ s: String) -> [String] {
-        ngrams2(normalize(s))
+    private func ngrams2(_ s: String) -> [String] {
+        let t = normalize(s)
+        let cs = Array(t)
+        guard !cs.isEmpty else { return [] }
+        if cs.count == 1 { return [String(cs[0])] }
+        var out: [String] = []
+        for i in 0..<(cs.count - 1) { out.append(String(cs[i]) + String(cs[i+1])) }
+        return Array(Set(out))
     }
 
+    // 検索（テキスト）
     private func remoteSearch(prefix rawText: String) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
@@ -420,7 +456,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
                     let raw = d.data()
                     if !self.docMatchesFilters(raw) { return nil }
                     guard seen.insert(d.documentID).inserted else { return nil }
-                    return self.toModel(raw)
+                    return self.toModel(docID: d.documentID, raw)
                 }
                 self.filteredData = models
                 self.syllabus_table.reloadData()
@@ -428,11 +464,8 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
             return
         }
 
-        // 2文字以上：検索トークン + （オンラインなら）オンラインのトークンも合流
-        var tokens = Array(tokensForSearch(text).prefix(10))
-        if filterPlace == "オンライン" {
-            tokens = Array(Set(tokens + ngrams2("オンライン"))).prefix(10).map { $0 }
-        }
+        let tokens = Array(ngrams2(text).prefix(10))
+        guard !tokens.isEmpty else { self.filteredData = []; self.syllabus_table.reloadData(); return }
 
         var q: Query = baseQuery()
             .whereField("ngrams2", arrayContainsAny: tokens)
@@ -449,7 +482,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
                 let docTokens = (x["ngrams2"] as? [String]) ?? []
                 guard tokens.allSatisfy(docTokens.contains) else { return nil }
                 guard seen.insert(d.documentID).inserted else { return nil }
-                return self.toModel(x)
+                return self.toModel(docID: d.documentID, x)
             }
             self.filteredData = models
             self.syllabus_table.reloadData()

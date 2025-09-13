@@ -619,6 +619,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
     }
 
+    private var currentTermText: String { currentTerm.displayTitle }  // displayTitle は既存で使用中
+    
     // MARK: - 集計
     private func compute() {
         // データ読み出し
@@ -647,7 +649,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             }
         }
         // 手動追加の過年度（isPlanned == false）の場合
-        for m in loadManualCredits() where m.isPlanned == false {
+        for m in loadManualCredits() where m.termText != currentTermText {
             let fake = Course(id: "manual:\(m.id)", title: m.title,
                               room: "", teacher: "", credits: m.credits,
                               campus: "", category: nil, syllabusURL: "")
@@ -664,7 +666,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                 id: "manual:\(m.id)",
                 title: m.title,
                 room: "",                 // ← teacher より前に
-                teacher: "手動追加",
+                teacher: "手動追加 (長押しで編集)",
                 credits: m.credits,                // ← 次項で説明（Int を渡す）
                 campus: "",               // ← ここも定義順に合わせる
                 category: {
@@ -677,7 +679,9 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                 }(),
                 syllabusURL: ""                    // ← String 型なら空文字 / URL? なら nil
             )
-            if m.isPlanned { planned.append(course) } else { earned.append(course) }
+            let isPlannedNow = (m.termText == currentTermText)   // ★ 比較で判定
+            if isPlannedNow { planned.append(course) } else { earned.append(course) }
+            //if m.isPlanned { planned.append(course) } else { earned.append(course) }
         }
         // 以降の処理は planned / earned を使う
         plannedCourses = planned
@@ -966,17 +970,17 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             title: m.title,
             credits: m.credits,
             categoryIndex: segOrder.firstIndex(of: m.category) ?? 0,
-            isPlanned: m.isPlanned,
+            isPlanned: (m.termText == currentTerm.displayTitle),
             termText: m.termText
         )
 
         // エディタ起動（完了で保存→再計算→反映）
-        let vc = ManualCreditEditorViewController(termChoices: terms, initial: initial) { [weak self] input in
+        let vc = ManualCreditEditorViewController(termChoices: terms, currentTermText: currentTerm.displayTitle, initial: initial) { [weak self] input in
             guard let self else { return }
             list[idx].title     = input.title
             list[idx].credits   = input.credits
             list[idx].category  = segOrder[min(max(0, input.categoryIndex), 3)]
-            list[idx].isPlanned = input.isPlanned
+            list[idx].isPlanned = (input.termText == self.currentTerm.displayTitle)
             list[idx].termText   = input.termText
             self.saveManualCredits(list)
             
@@ -998,7 +1002,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         // ここを一行でOK
         let terms = makeFullTermChoices()
         // 画面を組み立て
-        let vc = ManualCreditEditorViewController(termChoices: terms, initial: nil) { [weak self] input in
+        let vc = ManualCreditEditorViewController(termChoices: terms, currentTermText: currentTerm.displayTitle, initial: nil) { [weak self] input in
             guard let self else { return }
             // Seg4 へ変換
             let segOrder: [Seg4] = [.aoyama, .language, .department, .free]
@@ -1007,12 +1011,13 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             // 保存
             var list = self.loadManualCredits()
             let newId = UUID().uuidString
+            let isPlannedNow = (input.termText == self.currentTerm.displayTitle)
             list.append(ManualCredit(
-                id: UUID().uuidString,
+                id: newId,
                 title: input.title,
                 credits: input.credits,
                 category: seg4,
-                isPlanned: input.isPlanned,
+                isPlanned: isPlannedNow,
                 termText: input.termText
             ))
             self.saveManualCredits(list)
@@ -1247,642 +1252,3 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 }
 
 
-
-
-/*
-//  CreditsFullViewController.swift
-//  Aogaku
-//
-//  取得済み（濃）／今期取得予定（薄）／未取得（灰）をドーナツで表示
-//  学部・学科セレクタ + 外国語科目の算入先ポリシー + 一覧のカテゴリ分割表示（青山/学科/外国語/自由）
-//
-
-import UIKit
-
-// ======================== 学部・学科マスタ ========================
-private let FACULTY_MAP: [String: [String]] = [
-    // 青山
-    "文学部": ["英米文学科", "フランス文学科", "日本文学科日本文学コース", "日本文学科日本語・日本語教育コース", "史学科日本史コース", "史学科考古学コース", "史学科東洋史コース", "史学科西洋史コース", "比較芸術学科"],
-    "教育人間科学部": ["教育学科", "心理学科一般心理コース", "心理学科臨床心理コース"],
-    "経済学部": ["経済学科", "現代経済デザイン学科"],
-    "法学部": ["法学科", "ヒューマンライツ学科"],
-    "経営学部": ["経営学科", "マーケティング学科"],
-    "国際政治経済学部": ["国際政治学科", "国際経済学科", "国際コミュニケーション学科"],
-    "総合文化政策学部": ["総合文化政策学科"],
-    // 相模原
-    "理工学部": ["物理科学科", "数理サイエンス学科", "化学・生命科学科", "電気電子工学科", "機械創造工学科", "経営システム工学科", "情報テクノロジー学科"],
-    "コミュニティ人間科学部": ["コミュニティ人間科学科"],
-    "社会情報学部": ["社会情報学科"],
-    "地球社会共生学部": ["地球社会共生学科"]
-]
-
-// ======================== 必要単位カタログ（編集だけで拡張可能） ========================
-//
-// 使い方：REQUIREMENT_CATALOG に学部→学科→ルールを追記するだけ。
-// - requirement: Aoyama / Department / Free / Total（ドーナツはこの3区分でクリップ）
-// - languageSink: 外国語科目をどこに算入するか（.aoyamaStandard / .department）
-// ※「学部共通デフォルト」を置きたい場合は学科名を "*" にすると、その学部の既定値になります。
-
-private enum LanguageSink { case aoyamaStandard, department }
-
-private struct GradRule {
-    let requirement: Requirement          // 3区分の必要単位
-    let languageSink: LanguageSink        // 外国語の算入先（表示は独立、集計はここへ加算）
-}
-
-// 学部→(学科→ルール)
-private let REQUIREMENT_CATALOG: [String: [String: GradRule]] = [
-    "文学部": [
-        // 英米文学科：青山24 / 英語6+12, 専門4+40, 自由38 = 124
-        "英米文学科": GradRule(
-            requirement: Requirement(aoyama: 24, department: (6+12+4+40), free: 38),
-            languageSink: .department
-        ),
-        // フランス文学科：青山24 / 仏語16 + 専門24+40, 自由24 = 128
-        "フランス文学科": GradRule(
-            requirement: Requirement(aoyama: 24, department: (16+24+40), free: 24),
-            languageSink: .department
-        ),
-        "*": GradRule(
-            requirement: Requirement.standard,
-            languageSink: .aoyamaStandard
-        )
-    ],
-
-    "教育人間科学部": [
-        // 教育学科：青山26+語学10=36 / 学科30+12+16 / 自由34 = 128
-        "教育学科": GradRule(
-            requirement: Requirement(aoyama: (26+10), department: (30+12+16), free: 34),
-            languageSink: .aoyamaStandard
-        ),
-        "*": GradRule(
-            requirement: Requirement(aoyama: 24, department: (16+24+40), free: 24),
-            languageSink: .aoyamaStandard
-        )
-    ],
-
-    // 以降はお好みで追加：
-    // "経済学部": [
-    //     "*": GradRule(requirement: Requirement(aoyama: 24, department: 80, free: 24, total: 128),
-    //                  languageSink: .aoyamaStandard)
-    // ],
-]
-
-
-// ======================== 表示用カテゴリ（一覧） ========================
-private enum DisplayCategory: CaseIterable {
-    case aoyamaStandard, department, language, freeChoice
-    var title: String {
-        switch self {
-        case .aoyamaStandard: return "青山スタンダード"
-        case .department:     return "学科科目"
-        case .language:       return "外国語科目"
-        case .freeChoice:     return "自由選択科目"
-        }
-    }
-}
-
-// ======================== 既存の ChartCategory に Requirement をひも付け ========================
-extension ChartCategory {
-    var requirementDefault: Int {
-        switch self {
-        case .aoyamaStandard: return Requirement.standard.aoyama
-        case .department:     return Requirement.standard.department
-        case .freeChoice:     return Requirement.standard.free
-        //case .language:       return Requirement.standard.language
-        }
-    }
-}
-
-// ======================== 本体 ========================
-final class CreditsFullViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
-
-    // MARK: - 入力（時間割側から渡す）
-    private let currentTerm: TermKey
-    init(currentTerm: TermKey) {
-        self.currentTerm = currentTerm
-        super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .pageSheet
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    // MARK: - UI
-    private let tableView = UITableView(frame: .zero, style: .insetGrouped)
-    private let headerContainer = UIView()
-
-    // 上部：フィルタ
-    private let facultyButton = UIButton(type: .system)
-    private let departmentButton = UIButton(type: .system)
-
-    // 上部：ドーナツ/凡例
-    private let captionLabel = UILabel()
-    private let donut = DonutChartView()
-    private let centerValueLabel = UILabel()
-    private let needLabel = UILabel()
-    private let languageNoteLabel = UILabel()
-    private let legendStack = UIStackView()
-
-    // MARK: - UserDefaultsキー
-    private enum Prefs {
-        static let faculty = "credits.selectedFaculty"
-        static let dept    = "credits.selectedDepartment"
-    }
-
-    // MARK: - 状態
-    private var selectedFaculty: String?
-    private var selectedDepartment: String?
-
-    // 集計
-    private struct Totals {
-        var earned: [ChartCategory: Int] = [:]
-        var planned: [ChartCategory: Int] = [:]
-        var earnedTotal = 0
-        var plannedTotal = 0
-    }
-    private var totals = Totals()
-
-    // 一覧データ（カテゴリ分割後）
-    private var plannedByDisplay: [DisplayCategory: [Course]] = [:]
-    private var earnedByDisplay:  [DisplayCategory: [Course]] = [:]
-
-    // セクション定義
-    private enum SectionKind {
-        case planned(DisplayCategory)
-        case earned(DisplayCategory)
-        var title: String {
-            switch self {
-            case .planned(let d): return "取得予定（今学期） — \(d.title)"
-            case .earned(let d):  return "取得済み（過年度） — \(d.title)"
-            }
-        }
-    }
-    private var sections: [SectionKind] = []
-
-    // MARK: - Life
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .systemBackground
-        title = "単位"
-        if presentingViewController != nil && navigationController?.viewControllers.first == self {
-            navigationItem.leftBarButtonItem = UIBarButtonItem(
-                systemItem: .close,
-                primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
-            )
-        }
-        donut.backgroundColor = .clear
-        donut.isOpaque = false
-
-        buildUI()
-        loadSelection()
-        updateFilterButtons()  // ← タイトル/有効状態/計算/メニューを一括反映
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        donut.transform = CGAffineTransform.identity.scaledBy(x: 0.86, y: 0.86)
-        updateTableHeaderHeightIfNeeded()
-    }
-
-    // MARK: - 必要単位・言語ポリシー
-    // 現在選択に該当するルールをカタログから取得（学科→学部デフォルト→nil の順）
-    private func currentGradRule() -> GradRule? {
-        guard let f = selectedFaculty else { return nil }
-        let dict = REQUIREMENT_CATALOG[f]
-        if let d = selectedDepartment, let rule = dict?[d] { return rule }
-        if let rule = dict?["*"] { return rule }
-        return nil
-    }
-
-    // 画面・集計で使う必要単位
-    private func requirementForCurrentSelection() -> Requirement {
-        currentGradRule()?.requirement ?? Requirement.standard
-    }
-
-    // 外国語の算入先（ドーナツ集計で使用）
-    private func languageSinkForCurrentSelection() -> LanguageSink {
-        currentGradRule()?.languageSink ?? .aoyamaStandard
-    }
-
-
-    // MARK: - 判定
-    private func isLanguageCourse(_ c: Course) -> Bool {
-        // タイトル・カテゴリに語学系キーワードが含まれるかで簡易判定
-        let s = "\(c.title) \(c.category ?? "")".lowercased()
-        let keys = [
-            "english","french","german","chinese","spanish","korean","russian","italian",
-            "英語","フランス","独語","ドイツ","中国語","スペイン","韓国","朝鮮","ロシア","イタリア","語学","外国語"
-        ]
-        return keys.contains { s.contains($0) }
-    }
-
-    // ドーナツ（集計）用のカテゴリ割り当て（語学はポリシーに従って算入）
-    private func classifyForDonut(_ c: Course) -> ChartCategory {
-        if isLanguageCourse(c) {
-            switch languageSinkForCurrentSelection() {
-            case .aoyamaStandard: return .aoyamaStandard
-            case .department:     return .department
-            }
-        }
-        // 既存の判定（必要なら語彙を増やして調整）
-        let cat = (c.category ?? "").lowercased()
-        if cat.contains("スタンダード") || cat.contains("standard") { return .aoyamaStandard }
-        if cat.contains("学科") || cat.contains("department")  || cat.contains("学部")   { return .department }
-        return .freeChoice
-    }
-
-    // 一覧表示用のカテゴリ（語学は独立表示）
-    private func classifyForDisplay(_ c: Course) -> DisplayCategory {
-        if isLanguageCourse(c) { return .language }
-        let cat = (c.category ?? "").lowercased()
-        if cat.contains("スタンダード") || cat.contains("standard") { return .aoyamaStandard }
-        if cat.contains("学科") || cat.contains("学部")     { return .department }
-        return .freeChoice
-    }
-
-    // MARK: - 集計
-    private func compute() {
-        // 生データ取得
-        let now = TermStore.loadAssigned(for: currentTerm)
-        let plannedCourses = uniqueCourses(now)
-        var all: [Course] = []
-        for term in TermStore.allSavedTerms().sorted(by: <) where term < currentTerm {
-            all.append(contentsOf: TermStore.loadAssigned(for: term))
-        }
-        let earnedCourses = uniqueCourses(all)
-
-        // 1) ドーナツ用集計
-        func addToTotals(_ c: Course, to dict: inout [ChartCategory: Int]) {
-            let val = (c.credits as Int?) ?? 0
-            let cat = classifyForDonut(c)
-            dict[cat, default: 0] += val
-        }
-        totals = Totals()
-        earnedCourses.forEach { addToTotals($0, to: &totals.earned) }
-        plannedCourses.forEach { addToTotals($0, to: &totals.planned) }
-        totals.earnedTotal  = earnedCourses.reduce(0) { $0 + (( $1.credits as Int?) ?? 0) }
-        totals.plannedTotal = plannedCourses.reduce(0) { $0 + (( $1.credits as Int?) ?? 0) }
-
-        // 必要単位クリップ（見栄え）
-        for cat in ChartCategory.allCases {
-            let req = required(cat)
-            let e = totals.earned[cat] ?? 0
-            let p = totals.planned[cat] ?? 0
-            totals.earned[cat]  = min(e, req)
-            totals.planned[cat] = min(p, max(0, req - (totals.earned[cat] ?? 0)))
-        }
-
-        // 2) 一覧用にカテゴリ分割
-        plannedByDisplay = Dictionary(grouping: plannedCourses, by: classifyForDisplay)
-        earnedByDisplay  = Dictionary(grouping: earnedCourses,  by: classifyForDisplay)
-        // 安定ソート（タイトル）
-        for k in DisplayCategory.allCases {
-            plannedByDisplay[k] = (plannedByDisplay[k] ?? []).sorted { $0.title < $1.title }
-            earnedByDisplay[k]  = (earnedByDisplay[k]  ?? []).sorted { $0.title < $1.title }
-        }
-
-        // 3) セクション構築（空はスキップ）
-        sections.removeAll()
-        for d in DisplayCategory.allCases {
-            if let arr = plannedByDisplay[d], !arr.isEmpty { sections.append(.planned(d)) }
-        }
-        for d in DisplayCategory.allCases {
-            if let arr = earnedByDisplay[d], !arr.isEmpty { sections.append(.earned(d)) }
-        }
-    }
-
-    private func required(_ cat: ChartCategory) -> Int {
-        let r = requirementForCurrentSelection()
-        switch cat {
-        case .aoyamaStandard: return r.aoyama
-        case .department:     return r.department
-        case .freeChoice:     return r.free
-        }
-    }
-
-    // MARK: - 表示反映
-    private func apply() {
-        // 中央値
-        let earned = totals.earnedTotal
-        let full   = totals.earnedTotal + totals.plannedTotal
-        centerValueLabel.attributedText = makeCenterValue(earned: earned, totalWithPlanned: full)
-
-        // 必要単位
-        let r = requirementForCurrentSelection()
-        needLabel.text = "合計必要単位数 \(r.total)"
-        languageNoteLabel.text = "※ 外国語科目は「\(languageSinkForCurrentSelection() == .department ? "学科科目" : "青山スタンダード")」に算入"
-
-        // ドーナツ
-        let segs: [DonutSegment] = [
-            .init(color: ChartCategory.aoyamaStandard.color,
-                  earned: CGFloat(totals.earned[.aoyamaStandard] ?? 0),
-                  planned: CGFloat(totals.planned[.aoyamaStandard] ?? 0),
-                  required: CGFloat(r.aoyama)),
-            .init(color: ChartCategory.department.color,
-                  earned: CGFloat(totals.earned[.department] ?? 0),
-                  planned: CGFloat(totals.planned[.department] ?? 0),
-                  required: CGFloat(r.department)),
-            .init(color: ChartCategory.freeChoice.color,
-                  earned: CGFloat(totals.earned[.freeChoice] ?? 0),
-                  planned: CGFloat(totals.planned[.freeChoice] ?? 0),
-                  required: CGFloat(r.free))
-        ]
-        donut.configure(segments: segs)
-
-        // 凡例（従来の3カテゴリのまま）
-        legendStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        func row(_ cat: ChartCategory) -> UIStackView {
-            let dot = UIView(); dot.backgroundColor = cat.color; dot.layer.cornerRadius = 6
-            dot.translatesAutoresizingMaskIntoConstraints = false
-            dot.widthAnchor.constraint(equalToConstant: 12).isActive = true
-            dot.heightAnchor.constraint(equalToConstant: 12).isActive = true
-
-            let name = UILabel(); name.text = cat.title; name.font = .systemFont(ofSize: 15, weight: .semibold)
-            let left = UIStackView(arrangedSubviews: [dot, name]); left.axis = .horizontal; left.alignment = .center; left.spacing = 8
-
-            let right = UILabel(); right.textColor = .secondaryLabel; right.font = .systemFont(ofSize: 15)
-            let e = totals.earned[cat] ?? 0, p = totals.planned[cat] ?? 0
-            right.text = "\(e)(\(p)) / \(required(cat))"
-
-            let line = UIStackView(arrangedSubviews: [left, UIView(), right])
-            line.alignment = .center
-            return line
-        }
-        legendStack.addArrangedSubview(row(.aoyamaStandard))
-        legendStack.addArrangedSubview(row(.department))
-        legendStack.addArrangedSubview(row(.freeChoice))
-
-        tableView.reloadData()
-        updateTableHeaderHeightIfNeeded()
-    }
-
-    private func makeCenterValue(earned: Int, totalWithPlanned: Int) -> NSAttributedString {
-        let s = "\(earned)(\(totalWithPlanned))"
-        let big = UIFont.systemFont(ofSize: 44, weight: .black)
-        let small = UIFont.systemFont(ofSize: 32, weight: .black)
-        let attr = NSMutableAttributedString(string: s, attributes: [.font: big, .foregroundColor: UIColor.label])
-        if let open = s.firstIndex(of: "("), let close = s.firstIndex(of: ")") {
-            let r = NSRange(open...close, in: s)
-            attr.addAttributes([.font: small, .foregroundColor: UIColor.secondaryLabel], range: r)
-        }
-        return attr
-    }
-
-    // MARK: - ユーティリティ
-    private func uniqueCourses(_ list: [Course]) -> [Course] {
-        var seen = Set<String>(), out: [Course] = []
-        for c in list {
-            let key = "\(c.id)#\(c.title)"
-            if seen.insert(key).inserted { out.append(c) }
-        }
-        return out
-    }
-
-    // MARK: - UI（ヘッダー = tableHeaderView）
-    private func buildUI() {
-        // Table
-        tableView.dataSource = self
-        tableView.delegate = self
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-        tableView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(tableView)
-        NSLayoutConstraint.activate([
-            tableView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            tableView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-
-        // Header container
-        headerContainer.translatesAutoresizingMaskIntoConstraints = false
-        headerContainer.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 8, trailing: 16)
-
-        let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 6; stack.translatesAutoresizingMaskIntoConstraints = false
-        headerContainer.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: headerContainer.layoutMarginsGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: headerContainer.layoutMarginsGuide.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: headerContainer.layoutMarginsGuide.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: headerContainer.layoutMarginsGuide.bottomAnchor)
-        ])
-
-        // ① 学部/学科
-        let filtersRow = UIStackView(); filtersRow.axis = .horizontal; filtersRow.spacing = 8; filtersRow.distribution = .fillEqually
-        styleFilterButton(facultyButton, placeholder: "学部（指定なし）")
-        styleFilterButton(departmentButton, placeholder: "学科（指定なし）", enabled: false) // 学部未選択時は無効
-        filtersRow.addArrangedSubview(facultyButton)
-        filtersRow.addArrangedSubview(departmentButton)
-
-        // ② キャプション
-        captionLabel.text = "取得済み単位（合計取得予定）"
-        captionLabel.font = .systemFont(ofSize: 20, weight: .semibold)
-        captionLabel.textAlignment = .center
-
-        // ③ ドーナツ + 中央ラベル
-        let donutWrap = UIView(); donutWrap.translatesAutoresizingMaskIntoConstraints = false
-        donut.translatesAutoresizingMaskIntoConstraints = false
-        donutWrap.addSubview(donut)
-        NSLayoutConstraint.activate([
-            donut.centerXAnchor.constraint(equalTo: donutWrap.centerXAnchor),
-            donut.centerYAnchor.constraint(equalTo: donutWrap.centerYAnchor),
-            donut.widthAnchor.constraint(equalTo: donutWrap.widthAnchor, multiplier: 0.78),
-            donut.heightAnchor.constraint(equalTo: donut.widthAnchor)
-        ])
-        centerValueLabel.textAlignment = .center
-        centerValueLabel.adjustsFontSizeToFitWidth = true
-        centerValueLabel.minimumScaleFactor = 0.6
-        centerValueLabel.translatesAutoresizingMaskIntoConstraints = false
-        donutWrap.addSubview(centerValueLabel)
-        NSLayoutConstraint.activate([
-            centerValueLabel.centerXAnchor.constraint(equalTo: donutWrap.centerXAnchor),
-            centerValueLabel.centerYAnchor.constraint(equalTo: donutWrap.centerYAnchor),
-            centerValueLabel.widthAnchor.constraint(lessThanOrEqualTo: donutWrap.widthAnchor, multiplier: 0.8)
-        ])
-        //donutWrap.heightAnchor.constraint(equalTo: donutWrap.widthAnchor, multiplier: 0.78).isActive = true
-        let ratio = donutWrap.heightAnchor.constraint(equalTo: donutWrap.widthAnchor, multiplier: 0.78)
-        ratio.priority = .defaultHigh   // 999 に下げて衝突を回避
-        ratio.isActive = true
-
-
-        // ④ 必要単位 + 備考
-        needLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        needLabel.textColor = .secondaryLabel
-        needLabel.textAlignment = .center
-
-        languageNoteLabel.font = .systemFont(ofSize: 12, weight: .regular)
-        languageNoteLabel.textColor = .tertiaryLabel
-        languageNoteLabel.textAlignment = .center
-
-        // ⑤ 凡例
-        legendStack.axis = .vertical
-        legendStack.spacing = 6
-
-        // add
-        stack.addArrangedSubview(filtersRow)
-        stack.addArrangedSubview(captionLabel)
-        stack.addArrangedSubview(donutWrap)
-        stack.setCustomSpacing(4, after: donutWrap)
-        stack.addArrangedSubview(needLabel)
-        stack.addArrangedSubview(languageNoteLabel)
-        stack.addArrangedSubview(legendStack)
-
-        // header as tableHeaderView
-        let container = UIView(frame: .zero)
-        container.addSubview(headerContainer)
-        headerContainer.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            headerContainer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            headerContainer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            headerContainer.topAnchor.constraint(equalTo: container.topAnchor),
-            headerContainer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            headerContainer.widthAnchor.constraint(equalTo: container.widthAnchor)
-        ])
-        tableView.tableHeaderView = container
-    }
-
-    private func updateTableHeaderHeightIfNeeded() {
-        guard let header = tableView.tableHeaderView else { return }
-        let width = tableView.bounds.width
-        let height = header.systemLayoutSizeFitting(
-            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        ).height
-        if header.frame.height != height {
-            header.frame.size = CGSize(width: width, height: height)
-            tableView.tableHeaderView = header
-        }
-    }
-
-    private func styleFilterButton(_ button: UIButton, placeholder: String, enabled: Bool = true) {
-        var config = UIButton.Configuration.filled()
-        config.baseBackgroundColor = .secondarySystemBackground
-        config.baseForegroundColor = .label
-        config.image = UIImage(systemName: "chevron.down")
-        config.imagePadding = 6
-        config.imagePlacement = .trailing
-        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
-        config.cornerStyle = .large
-        config.title = placeholder
-        button.configuration = config
-        button.layer.cornerRadius = 10
-        button.showsMenuAsPrimaryAction = true
-        button.isEnabled = enabled
-    }
-
-    // MARK: - メニュー生成 & 反映
-    private func configureFacultyMenus() {
-        let noneTitle = "指定なし"
-
-        // 学部メニュー
-        var facultyActions: [UIAction] = [
-            UIAction(title: noneTitle, state: selectedFaculty == nil ? .on : .off) { [weak self] _ in
-                guard let self else { return }
-                selectedFaculty = nil
-                selectedDepartment = nil
-                updateFilterButtons()
-            }
-        ]
-        for name in FACULTY_MAP.keys.sorted() {
-            facultyActions.append(UIAction(title: name, state: (selectedFaculty == name) ? .on : .off) { [weak self] _ in
-                guard let self else { return }
-                selectedFaculty = name
-                selectedDepartment = nil
-                updateFilterButtons()
-            })
-        }
-        facultyButton.menu = UIMenu(children: facultyActions)
-
-        // 学科メニュー（学部未選択なら《指定なし》のみ＆無効）
-        var deptActions: [UIAction] = [
-            UIAction(title: noneTitle, state: selectedDepartment == nil ? .on : .off) { [weak self] _ in
-                guard let self else { return }
-                selectedDepartment = nil
-                updateFilterButtons()
-            }
-        ]
-        if let f = selectedFaculty, let list = FACULTY_MAP[f] {
-            for d in list {
-                deptActions.append(UIAction(title: d, state: (selectedDepartment == d) ? .on : .off) { [weak self] _ in
-                    guard let self else { return }
-                    selectedDepartment = d
-                    updateFilterButtons()
-                })
-            }
-            departmentButton.isEnabled = true
-        } else {
-            departmentButton.isEnabled = false
-        }
-        departmentButton.menu = UIMenu(children: deptActions)
-    }
-
-    private func updateFilterButtons() {
-        func setTitle(_ button: UIButton, _ title: String) {
-            var cfg = button.configuration
-            cfg?.title = title
-            button.configuration = cfg
-        }
-        setTitle(facultyButton, selectedFaculty ?? "学部（指定なし）")
-        setTitle(departmentButton, selectedDepartment ?? "学科（指定なし）")
-        departmentButton.isEnabled = (selectedFaculty != nil)
-
-        // 保存
-        let ud = UserDefaults.standard
-        if let f = selectedFaculty { ud.set(f, forKey: Prefs.faculty) } else { ud.removeObject(forKey: Prefs.faculty) }
-        if let d = selectedDepartment { ud.set(d, forKey: Prefs.dept) } else { ud.removeObject(forKey: Prefs.dept) }
-
-        // 再計算 & 反映 & メニュー更新
-        compute()
-        apply()
-        configureFacultyMenus()
-    }
-
-    private func loadSelection() {
-        let ud = UserDefaults.standard
-        if let f = ud.string(forKey: Prefs.faculty), FACULTY_MAP.keys.contains(f) {
-            selectedFaculty = f
-            if let d = ud.string(forKey: Prefs.dept), (FACULTY_MAP[f]?.contains(d) ?? false) {
-                selectedDepartment = d
-            } else {
-                selectedDepartment = nil
-            }
-        } else {
-            selectedFaculty = nil
-            selectedDepartment = nil
-        }
-    }
-
-    // MARK: - Table
-    func numberOfSections(in tableView: UITableView) -> Int { sections.count }
-
-    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        sections[section].title
-    }
-
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        switch sections[section] {
-        case .planned(let d): return plannedByDisplay[d]?.count ?? 0
-        case .earned(let d):  return earnedByDisplay[d]?.count ?? 0
-        }
-    }
-
-    private func rows(for section: Int) -> [Course] {
-        switch sections[section] {
-        case .planned(let d): return plannedByDisplay[d] ?? []
-        case .earned(let d):  return earnedByDisplay[d]  ?? []
-        }
-    }
-
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let c = rows(for: indexPath.section)[indexPath.row]
-        let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
-        var cfg = cell.defaultContentConfiguration()
-        cfg.text = c.title
-        cfg.secondaryText = "\(c.teacher) ・ \(((c.credits as Int?) ?? 0))単位"
-        cell.contentConfiguration = cfg
-        return cell
-    }
-}
-
-
-
- /**/*/

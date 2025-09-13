@@ -1,291 +1,280 @@
-//
-//  syllabus_search.swift
-//  Aogaku
-//
-//  Created by 米沢怜生 on 2025/08/05.
-//
-//15:54米沢
-//15:57米沢
-
 import UIKit
 
-class syllabus_search: UIViewController {
+final class syllabus_search: UIViewController {
 
+    // 入出力
+    var initialCategory: String?
+    var initialDepartment: String?
+    var initialCampus: String?
+    var initialPlace: String?          // "対面" / "オンライン"
+    var initialGrade: String?
+    var initialDay: String?
+    var initialPeriods: [Int]?
+    var onApply: ((SyllabusSearchCriteria) -> Void)?
+
+    // Outlets
+    @IBOutlet weak var keywordTextField: UITextField!
     @IBOutlet weak var facultyButton: UIButton!
     @IBOutlet weak var departmentButton: UIButton!
     @IBOutlet weak var campusSegmentedControl: UISegmentedControl!
     @IBOutlet weak var placeSegmentedControl: UISegmentedControl!
     @IBOutlet var slotButtons: [UIButton]!
     @IBOutlet weak var gridContainerView: UIView!
-    
-    // 25 セル分の Bool 配列。初期は全部 false（未選択）
+
+    // 内部状態
+    private var selectedCategory: String?
+    private var selectedDepartment: String?
+    private var selectedCampus: String?
+    private var selectedPlace: String?
+    private var selectedGrade: String?
+
     private var selectedStates = Array(repeating: false, count: 25)
-    
-    let spacing: CGFloat   = 0
-//    let topMargin: CGFloat = 0
-    
-    let faculties = [
-        "指定なし",
-        "文学部",
-        "教育人間科学部",
-        "経済学部",
-        "法学部",
-        "経営学部",
-        "国際政治経済学部",
-        "総合文化政策学部",
-        "理工学部",
-        "コミュニティ人間科学部",
-        "社会情報学部",
-        "地球社会共生学部",
-        "青山スタンダード科目",
-        "教職課程科目",
+    private let days = ["月","火","水","木","金"]
+    private let periods = [1,2,3,4,5]
+    private let spacing: CGFloat = 0
+
+    private let faculties = [
+        "指定なし","文学部","教育人間科学部","経済学部","法学部","経営学部",
+        "国際政治経済学部","総合文化政策学部","理工学部",
+        "コミュニティ人間科学部","社会情報学部","地球社会共生学部",
+        "青山スタンダード科目","教職課程科目"
     ]
-
-    let departments: [String: [String]] = [
-        // 青山キャンパス
+    private let departments: [String: [String]] = [
         "指定なし": ["指定なし"],
-        "文学部": ["指定なし", "英米文学科", "フランス文学科", "日本文学科", "史学科", "比較芸術学科"],
-        "教育人間科学部": ["指定なし", "教育学科", "心理学科"],
-        "経済学部": ["指定なし", "経済学科", "現代経済デザイン学科"],
-        "法学部": ["指定なし", "法学科", "ヒューマンライツ学科"],
-        "経営学部": ["指定なし", "経営学科", "マーケティング学科"],
-        "国際政治経済学部": ["指定なし", "国際政治学科", "国際経済学科", "国際コミュニケーション学科"],
-        "総合文化政策学部": ["指定なし", "総合文化政策学科"],
-
-        // 相模原キャンパス
-        "理工学部": ["指定なし", "物理科学科", "数理サイエンス学科", "化学・生命科学科", "電気電子工学科", "機械創造工学科", "経営システム工学科", "情報テクノロジー学科"],
-        "コミュニティ人間科学部": ["指定なし", "コミュニティ人間科学科"],
-        "社会情報学部": ["指定なし", "社会情報学科"],
-        "地球社会共生学部": ["指定なし", "地球社会共生学科"],
+        "文学部": ["指定なし","英米文学科","フランス文学科","日本文学科","史学科","比較芸術学科"],
+        "教育人間科学部": ["指定なし","教育学科","心理学科"],
+        "経済学部": ["指定なし","経済学科","現代経済デザイン学科"],
+        "法学部": ["指定なし","法学科","ヒューマンライツ学科"],
+        "経営学部": ["指定なし","経営学科","マーケティング学科"],
+        "国際政治経済学部": ["指定なし","国際政治学科","国際経済学科","国際コミュニケーション学科"],
+        "総合文化政策学部": ["指定なし","総合文化政策学科"],
+        "理工学部": ["指定なし","物理科学科","数理サイエンス学科","化学・生命科学科","電気電子工学科","機械創造工学科","経営システム工学科","情報テクノロジー学科"],
+        "コミュニティ人間科学部": ["指定なし","コミュニティ人間科学科"],
+        "社会情報学部": ["指定なし","社会情報学科"],
+        "地球社会共生学部": ["指定なし","地球社会共生学科"],
         "青山スタンダード科目": ["指定なし"],
         "教職課程科目": ["指定なし"]
     ]
 
-
     override func viewDidLoad() {
-      super.viewDidLoad()
-        
-        for b in slotButtons {
-                // 初期見た目
-                var cfg = b.configuration ?? .plain()
-                cfg.baseBackgroundColor = .white
-                cfg.baseForegroundColor = .lightGray
-                b.configuration = cfg
+        super.viewDidLoad()
 
-                // 押下時の見た目は isSelected に同期
-                b.configurationUpdateHandler = { btn in
-                    var c = btn.configuration
-                    if btn.isSelected {
-                        c?.baseBackgroundColor = .systemGreen
-                        c?.baseForegroundColor = .white
-                    } else {
-                        c?.baseBackgroundColor = .white
-                        c?.baseForegroundColor = .lightGray
-                    }
-                    btn.configuration = c
-                }
-            }
-        
-        // 1) container 側の AutoResizing はオフに
-                gridContainerView.translatesAutoresizingMaskIntoConstraints = false
-                // 2) ボタンもオフに
-                slotButtons.forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        selectedCategory   = initialCategory
+        selectedDepartment = initialDepartment
+        selectedCampus     = initialCampus
+        selectedPlace      = initialPlace
+        selectedGrade      = initialGrade
 
-                // Tag順にソート
-                let buttons = slotButtons.sorted { $0.tag < $1.tag }
+        setupFacultyMenu()
+        setupDepartmentMenu(initial: selectedCategory ?? "指定なし")
 
-                for idx in 0..<buttons.count {
-                    let btn = buttons[idx]
-                    let row = idx / 5
-                    let col = idx % 5
+        // 学部
+        if let cat = selectedCategory, cat != "指定なし" {
+            facultyButton.setTitle(cat, for: .normal); setButtonTitleColor(facultyButton, .black)
+        } else {
+            facultyButton.setTitle("学部", for: .normal); setButtonTitleColor(facultyButton, .lightGray)
+            selectedCategory = nil
+        }
+        // 学科
+        if let dept = selectedDepartment,
+           let list = departments[selectedCategory ?? "指定なし"], list.contains(dept) {
+            departmentButton.setTitle(dept, for: .normal); setButtonTitleColor(departmentButton, .black)
+        } else {
+            departmentButton.setTitle("学科", for: .normal); setButtonTitleColor(departmentButton, .lightGray)
+            selectedDepartment = nil
+        }
 
-                    // ───── 横方向の制約 ─────
-                    if col == 0 {
-                        // 一番左は container の leading にピタッ
-                        btn.leadingAnchor.constraint(
-                            equalTo: gridContainerView.leadingAnchor
-                        ).isActive = true
-                    } else {
-                        // 左隣の trailing + spacing
-                        let left = buttons[idx - 1]
-                        btn.leadingAnchor.constraint(
-                            equalTo: left.trailingAnchor,
-                            constant: spacing
-                        ).isActive = true
-                        // 幅は左隣とイコール
-                        btn.widthAnchor.constraint(
-                            equalTo: left.widthAnchor
-                        ).isActive = true
-                    }
-                    if col == 4 {
-                        // 一番右は container の trailing にピタッ
-                        btn.trailingAnchor.constraint(
-                            equalTo: gridContainerView.trailingAnchor
-                        ).isActive = true
-                    }
+        // キャンパス
+        let campuses = ["指定なし","青山","相模原"]
+        campusSegmentedControl.removeAllSegments()
+        for (i, t) in campuses.enumerated() { campusSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
+        campusSegmentedControl.selectedSegmentIndex = indexFor(value: selectedCampus, in: campuses)
+        campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
+        campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
 
-                    // ───── 縦方向の制約 ─────
-                    if row == 0 {
-                        // 一行目は container の top にピタッ
-                        btn.topAnchor.constraint(
-                            equalTo: gridContainerView.topAnchor
-                        ).isActive = true
-                    } else {
-                        // 上の行の同じ列の bottom + spacing
-                        let above = buttons[(row - 1) * 5 + col]
-                        btn.topAnchor.constraint(
-                            equalTo: above.bottomAnchor,
-                            constant: spacing
-                        ).isActive = true
-                        // 高さは上の行とイコール
-                        btn.heightAnchor.constraint(
-                            equalTo: above.heightAnchor
-                        ).isActive = true
-                    }
-                    if row == 4 {
-                        // 最下行は container の bottom にピタッ
-                        btn.bottomAnchor.constraint(
-                            equalTo: gridContainerView.bottomAnchor
-                        ).isActive = true
-                    }
-                }
-        /////////////////
-        let campuses = ["指定なし", "青山", "相模原"]
-        
-                campusSegmentedControl.removeAllSegments()
-                for (i, title) in campuses.enumerated() {
-                    campusSegmentedControl.insertSegment(withTitle: title, at: i, animated: false)
-                }
-                campusSegmentedControl.selectedSegmentIndex = 0
-                campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-                campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-            // 初期選択を「指定なし」に
-            campusSegmentedControl.selectedSegmentIndex = 0
-
-            // テキスト色：未選択時グレー、選択時は黒
-            campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-            campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-        
-        // 画面表示時に学部メニュー・学科メニューを組み立て
-            setupFacultyMenu()
-            setupDepartmentMenu(initial: faculties[0])
-        
-        let places = ["指定なし", "対面", "オンライン"]
-        
+        // 形態
+        let places = ["指定なし","対面","オンライン"]
         placeSegmentedControl.removeAllSegments()
-                        for (i, title) in places.enumerated() {
-                            placeSegmentedControl.insertSegment(withTitle: title, at: i, animated: false)
-                        }
-                        placeSegmentedControl.selectedSegmentIndex = 0
-                        placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-                        placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-                    // 初期選択を「指定なし」に
-                    placeSegmentedControl.selectedSegmentIndex = 0
+        for (i, t) in places.enumerated() { placeSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
+        placeSegmentedControl.selectedSegmentIndex = indexFor(value: selectedPlace, in: places)
+        placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
+        placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
 
-                    // テキスト色：未選択時グレー、選択時は黒
-                    placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-                    placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-                
-                // 画面表示時に学部メニュー・学科メニューを組み立て
-                    setupFacultyMenu()
-                    setupDepartmentMenu(initial: faculties[0])
+        configureSlotButtons()
+        setupGridConstraints()
 
-        }
-
-
-
-    private func createFacultyActions() -> [UIAction] {
-        return faculties.map { name in
-            UIAction(title: name) { [weak self] action in
-                guard let self = self else { return }
-                // 学部を選んだときは黒文字に
-                self.facultyButton.setTitle(action.title, for: .normal)
-                self.facultyButton.setTitleColor(.black, for: .normal)
-
-                // 学科は選び直しなのでプレースホルダーに戻す
-                self.departmentButton.setTitle("学科", for: .normal)
-                self.departmentButton.setTitleColor(.lightGray, for: .normal)
-                // ここで学科メニューを組み直し
-                self.setupDepartmentMenu(initial: action.title)
+        // 初期時間（任意）
+        if let d = initialDay, let ps = initialPeriods, let col = days.firstIndex(of: d) {
+            for p in ps {
+                let row = p - 1, idx = row * 5 + col
+                if (0..<selectedStates.count).contains(idx) {
+                    selectedStates[idx] = true
+                    slotButtons.first(where: { $0.tag == idx })?.isSelected = true
+                }
             }
         }
     }
-    
-    func setupFacultyMenu() {
-      // UIAction を用意
-      let actions = faculties.map { name in
-          
-          // 学部選択アクションの中で…
-          UIAction(title: name) { [weak self] action in
-              guard let self = self else { return }
 
-              // 文字をセット
-              self.facultyButton.setTitle(action.title, for: .normal)
-
-              // Configuration を取り出して色を黒に
-              if var config = self.facultyButton.configuration {
-                  config.baseForegroundColor = .black
-                  self.facultyButton.configuration = config
-              }
-              
-              // 学科はプレースホルダーに戻してグレーに
-              self.departmentButton.setTitle("学科", for: .normal)
-              if var deptConfig = self.departmentButton.configuration {
-                  deptConfig.baseForegroundColor = .lightGray
-                  self.departmentButton.configuration = deptConfig
-              }
-              
-              // 学科メニュー再構築
-              self.setupDepartmentMenu(initial: action.title)
-          }
-
-          
-      }
-      // メニューをセット
-      facultyButton.menu = UIMenu(children: actions)
-      facultyButton.showsMenuAsPrimaryAction = true
+    // Actions
+    @IBAction func campusChanged(_ sender: UISegmentedControl) {
+        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
+        selectedCampus = (title == "指定なし") ? nil : title
     }
-
+    @IBAction func placeChanged(_ sender: UISegmentedControl) {
+        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
+        selectedPlace = (title == "指定なし") ? nil : title
+    }
     @IBAction func slotTapped(_ sender: UIButton) {
         sender.isSelected.toggle()
-
-        // 必要なら内部配列も同期
         let idx = sender.tag
-        if selectedStates.indices.contains(idx) {
-            selectedStates[idx] = sender.isSelected
-        }
+        if selectedStates.indices.contains(idx) { selectedStates[idx] = sender.isSelected }
+    }
+    @IBAction func didTapClose(_ sender: Any) { dismiss(animated: true) }
+
+    // 検索ボタン
+    @IBAction func didTapApply(_ sender: Any) {
+        var campusValue: String? = nil
+        if let t = campusSegmentedControl.titleForSegment(at: campusSegmentedControl.selectedSegmentIndex),
+           t != "指定なし" { campusValue = t }
+
+        var placeValue: String? = nil
+        if let t = placeSegmentedControl.titleForSegment(at: placeSegmentedControl.selectedSegmentIndex),
+           t != "指定なし" { placeValue = t }
+
+        let slots = deriveTimeSlots()
+        let (day, ps) = deriveSingleDayAndPeriods()
+
+        let criteria = SyllabusSearchCriteria(
+            keyword: keywordTextField?.text,
+            category: selectedCategory,
+            department: selectedDepartment,
+            campus: campusValue,
+            place: placeValue,
+            grade: selectedGrade,
+            day: day,
+            periods: ps,
+            timeSlots: slots
+        )
+        let handler = self.onApply
+        dismiss(animated: true) { handler?(criteria) }
     }
 
-    
-    func setupDepartmentMenu(initial faculty: String) {
-        guard let list = departments[faculty] else { return }
-
-        // list.map { deptName in … } の中で deptName を使う
-        let actions = list.map { deptName in
-            UIAction(title: deptName) { [weak self] _ in
+    // メニュー
+    private func setupFacultyMenu() {
+        let actions = faculties.map { name in
+            UIAction(title: name) { [weak self] act in
                 guard let self = self else { return }
-                // 学科ボタンに選択された deptName をセット
-                self.departmentButton.setTitle(deptName, for: .normal)
-                // Filled スタイルなら configuration 経由で文字色を黒に
-                if var config = self.departmentButton.configuration {
-                    config.baseForegroundColor = .black
-                    self.departmentButton.configuration = config
+                if act.title == "指定なし" {
+                    self.selectedCategory = nil
+                    self.facultyButton.setTitle("学部", for: .normal)
+                    self.setButtonTitleColor(self.facultyButton, .lightGray)
+                } else {
+                    self.selectedCategory = act.title
+                    self.facultyButton.setTitle(act.title, for: .normal)
+                    self.setButtonTitleColor(self.facultyButton, .black)
+                }
+                self.selectedDepartment = nil
+                self.departmentButton.setTitle("学科", for: .normal)
+                self.setButtonTitleColor(self.departmentButton, .lightGray)
+                self.setupDepartmentMenu(initial: act.title)
+            }
+        }
+        facultyButton.menu = UIMenu(children: actions)
+        facultyButton.showsMenuAsPrimaryAction = true
+    }
+
+    private func setupDepartmentMenu(initial faculty: String) {
+        let list = departments[faculty] ?? ["指定なし"]
+        let actions = list.map { dept in
+            UIAction(title: dept) { [weak self] act in
+                guard let self = self else { return }
+                if act.title == "指定なし" {
+                    self.selectedDepartment = nil
+                    self.departmentButton.setTitle("学科", for: .normal)
+                    self.setButtonTitleColor(self.departmentButton, .lightGray)
+                } else {
+                    self.selectedDepartment = act.title
+                    self.departmentButton.setTitle(act.title, for: .normal)
+                    self.setButtonTitleColor(self.departmentButton, .black)
                 }
             }
         }
-
-        // メニューをボタンに取り付け
         departmentButton.menu = UIMenu(children: actions)
         departmentButton.showsMenuAsPrimaryAction = true
+    }
 
-        // 初期表示はプレースホルダー色のまま
-        departmentButton.setTitle("学科", for: .normal)
-        if var config = departmentButton.configuration {
-            config.baseForegroundColor = .lightGray
-            departmentButton.configuration = config
+    // グリッド
+    private func configureSlotButtons() {
+        guard let slotButtons else { return }
+        for b in slotButtons {
+            var cfg = b.configuration ?? .plain()
+            cfg.baseBackgroundColor = .white
+            cfg.baseForegroundColor = .lightGray
+            b.configuration = cfg
+            b.configurationUpdateHandler = { btn in
+                var c = btn.configuration
+                if btn.isSelected { c?.baseBackgroundColor = .systemGreen; c?.baseForegroundColor = .white }
+                else { c?.baseBackgroundColor = .white; c?.baseForegroundColor = .lightGray }
+                btn.configuration = c
+            }
+        }
+    }
+    private func setupGridConstraints() {
+        guard let slotButtons else { return }
+        gridContainerView.translatesAutoresizingMaskIntoConstraints = false
+        slotButtons.forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        let buttons = slotButtons.sorted { $0.tag < $1.tag }
+        for idx in 0..<buttons.count {
+            let btn = buttons[idx]
+            let row = idx / 5, col = idx % 5
+            if col == 0 { btn.leadingAnchor.constraint(equalTo: gridContainerView.leadingAnchor).isActive = true }
+            else {
+                let left = buttons[idx - 1]
+                btn.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: spacing).isActive = true
+                btn.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
+            }
+            if col == 4 { btn.trailingAnchor.constraint(equalTo: gridContainerView.trailingAnchor).isActive = true }
+            if row == 0 { btn.topAnchor.constraint(equalTo: gridContainerView.topAnchor).isActive = true }
+            else {
+                let above = buttons[(row - 1) * 5 + col]
+                btn.topAnchor.constraint(equalTo: above.bottomAnchor, constant: spacing).isActive = true
+                btn.heightAnchor.constraint(equalTo: above.heightAnchor).isActive = true
+            }
+            if row == 4 { btn.bottomAnchor.constraint(equalTo: gridContainerView.bottomAnchor).isActive = true }
         }
     }
 
+    // ヘルパ
+    private func setButtonTitleColor(_ button: UIButton, _ color: UIColor) {
+        if var cfg = button.configuration { cfg.baseForegroundColor = color; button.configuration = cfg }
+        else { button.setTitleColor(color, for: .normal) }
+    }
+    private func indexFor(value: String?, in list: [String]) -> Int {
+        guard let v = value, let i = list.firstIndex(of: v) else { return 0 }
+        return i
+    }
 
-  
+    // 選択セル→配列
+    private func deriveTimeSlots() -> [(String, Int)]? {
+        var out: [(String, Int)] = []
+        for idx in 0..<selectedStates.count where selectedStates[idx] {
+            let row = idx / 5, col = idx % 5
+            out.append((days[col], periods[row]))
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    // 単一曜日なら day/periods を返す
+    private func deriveSingleDayAndPeriods() -> (String?, [Int]?) {
+        var pairs: [(dayIndex: Int, period: Int)] = []
+        for idx in 0..<selectedStates.count where selectedStates[idx] {
+            let row = idx / 5, col = idx % 5
+            pairs.append((dayIndex: col, period: periods[row]))
+        }
+        guard !pairs.isEmpty else { return (nil, nil) }
+        let first = pairs.first!.dayIndex
+        guard pairs.allSatisfy({ $0.dayIndex == first }) else { return (nil, nil) }
+        let ps = pairs.map { $0.period }.sorted()
+        return (days[first], ps)
+    }
 }

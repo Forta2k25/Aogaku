@@ -11,13 +11,13 @@
         <!--Syllabus-->
         <scene sceneID="tZl-H6-lDK">
             <objects>
-                <viewController id="Ach-8h-faD" customClass="syllabus" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                <viewController storyboardIdentifier="syllabus" id="Ach-8h-faD" customClass="syllabus" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="Aep-Mu-875">
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
                             <tableView clipsSubviews="YES" contentMode="scaleToFill" alwaysBounceVertical="YES" dataMode="prototypes" style="plain" separatorStyle="default" rowHeight="-1" estimatedRowHeight="-1" sectionHeaderHeight="-1" estimatedSectionHeaderHeight="-1" sectionFooterHeight="-1" estimatedSectionFooterHeight="-1" translatesAutoresizingMaskIntoConstraints="NO" id="IGG-Mg-aDD">
-                                <rect key="frame" x="0.0" y="266" width="393" height="469"/>
+                                <rect key="frame" x="0.0" y="217" width="393" height="518"/>
                                 <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                                 <prototypes>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" insetsLayoutMarginsFromSafeArea="NO" selectionStyle="blue" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" reuseIdentifier="class" rowHeight="90" id="Woq-ow-eaA" customClass="syllabusTableViewCell" customModule="Aogaku" customModuleProvider="target">
@@ -114,31 +114,16 @@
                                 <nil key="textColor"/>
                                 <nil key="highlightedColor"/>
                             </label>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="8L0-BC-VKc">
-                                <rect key="frame" x="273" y="202" width="104" height="44"/>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="学部・分類">
-                                    <color key="baseForegroundColor" red="0.61960786580000005" green="0.61960786580000005" blue="0.61960786580000005" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
-                                    <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                </buttonConfiguration>
-                                <connections>
-                                    <action selector="categoryButtonTapped:" destination="Ach-8h-faD" eventType="touchUpInside" id="4lN-U7-aSU"/>
-                                </connections>
-                            </button>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="fLA-wl-cgD"/>
                         <color key="backgroundColor" red="0.92143100499999997" green="0.92145264149999995" blue="0.92144101860000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
-                            <constraint firstItem="8L0-BC-VKc" firstAttribute="top" secondItem="Aep-Mu-875" secondAttribute="top" constant="202" id="4Y6-wd-HBS"/>
                             <constraint firstItem="Est-uD-lV5" firstAttribute="centerX" secondItem="Aep-Mu-875" secondAttribute="centerX" id="62f-Zn-Z18"/>
-                            <constraint firstAttribute="bottom" secondItem="8L0-BC-VKc" secondAttribute="bottom" constant="606" id="TRS-Lh-UMo"/>
                             <constraint firstItem="fLA-wl-cgD" firstAttribute="trailing" secondItem="IGG-Mg-aDD" secondAttribute="trailing" id="WQs-BN-hlh"/>
-                            <constraint firstItem="IGG-Mg-aDD" firstAttribute="top" secondItem="8L0-BC-VKc" secondAttribute="bottom" constant="20" id="YFx-XL-j1C"/>
                             <constraint firstItem="Est-uD-lV5" firstAttribute="top" secondItem="fLA-wl-cgD" secondAttribute="top" constant="15" id="Zht-5j-KlF"/>
                             <constraint firstItem="IGG-Mg-aDD" firstAttribute="leading" secondItem="fLA-wl-cgD" secondAttribute="leading" id="dPE-lV-pIq"/>
-                            <constraint firstAttribute="trailing" secondItem="8L0-BC-VKc" secondAttribute="trailing" constant="16" id="f9x-4O-gMv"/>
                             <constraint firstItem="fLA-wl-cgD" firstAttribute="bottom" secondItem="IGG-Mg-aDD" secondAttribute="bottom" id="fVq-fZ-8Mz"/>
-                            <constraint firstItem="8L0-BC-VKc" firstAttribute="leading" secondItem="Aep-Mu-875" secondAttribute="leading" constant="273" id="hLv-4c-HQe"/>
+                            <constraint firstItem="IGG-Mg-aDD" firstAttribute="top" secondItem="Est-uD-lV5" secondAttribute="bottom" id="pS7-9M-z7f"/>
                         </constraints>
                     </view>
                     <navigationItem key="navigationItem" id="jGL-Yh-hmj">
@@ -148,6 +133,9 @@
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
                                 <buttonConfiguration key="configuration" style="gray" image="sunrise.fill" catalog="system" title=""/>
+                                <connections>
+                                    <action selector="didTapSearchButton:" destination="Ach-8h-faD" eventType="touchUpInside" id="5OP-Mc-bTw"/>
+                                </connections>
                             </button>
                             <connections>
                                 <segue destination="XWM-mO-tUM" kind="show" id="38x-Ii-Kr3"/>
@@ -155,7 +143,8 @@
                         </barButtonItem>
                     </navigationItem>
                     <connections>
-                        <outlet property="categoryButton" destination="8L0-BC-VKc" id="BsU-hY-yXP"/>
+                        <outlet property="categoryButton" destination="Cod-gn-tbm" id="TwM-2t-qPv"/>
+                        <outlet property="search_button" destination="Cod-gn-tbm" id="tt9-cF-nse"/>
                         <outlet property="syllabus_table" destination="IGG-Mg-aDD" id="hJc-LO-z67"/>
                     </connections>
                 </viewController>
@@ -250,6 +239,9 @@
                                         <integer key="value" value="8"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="didTapApply:" destination="XWM-mO-tUM" eventType="touchUpInside" id="9AM-yq-n0f"/>
+                                </connections>
                             </button>
                             <textField opaque="NO" contentMode="scaleToFill" horizontalHuggingPriority="248" contentHorizontalAlignment="left" contentVerticalAlignment="center" placeholder="授業名・教員名で検索" textAlignment="natural" minimumFontSize="17" translatesAutoresizingMaskIntoConstraints="NO" id="kdK-Gy-r6a">
                                 <rect key="frame" x="69" y="194" width="216" height="34"/>
@@ -290,6 +282,9 @@
                                     <segment title="First"/>
                                     <segment title="Second"/>
                                 </segments>
+                                <connections>
+                                    <action selector="campusChanged:" destination="XWM-mO-tUM" eventType="valueChanged" id="SnN-Zq-8Qt"/>
+                                </connections>
                             </segmentedControl>
                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text=" " textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="TA5-hm-Avx">
                                 <rect key="frame" x="194" y="252" width="5" height="40"/>
@@ -309,6 +304,9 @@
                                     <segment title="First"/>
                                     <segment title="Second"/>
                                 </segments>
+                                <connections>
+                                    <action selector="placeChanged:" destination="XWM-mO-tUM" eventType="valueChanged" id="WMi-gn-6P0"/>
+                                </connections>
                             </segmentedControl>
                             <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="UaY-RP-5cg">
                                 <rect key="frame" x="20" y="422" width="353" height="194"/>
@@ -796,6 +794,7 @@
                         <outlet property="departmentButton" destination="qMx-1H-XJW" id="Uy5-rb-B3r"/>
                         <outlet property="facultyButton" destination="zdu-kz-RvL" id="Qah-KL-I0V"/>
                         <outlet property="gridContainerView" destination="UaY-RP-5cg" id="3it-r1-Pip"/>
+                        <outlet property="keywordTextField" destination="kdK-Gy-r6a" id="vGE-67-Vrs"/>
                         <outlet property="placeSegmentedControl" destination="qQj-md-bUh" id="Jhv-Jg-3IC"/>
                         <outletCollection property="slotButtons" destination="3jh-Od-Uzi" collectionClass="NSMutableArray" id="4yh-go-wBp"/>
                         <outletCollection property="slotButtons" destination="u79-H2-eDJ" collectionClass="NSMutableArray" id="wFo-Lb-IVU"/>

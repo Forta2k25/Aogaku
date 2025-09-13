@@ -14,6 +14,9 @@ typealias ManualCreditInput = ManualCreditEditorViewController.Input
 
 final class ManualCreditEditorViewController: UIViewController, UIPickerViewDataSource, UIPickerViewDelegate, UITextFieldDelegate {
     
+
+    // ★ 追加: 現在の学期ラベル（例: "2025 年前期"）
+    private let currentTermText: String
     
     // ← これを追加（呼び出し側と同じプロパティ名）
     struct Input {
@@ -34,8 +37,9 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
     ///   - termChoices: ピッカーに出す学期ラベル（表示文字列）
     ///   - initial: 編集時に流し込む値（新規なら nil）
     ///   - onSave: 保存時にコールバック
-    init(termChoices: [String], initial: ManualCreditInput? = nil, onSave: @escaping (ManualCreditInput) -> Void) {
+    init(termChoices: [String], currentTermText: String, initial: ManualCreditInput? = nil, onSave: @escaping (ManualCreditInput) -> Void) {
         self.termChoices = termChoices.isEmpty ? ["今学期"] : termChoices
+        self.currentTermText = currentTermText     // ★ 代入
         self.initial = initial
         self.onSave = onSave
         super.init(nibName: nil, bundle: nil)
@@ -52,11 +56,27 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
     private let saveButton = UIButton(type: .system)
 
     private var selectedTermRow: Int = 0
+    
+    // キーボード上部の「完了」ボタン
+    private lazy var kbToolbar: UIToolbar = {
+        let bar = UIToolbar()
+        bar.sizeToFit()
+        let flex = UIBarButtonItem(systemItem: .flexibleSpace)
+        let done = UIBarButtonItem(title: "閉じる", style: .done, target: self, action: #selector(dismissKeyboard))
+        bar.items = [flex, done]
+        return bar
+    }()
+
+    @objc private func dismissKeyboard() {
+        view.endEditing(true)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "単位を追加"
         view.backgroundColor = .systemBackground
+        //plannedSwitch.isEnabled = false // 任意: 自動判定にするなら無効化
+        //updatePlannedByPicker()         // ★ 追加
 
         // ナビの閉じる/保存（右上保存はフォーム下ボタンと同じ動き）
         navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismissOrPop() })
@@ -71,6 +91,10 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
         creditsField.placeholder = "単位数（整数）"
         creditsField.borderStyle = .roundedRect
         creditsField.keyboardType = .numberPad
+        
+        // キーボードに「閉じる」ボタンを載せる
+        titleField.inputAccessoryView = kbToolbar
+        creditsField.inputAccessoryView = kbToolbar
 
         seg.selectedSegmentIndex = 0
 
@@ -94,13 +118,14 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
             s.alignment = .center
             return s
         }
+        
 
         grid.addArrangedSubview(titleField)
         grid.addArrangedSubview(creditsField)
         grid.addArrangedSubview(seg)
 
-        let plannedRow = row("今学期の取得予定として登録", right: plannedSwitch)
-        grid.addArrangedSubview(plannedRow)
+        //let plannedRow = row("今学期の取得予定として登録", right: plannedSwitch)
+        //grid.addArrangedSubview(plannedRow)
 
         let termTitle = UILabel(); termTitle.text = "学期"; termTitle.font = .systemFont(ofSize: 15, weight: .semibold)
         grid.addArrangedSubview(termTitle)
@@ -113,13 +138,18 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
             grid.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
             grid.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16)
         ])
+        
+        // 余白タップでキーボード閉じる
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
 
         // 初期値（編集用 or 既定）
         if let initial {
             titleField.text = initial.title
             creditsField.text = String(initial.credits)
             seg.selectedSegmentIndex = initial.categoryIndex
-            plannedSwitch.isOn = initial.isPlanned
+            //plannedSwitch.isOn = initial.isPlanned
             if let idx = termChoices.firstIndex(of: initial.termText) {
                 selectedTermRow = idx
             }
@@ -127,6 +157,8 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
             selectedTermRow = 0
         }
         termPicker.selectRow(selectedTermRow, inComponent: 0, animated: false)
+        
+        
     }
 
     private func dismissOrPop() {
@@ -136,17 +168,28 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
             dismiss(animated: true)
         }
     }
+    // ★ 追加: ピッカーの行から自動判定
+   // private func updatePlannedByPicker() {
+     //   let term = termChoices[selectedTermRow]
+       // plannedSwitch.setOn(term == currentTermText, animated: false)
+    //}
+
 
     // MARK: - Picker
 
     func numberOfComponents(in pickerView: UIPickerView) -> Int { 1 }
     func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int { termChoices.count }
     func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? { termChoices[row] }
-    func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) { selectedTermRow = row }
+    func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
+        selectedTermRow = row
+        //updatePlannedByPicker()         // ★ 追加
+    }
 
     // MARK: - Save
 
     @objc private func tapSave() {
+        
+        
         // 入力バリデーション（最低限）
         let name = titleField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !name.isEmpty else {
@@ -157,8 +200,9 @@ final class ManualCreditEditorViewController: UIViewController, UIPickerViewData
         }
         let idx = max(0, min(seg.selectedSegmentIndex, 3))
         let term = termChoices[selectedTermRow]
-
-        onSave(ManualCreditInput(title: name, credits: num, categoryIndex: idx, isPlanned: plannedSwitch.isOn, termText: term))
+        let isPlannedAuto = (term == currentTermText)   // ★ 自動判定
+        
+        onSave(ManualCreditInput(title: name, credits: num, categoryIndex: idx, isPlanned: isPlannedAuto, termText: term))
         dismissOrPop()
     }
 

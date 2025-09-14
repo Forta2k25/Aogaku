@@ -111,6 +111,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         searchVC.initialGrade      = filterGrade
         searchVC.initialDay        = filterDay
         searchVC.initialPeriods    = filterPeriods
+        searchVC.initialTimeSlots  = filterTimeSlots   // ★ 複数コマの復元用
 
         searchVC.onApply = { [weak self] criteria in
             self?.apply(criteria: criteria)
@@ -343,16 +344,14 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         detail.initialTeacher = item.teacher_name
         detail.initialCredit = item.credit
 
-        // 💡 モーダル（シート）として表示（iOS15+でDetentを指定）
+        // モーダル表示（シート）
         detail.modalPresentationStyle = .pageSheet
         if let sheet = detail.sheetPresentationController {
-            sheet.detents = [.large(), .medium()]          // 伸縮：Large / Medium
-            sheet.selectedDetentIdentifier = .large        // ← 初期表示を「大」に
-            sheet.prefersGrabberVisible = true             // つまみを表示
+            sheet.detents = [.large(), .medium()]
+            sheet.selectedDetentIdentifier = .large
+            sheet.prefersGrabberVisible = true
             sheet.preferredCornerRadius = 16
             sheet.prefersScrollingExpandsWhenScrolledToEdge = true
-            // 下スワイプで閉じさせたくない場合のみ：
-            // detail.isModalInPresentation = true
         }
 
         present(detail, animated: true)

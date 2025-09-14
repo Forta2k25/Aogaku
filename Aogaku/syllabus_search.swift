@@ -10,6 +10,7 @@ final class syllabus_search: UIViewController {
     var initialGrade: String?
     var initialDay: String?
     var initialPeriods: [Int]?
+    var initialTimeSlots: [(String, Int)]?   // ★ 複数コマの復元用
     var onApply: ((SyllabusSearchCriteria) -> Void)?
 
     // Outlets
@@ -56,6 +57,11 @@ final class syllabus_search: UIViewController {
         "教職課程科目": ["指定なし"]
     ]
 
+    // 一度だけやる系
+    private var didAssignTags = false
+    private var didApplyInitialSelection = false
+    private var didBuildGridConstraints = false
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -101,18 +107,14 @@ final class syllabus_search: UIViewController {
         placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
 
         configureSlotButtons()
-        setupGridConstraints()
+        // グリッド制約/タグ採番/初期選択は viewDidLayoutSubviews で
+    }
 
-        // 初期時間（任意）
-        if let d = initialDay, let ps = initialPeriods, let col = days.firstIndex(of: d) {
-            for p in ps {
-                let row = p - 1, idx = row * 5 + col
-                if (0..<selectedStates.count).contains(idx) {
-                    selectedStates[idx] = true
-                    slotButtons.first(where: { $0.tag == idx })?.isSelected = true
-                }
-            }
-        }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        assignTagsIfNeeded()
+        buildGridConstraintsIfNeeded()
+        applyInitialSelectionIfNeeded()
     }
 
     // Actions
@@ -203,24 +205,20 @@ final class syllabus_search: UIViewController {
         departmentButton.showsMenuAsPrimaryAction = true
     }
 
-    // グリッド
-    private func configureSlotButtons() {
-        guard let slotButtons else { return }
-        for b in slotButtons {
-            var cfg = b.configuration ?? .plain()
-            cfg.baseBackgroundColor = .white
-            cfg.baseForegroundColor = .lightGray
-            b.configuration = cfg
-            b.configurationUpdateHandler = { btn in
-                var c = btn.configuration
-                if btn.isSelected { c?.baseBackgroundColor = .systemGreen; c?.baseForegroundColor = .white }
-                else { c?.baseBackgroundColor = .white; c?.baseForegroundColor = .lightGray }
-                btn.configuration = c
-            }
+    // --- グリッド関連 ---
+    private func assignTagsIfNeeded() {
+        guard !didAssignTags, let slotButtons else { return }
+        // AutoLayout後の座標で上→下、左→右に並べ替え
+        let sorted = slotButtons.sorted {
+            if abs($0.frame.minY - $1.frame.minY) > 0.5 { return $0.frame.minY < $1.frame.minY }
+            return $0.frame.minX < $1.frame.minX
         }
+        for (idx, btn) in sorted.enumerated() { btn.tag = idx } // 0...24
+        didAssignTags = true
     }
-    private func setupGridConstraints() {
-        guard let slotButtons else { return }
+
+    private func buildGridConstraintsIfNeeded() {
+        guard !didBuildGridConstraints, let slotButtons else { return }
         gridContainerView.translatesAutoresizingMaskIntoConstraints = false
         slotButtons.forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
         let buttons = slotButtons.sorted { $0.tag < $1.tag }
@@ -242,6 +240,58 @@ final class syllabus_search: UIViewController {
             }
             if row == 4 { btn.bottomAnchor.constraint(equalTo: gridContainerView.bottomAnchor).isActive = true }
         }
+        didBuildGridConstraints = true
+    }
+
+    // ★ 初期選択の復元（複数コマが来ていればそれを優先）
+    private func applyInitialSelectionIfNeeded() {
+        guard !didApplyInitialSelection else { return }
+        defer { didApplyInitialSelection = true }
+
+        if let slots = initialTimeSlots, !slots.isEmpty {
+            for (dayName, period) in slots {
+                guard let col = days.firstIndex(of: dayName) else { continue }
+                let row = period - 1
+                let idx = row * 5 + col
+                if (0..<selectedStates.count).contains(idx) {
+                    selectedStates[idx] = true
+                    slotButtons.first(where: { $0.tag == idx })?.isSelected = true
+                }
+            }
+            return
+        }
+
+        if let d = initialDay, let ps = initialPeriods, let col = days.firstIndex(of: d) {
+            for p in ps {
+                let row = p - 1, idx = row * 5 + col
+                if (0..<selectedStates.count).contains(idx) {
+                    selectedStates[idx] = true
+                    slotButtons.first(where: { $0.tag == idx })?.isSelected = true
+                }
+            }
+        }
+    }
+
+    // 見た目更新
+    private func configureSlotButtons() {
+        guard let slotButtons else { return }
+        for b in slotButtons {
+            var cfg = b.configuration ?? .plain()
+            cfg.baseBackgroundColor = .white
+            cfg.baseForegroundColor = .lightGray
+            b.configuration = cfg
+            b.configurationUpdateHandler = { btn in
+                var c = btn.configuration
+                if btn.isSelected {
+                    c?.baseBackgroundColor = .systemGreen
+                    c?.baseForegroundColor = .white
+                } else {
+                    c?.baseBackgroundColor = .white
+                    c?.baseForegroundColor = .lightGray
+                }
+                btn.configuration = c
+            }
+        }
     }
 
     // ヘルパ
@@ -259,12 +309,12 @@ final class syllabus_search: UIViewController {
         var out: [(String, Int)] = []
         for idx in 0..<selectedStates.count where selectedStates[idx] {
             let row = idx / 5, col = idx % 5
-            out.append((days[col], periods[row]))
+            out.append((days[col], periods[row])) // periodは1始まり
         }
         return out.isEmpty ? nil : out
     }
 
-    // 単一曜日なら day/periods を返す
+    // 単一曜日なら day/periods を返す（最適化）
     private func deriveSingleDayAndPeriods() -> (String?, [Int]?) {
         var pairs: [(dayIndex: Int, period: Int)] = []
         for idx in 0..<selectedStates.count where selectedStates[idx] {

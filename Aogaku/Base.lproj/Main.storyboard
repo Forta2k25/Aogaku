@@ -315,7 +315,7 @@
                                 <rect key="frame" x="318" y="420" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="月1">
+                                <buttonConfiguration key="configuration" style="filled" title="金1">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -332,7 +332,7 @@
                                 <rect key="frame" x="318" y="482" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="火1">
+                                <buttonConfiguration key="configuration" style="filled" title="金2">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -349,7 +349,7 @@
                                 <rect key="frame" x="318" y="544" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="水1">
+                                <buttonConfiguration key="configuration" style="filled" title="金3">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -366,7 +366,7 @@
                                 <rect key="frame" x="318" y="605" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="木1">
+                                <buttonConfiguration key="configuration" style="filled" title="金4">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -383,7 +383,7 @@
                                 <rect key="frame" x="318" y="668" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="金1">
+                                <buttonConfiguration key="configuration" style="filled" title="金5">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -400,7 +400,7 @@
                                 <rect key="frame" x="235" y="420" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="月2">
+                                <buttonConfiguration key="configuration" style="filled" title="木1">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -417,7 +417,7 @@
                                 <rect key="frame" x="235" y="482" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="火2">
+                                <buttonConfiguration key="configuration" style="filled" title="木2">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -434,7 +434,7 @@
                                 <rect key="frame" x="235" y="544" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="水2">
+                                <buttonConfiguration key="configuration" style="filled" title="木3">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -451,7 +451,7 @@
                                 <rect key="frame" x="235" y="605" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="木2">
+                                <buttonConfiguration key="configuration" style="filled" title="木4">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -468,7 +468,7 @@
                                 <rect key="frame" x="235" y="668" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="金2">
+                                <buttonConfiguration key="configuration" style="filled" title="木5">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -485,7 +485,7 @@
                                 <rect key="frame" x="157" y="420" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="月3">
+                                <buttonConfiguration key="configuration" style="filled" title="水1">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -502,7 +502,7 @@
                                 <rect key="frame" x="157" y="482" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="火3">
+                                <buttonConfiguration key="configuration" style="filled" title="水2">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -536,7 +536,7 @@
                                 <rect key="frame" x="157" y="605" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="木3">
+                                <buttonConfiguration key="configuration" style="filled" title="水4">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -553,7 +553,7 @@
                                 <rect key="frame" x="157" y="668" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="金3">
+                                <buttonConfiguration key="configuration" style="filled" title="水5">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -570,7 +570,7 @@
                                 <rect key="frame" x="78" y="420" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="月4">
+                                <buttonConfiguration key="configuration" style="filled" title="火1">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -587,7 +587,7 @@
                                 <rect key="frame" x="78" y="482" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="火4">
+                                <buttonConfiguration key="configuration" style="filled" title="火2">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -604,7 +604,7 @@
                                 <rect key="frame" x="78" y="544" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="水4">
+                                <buttonConfiguration key="configuration" style="filled" title="火3">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -621,7 +621,7 @@
                                 <rect key="frame" x="78" y="605" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="木4">
+                                <buttonConfiguration key="configuration" style="filled" title="火4">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -638,7 +638,7 @@
                                 <rect key="frame" x="78" y="668" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="金4">
+                                <buttonConfiguration key="configuration" style="filled" title="火5">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -655,7 +655,7 @@
                                 <rect key="frame" x="0.0" y="420" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="月5">
+                                <buttonConfiguration key="configuration" style="filled" title="月1">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -672,7 +672,7 @@
                                 <rect key="frame" x="0.0" y="482" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="水5">
+                                <buttonConfiguration key="configuration" style="filled" title="月2">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -689,7 +689,7 @@
                                 <rect key="frame" x="0.0" y="544" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="木5">
+                                <buttonConfiguration key="configuration" style="filled" title="月3">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -706,7 +706,7 @@
                                 <rect key="frame" x="0.0" y="605" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="金5">
+                                <buttonConfiguration key="configuration" style="filled" title="月4">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -723,7 +723,7 @@
                                 <rect key="frame" x="0.0" y="668" width="75" height="60"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="火5">
+                                <buttonConfiguration key="configuration" style="filled" title="月5">
                                     <color key="baseForegroundColor" red="0.83741801979999997" green="0.83743780850000005" blue="0.83742713930000001" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                     <color key="baseBackgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 </buttonConfiguration>
@@ -844,96 +844,143 @@
                                 <buttonConfiguration key="configuration" style="filled" title=""/>
                             </button>
                             <textView clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="scaleToFill" textAlignment="center" translatesAutoresizingMaskIntoConstraints="NO" id="EPh-su-QJa">
-                                <rect key="frame" x="30" y="35" width="333" height="80"/>
+                                <rect key="frame" x="30" y="35" width="333" height="55"/>
                                 <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                                 <constraints>
-                                    <constraint firstAttribute="height" constant="80" id="4JG-Z8-iTg"/>
+                                    <constraint firstAttribute="height" constant="55" id="cRj-dn-3Ec"/>
                                 </constraints>
                                 <string key="text">Lorem ipsum dolor sit er elit lamet, consectetaur cillium adipisicing pecu, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Nam liber te conscient to factor tum poen legum odioque civiuda.</string>
                                 <color key="textColor" systemColor="labelColor"/>
                                 <fontDescription key="fontDescription" type="system" pointSize="14"/>
                                 <textInputTraits key="textInputTraits" autocapitalizationType="sentences"/>
                             </textView>
-                            <textView clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="scaleToFill" textAlignment="natural" translatesAutoresizingMaskIntoConstraints="NO" id="Y5u-ye-kgG">
-                                <rect key="frame" x="30" y="338" width="333" height="80"/>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="circle" catalog="system" translatesAutoresizingMaskIntoConstraints="NO" id="udb-ta-kfA">
+                                <rect key="frame" x="226.66666666666663" y="105.66666666666669" width="116" height="115"/>
+                                <color key="tintColor" white="0.33333333333333331" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <constraints>
+                                    <constraint firstAttribute="height" constant="116.33" id="RqU-O3-vCr"/>
+                                    <constraint firstAttribute="width" constant="116.33" id="yQq-o6-cfP"/>
+                                </constraints>
+                            </imageView>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="circle" catalog="system" translatesAutoresizingMaskIntoConstraints="NO" id="W0K-aJ-6Uc">
+                                <rect key="frame" x="49.666666666666657" y="105.66666666666669" width="117" height="115"/>
+                                <color key="tintColor" white="0.33333333329999998" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="116.67" id="8C9-1Z-JzM"/>
+                                    <constraint firstAttribute="height" constant="116.33" id="u0Z-HR-4RT"/>
+                                </constraints>
+                            </imageView>
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="8J4-4m-SNg">
+                                <rect key="frame" x="196.66666666666666" y="140" width="0.0" height="100"/>
+                                <constraints>
+                                    <constraint firstAttribute="height" constant="100" id="d0g-du-ewe"/>
+                                </constraints>
+                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                <nil key="textColor"/>
+                                <nil key="highlightedColor"/>
+                            </label>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="plus" catalog="system" translatesAutoresizingMaskIntoConstraints="NO" id="GL1-jH-t79">
+                                <rect key="frame" x="73.666666666666671" y="130.33333333333334" width="69.000000000000014" height="64.666666666666657"/>
+                                <color key="tintColor" white="0.33333333333333331" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="69" id="30u-Oe-V2E"/>
+                                    <constraint firstAttribute="height" constant="69" id="HUw-2v-0z0"/>
+                                </constraints>
+                            </imageView>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="bookmark" catalog="system" translatesAutoresizingMaskIntoConstraints="NO" id="L9a-pe-L5g">
+                                <rect key="frame" x="250.33333333333337" y="128.33333333333334" width="69" height="68.666666666666657"/>
+                                <color key="tintColor" white="0.33333333333333331" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <constraints>
+                                    <constraint firstAttribute="height" constant="69" id="0zK-f5-tmw"/>
+                                    <constraint firstAttribute="width" constant="69" id="7al-PY-K7Y"/>
+                                </constraints>
+                            </imageView>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Jgu-za-cKH">
+                                <rect key="frame" x="50" y="105" width="117" height="117"/>
+                                <constraints>
+                                    <constraint firstAttribute="height" constant="117" id="Tia-Yt-i8z"/>
+                                    <constraint firstAttribute="width" constant="117" id="mXN-hr-BqW"/>
+                                </constraints>
+                                <state key="normal" title="Button"/>
+                                <buttonConfiguration key="configuration" style="plain" title="AddButton"/>
+                            </button>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="czd-yd-kUu">
+                                <rect key="frame" x="226" y="105" width="117" height="117"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="117" id="Igk-8y-Nxe"/>
+                                    <constraint firstAttribute="height" constant="117" id="NMG-AQ-cuF"/>
+                                </constraints>
+                                <state key="normal" title="Button"/>
+                                <buttonConfiguration key="configuration" style="plain" title="Bookmark"/>
+                            </button>
+                            <stackView opaque="NO" contentMode="scaleToFill" axis="vertical" translatesAutoresizingMaskIntoConstraints="NO" id="fiu-3T-l16">
+                                <rect key="frame" x="29.999999999999996" y="236.99999999999997" width="63.666666666666657" height="40.666666666666657"/>
+                                <subviews>
+                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="登録番号" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="g8c-hU-fxK">
+                                        <rect key="frame" x="0.0" y="0.0" width="63.666666666666664" height="20.333333333333332"/>
+                                        <constraints>
+                                            <constraint firstAttribute="height" constant="20.329999999999998" id="NdH-Hn-5QS"/>
+                                        </constraints>
+                                        <fontDescription key="fontDescription" type="system" weight="heavy" pointSize="17"/>
+                                        <nil key="textColor"/>
+                                        <nil key="highlightedColor"/>
+                                    </label>
+                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Code" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="LGB-L7-Oqm">
+                                        <rect key="frame" x="0.0" y="20.333333333333314" width="63.666666666666664" height="20.333333333333329"/>
+                                        <constraints>
+                                            <constraint firstAttribute="height" constant="20.329999999999998" id="Ov5-AN-Fgw"/>
+                                        </constraints>
+                                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                        <nil key="textColor"/>
+                                        <nil key="highlightedColor"/>
+                                    </label>
+                                </subviews>
+                            </stackView>
+                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="FLH-mJ-aKj">
+                                <rect key="frame" x="0.0" y="292.66666666666669" width="393" height="1"/>
                                 <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                                 <constraints>
-                                    <constraint firstAttribute="height" constant="80" id="UYg-Ir-Xre"/>
+                                    <constraint firstAttribute="height" constant="1" id="JCr-ga-OFy"/>
                                 </constraints>
-                                <string key="text">Lorem ipsum dolor sit er elit lamet, consectetaur cillium adipisicing pecu, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Nam liber te conscient to factor tum poen legum odioque civiuda.</string>
-                                <color key="textColor" systemColor="labelColor"/>
-                                <fontDescription key="fontDescription" type="system" pointSize="14"/>
-                                <textInputTraits key="textInputTraits" autocapitalizationType="sentences"/>
-                            </textView>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Swd-Ti-hvX">
-                                <rect key="frame" x="46" y="193" width="55" height="35"/>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="Add"/>
-                            </button>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="0Dc-0c-vuH">
-                                <rect key="frame" x="168" y="193" width="101" height="35"/>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="Bookmark"/>
-                            </button>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="klO-qn-a8d">
-                                <rect key="frame" x="109" y="242" width="67" height="35"/>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="filled" title="Close"/>
-                            </button>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Code" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="LGB-L7-Oqm">
-                                <rect key="frame" x="217" y="283" width="41" height="21"/>
-                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                <nil key="textColor"/>
-                                <nil key="highlightedColor"/>
-                            </label>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Teacher" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="BeI-pz-qlW">
-                                <rect key="frame" x="92" y="493" width="61" height="21"/>
-                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                <nil key="textColor"/>
-                                <nil key="highlightedColor"/>
-                            </label>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Credit" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="34F-oy-BVK">
-                                <rect key="frame" x="234" y="473" width="47" height="21"/>
-                                <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                <nil key="textColor"/>
-                                <nil key="highlightedColor"/>
-                            </label>
+                            </view>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="sZ6-4v-m2C"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                         <constraints>
-                            <constraint firstItem="Y5u-ye-kgG" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="30" id="Cks-Qv-Mwo"/>
-                            <constraint firstItem="klO-qn-a8d" firstAttribute="top" secondItem="0Dc-0c-vuH" secondAttribute="bottom" constant="14" id="E2v-N8-w5o"/>
-                            <constraint firstItem="sZ6-4v-m2C" firstAttribute="trailing" secondItem="Y5u-ye-kgG" secondAttribute="trailing" constant="30" id="H8G-Za-Oc7"/>
-                            <constraint firstItem="0Dc-0c-vuH" firstAttribute="top" secondItem="sZ6-4v-m2C" secondAttribute="top" constant="75" id="J2S-fo-6sF"/>
+                            <constraint firstItem="FLH-mJ-aKj" firstAttribute="top" secondItem="fiu-3T-l16" secondAttribute="bottom" constant="15" id="3vA-4b-IsK"/>
+                            <constraint firstItem="GL1-jH-t79" firstAttribute="top" secondItem="wJO-IA-FSj" secondAttribute="bottom" constant="38" id="7XD-wN-mkh"/>
+                            <constraint firstItem="8J4-4m-SNg" firstAttribute="leading" secondItem="W0K-aJ-6Uc" secondAttribute="trailing" constant="30" id="7wg-Er-elM"/>
+                            <constraint firstItem="Jgu-za-cKH" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="50" id="H8B-wV-cta"/>
+                            <constraint firstItem="fiu-3T-l16" firstAttribute="top" secondItem="czd-yd-kUu" secondAttribute="bottom" constant="15" id="L5q-dk-Pj3"/>
                             <constraint firstItem="EPh-su-QJa" firstAttribute="top" secondItem="fLM-xi-gfz" secondAttribute="top" constant="35" id="MCw-Sb-tk4"/>
                             <constraint firstItem="wJO-IA-FSj" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" id="MOZ-6u-LZU"/>
                             <constraint firstItem="wJO-IA-FSj" firstAttribute="top" secondItem="fLM-xi-gfz" secondAttribute="top" id="TEJ-YJ-EGs"/>
-                            <constraint firstItem="Y5u-ye-kgG" firstAttribute="top" secondItem="LGB-L7-Oqm" secondAttribute="bottom" constant="34" id="TN6-YQ-qua"/>
                             <constraint firstItem="sZ6-4v-m2C" firstAttribute="trailing" secondItem="wJO-IA-FSj" secondAttribute="trailing" id="VcL-9g-OrP"/>
-                            <constraint firstItem="LGB-L7-Oqm" firstAttribute="top" secondItem="0Dc-0c-vuH" secondAttribute="bottom" constant="55" id="WCB-Gu-diQ"/>
-                            <constraint firstItem="Swd-Ti-hvX" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="46" id="WDN-Sd-85b"/>
-                            <constraint firstItem="klO-qn-a8d" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="109" id="X7W-kU-QJk"/>
-                            <constraint firstItem="34F-oy-BVK" firstAttribute="top" secondItem="Y5u-ye-kgG" secondAttribute="bottom" constant="55" id="Xpz-Dq-XsG"/>
-                            <constraint firstItem="BeI-pz-qlW" firstAttribute="top" secondItem="Y5u-ye-kgG" secondAttribute="bottom" constant="75" id="dGv-gN-9fS"/>
-                            <constraint firstItem="Swd-Ti-hvX" firstAttribute="top" secondItem="sZ6-4v-m2C" secondAttribute="top" constant="75" id="fAc-F6-4oH"/>
-                            <constraint firstItem="0Dc-0c-vuH" firstAttribute="leading" secondItem="Swd-Ti-hvX" secondAttribute="trailing" constant="67" id="h1c-R1-Ogk"/>
+                            <constraint firstItem="8J4-4m-SNg" firstAttribute="centerX" secondItem="fLM-xi-gfz" secondAttribute="centerX" id="Vub-ir-mZ8"/>
+                            <constraint firstItem="czd-yd-kUu" firstAttribute="top" secondItem="wJO-IA-FSj" secondAttribute="bottom" constant="15" id="WQe-zm-kly"/>
+                            <constraint firstItem="udb-ta-kfA" firstAttribute="top" secondItem="wJO-IA-FSj" secondAttribute="bottom" constant="15" id="WZ3-yE-imG"/>
+                            <constraint firstItem="FLH-mJ-aKj" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" id="Way-hB-c7v"/>
+                            <constraint firstItem="W0K-aJ-6Uc" firstAttribute="top" secondItem="wJO-IA-FSj" secondAttribute="bottom" constant="15" id="WdL-v7-g82"/>
+                            <constraint firstAttribute="trailing" secondItem="EPh-su-QJa" secondAttribute="trailing" constant="30" id="c2l-y5-O0G"/>
+                            <constraint firstItem="8J4-4m-SNg" firstAttribute="top" secondItem="fLM-xi-gfz" secondAttribute="top" constant="140" id="cw4-HP-NKa"/>
                             <constraint firstItem="sZ6-4v-m2C" firstAttribute="trailing" secondItem="EPh-su-QJa" secondAttribute="trailing" constant="30" id="iA9-mx-oce"/>
-                            <constraint firstItem="BeI-pz-qlW" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="92" id="ixV-Vq-58N"/>
-                            <constraint firstItem="LGB-L7-Oqm" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="217" id="pVq-xQ-8Lz"/>
+                            <constraint firstItem="8J4-4m-SNg" firstAttribute="leading" secondItem="GL1-jH-t79" secondAttribute="trailing" constant="53.670000000000002" id="m23-3x-eMb"/>
+                            <constraint firstItem="sZ6-4v-m2C" firstAttribute="trailing" secondItem="czd-yd-kUu" secondAttribute="trailing" constant="50" id="mXI-Wg-Gze"/>
+                            <constraint firstItem="L9a-pe-L5g" firstAttribute="top" secondItem="wJO-IA-FSj" secondAttribute="bottom" constant="38" id="mnb-oq-1M9"/>
+                            <constraint firstItem="sZ6-4v-m2C" firstAttribute="trailing" secondItem="FLH-mJ-aKj" secondAttribute="trailing" id="qDK-R8-F3M"/>
                             <constraint firstItem="EPh-su-QJa" firstAttribute="centerX" secondItem="fLM-xi-gfz" secondAttribute="centerX" id="s48-3x-8dw"/>
-                            <constraint firstItem="34F-oy-BVK" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="234" id="wqh-Ea-hJW"/>
+                            <constraint firstItem="L9a-pe-L5g" firstAttribute="leading" secondItem="8J4-4m-SNg" secondAttribute="trailing" constant="53.670000000000002" id="uVP-iO-nza"/>
+                            <constraint firstItem="udb-ta-kfA" firstAttribute="leading" secondItem="8J4-4m-SNg" secondAttribute="trailing" constant="30" id="vjC-t9-rT6"/>
+                            <constraint firstItem="fiu-3T-l16" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="30" id="xP4-GP-dTd"/>
+                            <constraint firstItem="Jgu-za-cKH" firstAttribute="top" secondItem="wJO-IA-FSj" secondAttribute="bottom" constant="15" id="yVY-eN-WeS"/>
                             <constraint firstItem="EPh-su-QJa" firstAttribute="leading" secondItem="sZ6-4v-m2C" secondAttribute="leading" constant="30" id="zds-92-AJf"/>
                         </constraints>
                     </view>
                     <connections>
-                        <outlet property="addButton" destination="Swd-Ti-hvX" id="tsg-Gg-uvw"/>
-                        <outlet property="bookmarkButton" destination="0Dc-0c-vuH" id="NsM-w2-f8R"/>
-                        <outlet property="closeButton" destination="klO-qn-a8d" id="XVL-iO-PH6"/>
+                        <outlet property="addButton" destination="Jgu-za-cKH" id="Csm-lr-8eb"/>
+                        <outlet property="bookmarkButton" destination="czd-yd-kUu" id="fHj-RG-Osy"/>
                         <outlet property="codeLabel" destination="LGB-L7-Oqm" id="tRe-ii-kJb"/>
-                        <outlet property="creditLabel" destination="34F-oy-BVK" id="HQA-fL-B7R"/>
-                        <outlet property="roomOrURLTextView" destination="Y5u-ye-kgG" id="yWG-Mu-ky1"/>
-                        <outlet property="teacherLabel" destination="BeI-pz-qlW" id="8s1-0P-i3W"/>
+                        <outlet property="infoStack" destination="fiu-3T-l16" id="c4F-h9-zvZ"/>
                         <outlet property="titleTextView" destination="EPh-su-QJa" id="rKR-O3-488"/>
                     </connections>
                 </viewController>
@@ -1013,9 +1060,11 @@
     <resources>
         <image name="bookmark" catalog="system" width="110" height="128"/>
         <image name="calendar" catalog="system" width="128" height="107"/>
+        <image name="circle" catalog="system" width="128" height="123"/>
         <image name="line.3.horizontal.decrease" catalog="system" width="128" height="73"/>
         <image name="list.bullet" catalog="system" width="128" height="87"/>
         <image name="magnifyingglass" catalog="system" width="128" height="117"/>
+        <image name="plus" catalog="system" width="128" height="113"/>
         <image name="slider.horizontal.3" catalog="system" width="128" height="99"/>
         <systemColor name="labelColor">
             <color white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>

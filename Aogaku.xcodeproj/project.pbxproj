@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = A40AACB82E7556BC009104D2 /* GoogleMobileAds */; };
 		A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F02E62D45500947976 /* FirebaseCore */; };
 		A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F22E62D45500947976 /* FirebaseFirestore */; };
 /* End PBXBuildFile section */
@@ -70,6 +71,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */,
 				A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */,
 				A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */,
 			);
@@ -142,6 +144,7 @@
 			packageProductDependencies = (
 				A4EA88F02E62D45500947976 /* FirebaseCore */,
 				A4EA88F22E62D45500947976 /* FirebaseFirestore */,
+				A40AACB82E7556BC009104D2 /* GoogleMobileAds */,
 			);
 			productName = Aogaku;
 			productReference = B3A17B1F2E40A19700ACCA3A /* Aogaku.app */;
@@ -227,6 +230,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B3A17B202E40A19700ACCA3A /* Products */;
@@ -587,6 +591,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/googleads/swift-package-manager-google-mobile-ads";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.11.0;
+			};
+		};
 		A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
@@ -598,6 +610,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A40AACB82E7556BC009104D2 /* GoogleMobileAds */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */;
+			productName = GoogleMobileAds;
+		};
 		A4EA88F02E62D45500947976 /* FirebaseCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;

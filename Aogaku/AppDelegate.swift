@@ -7,6 +7,7 @@
 
 import UIKit
 import FirebaseCore
+import GoogleMobileAds
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -15,6 +16,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         FirebaseApp.configure()
+        
+        // AdMob 初期化（Google Mobile Ads SDK v12+）
+        MobileAds.shared.start { status in
+            print("AdMob initialized: \(status.adapterStatusesByClassName)")
+        }
+
+        // （任意）テストデバイス設定
+        // v12 ではシミュレータ用の kGADSimulatorID は廃止。
+        // 必要なら実機の Test Device ID を入れてください（ログに出ます）。
+        #if DEBUG
+        let reqConfig = MobileAds.shared.requestConfiguration
+        reqConfig.testDeviceIdentifiers = []   // 例: ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+        #endif
+        
         // Override point for customization after application launch.
         return true
     }
@@ -34,5 +49,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
 
+}
+extension Notification.Name {
+    static let adMobReady = Notification.Name("AdMobReady")
 }
 

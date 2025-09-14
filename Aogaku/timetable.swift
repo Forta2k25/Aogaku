@@ -2,7 +2,13 @@
 import UIKit
 import Foundation
 import Photos
+import GoogleMobileAds
 
+
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
 // MARK: - Slot
 
 struct SlotLocation {
@@ -15,7 +21,8 @@ struct SlotLocation {
 
 final class timetable: UIViewController,
                        CourseListViewControllerDelegate,
-                       CourseDetailViewControllerDelegate {
+                       CourseDetailViewControllerDelegate,
+                       BannerViewDelegate {
 
     // ====== 行数の上限（必要ならここだけ変えればOK） ======
     private let titleMaxLines = 5
@@ -26,6 +33,14 @@ final class timetable: UIViewController,
     // ===== Scroll root =====
     private let scrollView = UIScrollView()
     private let contentView = UIView()   // スクロールの中身
+    
+    // ===== AdMob (Banner) =====
+    private let adContainer = UIView()           // 画面下に固定するコンテナ
+    // ← 既存のプロパティを置換
+    private var bannerView: BannerView?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
+    private var adContainerHeight: NSLayoutConstraint?
 
     // ===== Header =====
     private let headerBar = UIStackView()
@@ -46,6 +61,8 @@ final class timetable: UIViewController,
     // ===== Data / Settings =====
     private var registeredCourses: [Int: Course] = [:]
     private var bgObserver: NSObjectProtocol?
+    
+    private var scrollBottomConstraint: NSLayoutConstraint?
 
     // 1限〜7限までの開始・終了
     private let timePairs: [(start: String, end: String)] = [
@@ -105,6 +122,72 @@ final class timetable: UIViewController,
         }
         normalizeAssigned()
     }
+    
+    // MARK: - AdMob banner
+    private func setupAdBanner() {
+        // 1) adContainer を下部に固定（あなたの既存コードをそのまま）
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        // 2) ✅ scrollView の下端を safeArea から adContainer.top に付け替える
+        scrollBottomConstraint?.isActive = false
+        scrollBottomConstraint = scrollView.bottomAnchor.constraint(equalTo: adContainer.topAnchor)
+        scrollBottomConstraint?.isActive = true
+
+        // 3) GADBannerView の生成・貼り付け（あなたの実装でOK）
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"   // テストID
+        bv.rootViewController = self
+        
+        // ★ 事前に「仮サイズ」を入れておく（320x50）
+        bv.adSize = AdSizeBanner
+        bv.delegate = self
+        
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            // ★ 変更：leading/trailing で横幅を adContainer と同じに固定
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+        self.bannerView = bv
+    }
+
+
+    private func updateInsetsForBanner(height: CGFloat) {
+        // バナー高さぶん下マージンを足して、内容が隠れないようにする
+        var inset = scrollView.contentInset
+        inset.bottom = height
+        scrollView.contentInset = inset
+        scrollView.verticalScrollIndicatorInsets.bottom = height
+    }
+    // MARK: - GADBannerViewDelegate
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        let h = bannerView.adSize.size.height
+        adContainerHeight?.constant = h
+        updateInsetsForBanner(height: h)   // ← これを追加
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        print("Ad loaded. size=", bannerView.adSize.size)
+       }
+
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainerHeight?.constant = 0
+        updateInsetsForBanner(height: 0)   // ← これも
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        print("Ad failed:", error.localizedDescription)
+       }
+
+
 
 
     // MARK: - Lifecycle
@@ -129,6 +212,9 @@ final class timetable: UIViewController,
         bgObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.saveAssigned() }
+        
+        
+        setupAdBanner()
     }
 
     deinit {
@@ -138,9 +224,12 @@ final class timetable: UIViewController,
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+
+        
         let safeHeight = view.safeAreaLayoutGuide.layoutFrame.height
         headerTopConstraint.constant = safeHeight * topRatio
-        view.layoutIfNeeded()
+        loadBannerIfNeeded()   // ← ここでだけ呼ぶ
+
     }
 
     // MARK: - Settings change
@@ -171,6 +260,48 @@ final class timetable: UIViewController,
             }
         }
         return dst
+    }
+    
+    private func loadBannerIfNeeded() {
+        //print("safeWidth=", view.safeAreaLayoutGuide.layoutFrame.width,
+            //  "insets=", view.safeAreaInsets)
+
+        guard let bv = bannerView else { return }
+
+        // SafeArea を引いた現在の実幅
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        if safeWidth <= 0 { return }
+
+        // 広告の最小幅を担保して丸める
+        let useWidth = max(320, floor(safeWidth))
+        // ✅ 幅が前回と同じなら何もしない（ループ防止）
+        if abs(useWidth - lastBannerWidth) < 0.5 { return }
+        lastBannerWidth = useWidth
+
+        // サイズ更新 → 初回だけロード
+        let size = makeAdaptiveAdSize(width: useWidth)
+                
+        // 2) ★ 先にコンテナの高さを確保して 0 を回避
+        adContainerHeight?.constant = size.size.height
+        updateInsetsForBanner(height: size.size.height)   // ← 重なり防止（任意）
+        view.layoutIfNeeded()                             // ← ここ重要
+        
+        // ★ 高さ0は不正 → ロードしない
+        guard size.size.height > 0 else {
+            print("Skip load: invalid AdSize ->", size.size)
+            return
+        }
+        // サイズを反映（同じサイズなら何もしない）
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+        
+        print("→ adSize set:", size.size)   // ← 高さが 50/90/250 などになるはず
     }
 
     private func normalizeAssigned() {
@@ -298,22 +429,26 @@ final class timetable: UIViewController,
     }
 
     // MARK: - Grid container（縦スクロール）
-
     private func layoutGridContainer() {
         let g = view.safeAreaLayoutGuide
 
-        // scrollView をヘッダーの下に敷く
+        // --- ScrollView ----------------------------------------------------
         scrollView.alwaysBounceVertical = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scrollView)
+
+        // まずは safeArea.bottom へ。← この制約をプロパティに保持しておく
+        scrollBottomConstraint?.isActive = false
+        scrollBottomConstraint = scrollView.bottomAnchor.constraint(equalTo: g.bottomAnchor)
+
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: g.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: g.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: g.bottomAnchor)
+            scrollBottomConstraint!                               // ← ここだけ可変
         ])
 
-        // contentView を scroll の contentLayoutGuide に貼る
+        // --- contentView（スクロールの中身） -------------------------------
         contentView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.addSubview(contentView)
         NSLayoutConstraint.activate([
@@ -324,7 +459,7 @@ final class timetable: UIViewController,
             contentView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor)
         ])
 
-        // gridContainer を contentView 内に配置
+        // --- gridContainer（実際のグリッド） -------------------------------
         gridContainerView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(gridContainerView)
         NSLayoutConstraint.activate([
@@ -334,6 +469,7 @@ final class timetable: UIViewController,
             gridContainerView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8)
         ])
     }
+
 
     // MARK: - Guides
 

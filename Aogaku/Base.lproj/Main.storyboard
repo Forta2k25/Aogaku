@@ -903,6 +903,9 @@
                                 </constraints>
                                 <state key="normal" title="Button"/>
                                 <buttonConfiguration key="configuration" style="plain" title="AddButton"/>
+                                <connections>
+                                    <action selector="didTapAdd:" destination="Sbg-Zk-Lwa" eventType="touchUpInside" id="1Op-ws-md3"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="czd-yd-kUu">
                                 <rect key="frame" x="226" y="105" width="117" height="117"/>
@@ -912,6 +915,9 @@
                                 </constraints>
                                 <state key="normal" title="Button"/>
                                 <buttonConfiguration key="configuration" style="plain" title="Bookmark"/>
+                                <connections>
+                                    <action selector="didTapBookmark:" destination="Sbg-Zk-Lwa" eventType="touchUpInside" id="Z2i-9g-FHL"/>
+                                </connections>
                             </button>
                             <stackView opaque="NO" contentMode="scaleToFill" axis="vertical" translatesAutoresizingMaskIntoConstraints="NO" id="fiu-3T-l16">
                                 <rect key="frame" x="29.999999999999996" y="236.99999999999997" width="63.666666666666657" height="40.666666666666657"/>

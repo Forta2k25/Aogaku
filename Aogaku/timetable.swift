@@ -11,7 +11,7 @@ private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
 }
 // MARK: - Slot
 
-struct SlotLocation {
+struct SlotLocation : Codable, Hashable {
     let day: Int   // 0=月…5=土
     let period: Int   // 1..rows
     var dayName: String { ["月","火","水","木","金","土"][day] }
@@ -204,11 +204,21 @@ final class timetable: UIViewController,
         buildGridGuides()
         placeHeaders()
         placePlusButtons()
+        reloadAllButtons()//追加
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(onSettingsChanged),
             name: .timetableSettingsChanged, object: nil
         )
+        
+        // ▼▼ ここが今回の肝：通知を監視 ▼▼
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onRegisterFromDetail(_:)),
+            name: .registerCourseToTimetable,
+            object: nil
+        )
+        
         bgObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.saveAssigned() }
@@ -231,6 +241,78 @@ final class timetable: UIViewController,
         loadBannerIfNeeded()   // ← ここでだけ呼ぶ
 
     }
+    // MARK: - Notification handler（登録）
+    @objc private func onRegisterFromDetail(_ note: Notification) {
+        guard let info = note.userInfo,
+              let dict = info["course"] as? [String: Any] else { return }
+
+        // どのコマか（未指定時はとりあえず月1）
+        let day    = (info["day"] as? Int) ?? 0
+        let period = (info["period"] as? Int) ?? 1
+        let idx    = (period - 1) * dayLabels.count + day
+        guard assigned.indices.contains(idx) else { return }
+
+        // Course を生成
+        let course = makeCourse(from: dict, docID: info["docID"] as? String)
+
+        // 書き込み & 反映
+        assigned[idx] = course
+        if let btn = slotButtons.first(where: { $0.tag == idx }) {
+            configureButton(btn, at: idx)
+        } else {
+            reloadAllButtons()
+        }
+        saveAssigned()
+
+        // 軽いフィードバック
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let ac = UIAlertController(title: "登録しました", message: "\(["月","火","水","木","金","土"][day]) \(period)限に「\(course.title)」を登録しました。", preferredStyle: .alert)
+        ac.addAction(UIAlertAction(title: "OK", style: .default))
+        present(ac, animated: true)
+    }
+    
+    // timetable.swift
+
+    private func makeCourse(from d: [String: Any], docID: String?) -> Course {
+        // Firestore → Swift への安全な取り出し
+        let title   = (d["class_name"]   as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "（無題）"
+        let room    = (d["room"]         as? String) ?? ""
+        let teacher = (d["teacher_name"] as? String) ?? ""
+        let code    = (d["code"]         as? String) ?? (docID ?? "")
+
+        // credit は Int または String の可能性があるので Int? に正規化
+        let credits: Int? = {
+            if let n = d["credit"] as? Int { return n }
+            if let s = d["credit"] as? String, let n = Int(s) { return n }
+            return nil
+        }()
+
+        let campus   = d["campus"]   as? String
+        let category = d["category"] as? String
+        let url      = d["url"]      as? String
+
+        // ★ あなたの Course(init:) に完全一致
+        return Course(
+            id: code,
+            title: title,
+            room: room,
+            teacher: teacher,
+            credits: credits,
+            campus: campus,
+            category: category,
+            syllabusURL: url
+        )
+    }
+
+   /*
+    let id: String            // Firestore: code
+    let title: String         // Firestore: class_name
+    let room: String          // Firestore: room
+    let teacher: String       // Firestore: teacher_name
+    var credits: Int?         // Firestore: credit
+    var campus: String?       // Firestore: campus
+    var category: String?     // Firestore: category
+    var syllabusURL: String?  // Firestore: url*/
 
     // MARK: - Settings change
 
@@ -1080,6 +1162,7 @@ final class TimetableCellButton: UIButton {
 private extension UIView {
     var allSubviews: [UIView] { subviews + subviews.flatMap { $0.allSubviews } }
 }
+
 
 // MARK: - TimetableCellContentView（コマ内のタイトル/教室を自前で描画）
 

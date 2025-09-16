@@ -1,6 +1,12 @@
 import UIKit
 import FirebaseCore
 import FirebaseFirestore
+import GoogleMobileAds
+
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
 
 // 右画面から渡す検索条件
 struct SyllabusSearchCriteria {
@@ -15,7 +21,7 @@ struct SyllabusSearchCriteria {
     var timeSlots: [(String, Int)]? = nil // 複数セル選択: (day, period)
 }
 
-final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelegate, UISearchResultsUpdating {
+final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelegate, BannerViewDelegate, UISearchResultsUpdating {
 
     @IBOutlet weak var syllabus_table: UITableView!
     @IBOutlet weak var search_button: UIButton!
@@ -39,6 +45,12 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         "青山スタンダード科目": ["青山スタンダード科目"],
         "教職課程科目": ["教職課程科目"]
     ]
+    
+    // ===== AdMob (Banner) =====
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var lastBannerWidth: CGFloat = 0
+    private var adContainerHeight: NSLayoutConstraint?
 
     // 現在の条件
     private var selectedCategory: String? = nil
@@ -95,8 +107,15 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         navigationItem.title = "シラバス"
 
         loadNextPage()
+        
+        // ▼ 追加
+        setupAdBanner()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()
+    }
     // 検索画面へ
     @IBAction func didTapSearchButton(_ sender: Any) {
         let sb = UIStoryboard(name: "Main", bundle: nil)
@@ -127,6 +146,85 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         }
         present(nav, animated: true)
     }
+    
+    // 下部に固定するコンテナを作り、バナーを貼る
+    private func setupAdBanner() {
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        // バナー本体
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner      // 仮サイズで初期化
+        bv.delegate = self
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+        self.bannerView = bv
+    }
+
+    // テーブルが広告で隠れないように下インセットを調整
+    private func updateInsetsForBanner(height: CGFloat) {
+        var inset = syllabus_table.contentInset
+        inset.bottom = height
+        syllabus_table.contentInset = inset
+        syllabus_table.scrollIndicatorInsets.bottom = height
+    }
+
+    // 端末幅に合わせて Adaptive サイズを設定（初回だけロード）
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        if safeWidth <= 0 { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 連続呼び出し防止
+        lastBannerWidth = useWidth
+
+        let size = makeAdaptiveAdSize(width: useWidth)
+
+        // 先にコンテナの高さを確保して被りを回避
+        adContainerHeight?.constant = size.size.height
+        updateInsetsForBanner(height: size.size.height)
+        view.layoutIfNeeded()
+
+        guard size.size.height > 0 else { return }
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+        bv.load(Request())
+    }
+
+    // MARK: - BannerViewDelegate
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        let h = bannerView.adSize.size.height
+        adContainerHeight?.constant = h
+        updateInsetsForBanner(height: h)
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+    }
+
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainerHeight?.constant = 0
+        updateInsetsForBanner(height: 0)
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        print("Ad failed:", error.localizedDescription)
+    }
+
 
     // === 文字列正規化（キャンパス） ===
     private func canonicalizeCampusString(_ s: String) -> String? {

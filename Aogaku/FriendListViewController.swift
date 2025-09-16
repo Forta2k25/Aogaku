@@ -1,7 +1,7 @@
 import UIKit
 import FirebaseFirestore   // ListenerRegistration
 
-final class FriendListViewController: UITableViewController {
+final class FriendListViewController: UITableViewController, UISearchBarDelegate {
     private var friends: [Friend] = []
     private var badgeListener: ListenerRegistration?
     private let bellButton = BadgeButton(type: .system)
@@ -9,21 +9,29 @@ final class FriendListViewController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "友だち"
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+                tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
 
-        bellButton.addTarget(self, action: #selector(openRequests), for: .touchUpInside)
-        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: bellButton)
+                // 右上ベル
+                bellButton.addTarget(self, action: #selector(openRequests), for: .touchUpInside)
+                navigationItem.rightBarButtonItem = UIBarButtonItem(customView: bellButton)
 
-        reload()
-        badgeListener = FriendService.shared.watchIncomingRequestCount { [weak self] count in
-            self?.bellButton.setBadgeVisible(count > 0)
-        }
+                // 🔎 一覧の“ダミー検索バー”（タップ→検索画面へ）
+                let sb = UISearchBar(frame: CGRect(x: 0, y: 0, width: view.bounds.width, height: 44))
+                sb.placeholder = "ユーザー名、IDから検索"
+                sb.delegate = self
+                tableView.tableHeaderView = sb
 
-        let button = UIButton(type: .system)
-        button.setTitle("友だちを探す", for: .normal)
-        button.addTarget(self, action: #selector(openFind), for: .touchUpInside)
-        button.frame.size.height = 48
-        tableView.tableFooterView = button
+                // 下部ボタン（既存）
+                let button = UIButton(type: .system)
+                button.setTitle("友だちを探す", for: .normal)
+                button.addTarget(self, action: #selector(openFind), for: .touchUpInside)
+                button.frame.size.height = 48
+                tableView.tableFooterView = button
+
+                reload()
+                badgeListener = FriendService.shared.watchIncomingRequestCount { [weak self] count in
+                    self?.bellButton.setBadgeVisible(count > 0)
+                }
     }
 
     deinit { badgeListener?.remove() }
@@ -57,4 +65,10 @@ final class FriendListViewController: UITableViewController {
         }
         return UISwipeActionsConfiguration(actions: [act])
     }
+    
+    func searchBarShouldBeginEditing(_ searchBar: UISearchBar) -> Bool {
+            openFind()
+            return false
+        }
+    
 }

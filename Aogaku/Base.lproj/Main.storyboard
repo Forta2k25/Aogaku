@@ -1023,7 +1023,7 @@
                         <segue destination="grd-V5-3ap" kind="relationship" relationship="viewControllers" id="3nb-MB-67I"/>
                         <segue destination="C4X-cj-t5t" kind="relationship" relationship="viewControllers" id="lW0-0l-yaJ"/>
                         <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="zpf-zM-2cW"/>
-                        <segue destination="BGR-ee-STb" kind="relationship" relationship="viewControllers" id="xrI-c9-XCX"/>
+                        <segue destination="47C-D0-pTL" kind="relationship" relationship="viewControllers" id="SG3-Tm-7Hd"/>
                     </connections>
                 </tabBarController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="A0p-Uc-iZb" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
@@ -1109,19 +1109,50 @@
             </objects>
             <point key="canvasLocation" x="-709" y="949"/>
         </scene>
-        <!--友だち-->
-        <scene sceneID="CKS-wY-CpW">
+        <!--Item-->
+        <scene sceneID="Uq4-DX-hdD">
             <objects>
-                <viewController id="BGR-ee-STb" customClass="FriendListViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="n7O-lY-6Tu">
+                <navigationController id="47C-D0-pTL" sceneMemberID="viewController">
+                    <tabBarItem key="tabBarItem" title="Item" id="Xdb-0I-oLg"/>
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" id="OeP-6L-blo">
+                        <rect key="frame" x="0.0" y="118" width="393" height="44"/>
+                        <autoresizingMask key="autoresizingMask"/>
+                    </navigationBar>
+                    <connections>
+                        <segue destination="v2k-gg-js3" kind="relationship" relationship="rootViewController" id="hug-kH-qau"/>
+                    </connections>
+                </navigationController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="3CM-if-vV6" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="-1550" y="1622"/>
+        </scene>
+        <!--フレンド-->
+        <scene sceneID="elB-GX-mES">
+            <objects>
+                <tableViewController id="v2k-gg-js3" customClass="FriendListViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                    <tableView key="view" clipsSubviews="YES" contentMode="scaleToFill" alwaysBounceVertical="YES" dataMode="prototypes" style="plain" separatorStyle="default" rowHeight="-1" estimatedRowHeight="-1" sectionHeaderHeight="-1" estimatedSectionHeaderHeight="-1" sectionFooterHeight="-1" estimatedSectionFooterHeight="-1" id="f45-vP-wHw">
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                        <viewLayoutGuide key="safeArea" id="zbP-YR-ALK"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
-                    </view>
-                    <tabBarItem key="tabBarItem" title="友だち" image="person.2" catalog="system" id="Ip3-N5-s2K"/>
-                </viewController>
-                <placeholder placeholderIdentifier="IBFirstResponder" id="Jo4-xw-IKM" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+                        <prototypes>
+                            <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" indentationWidth="10" id="fRr-D2-03L">
+                                <rect key="frame" x="0.0" y="50" width="393" height="44.666667938232422"/>
+                                <autoresizingMask key="autoresizingMask"/>
+                                <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="fRr-D2-03L" id="Cp9-KG-Set">
+                                    <rect key="frame" x="0.0" y="0.0" width="393" height="44.666667938232422"/>
+                                    <autoresizingMask key="autoresizingMask"/>
+                                </tableViewCellContentView>
+                            </tableViewCell>
+                        </prototypes>
+                        <connections>
+                            <outlet property="dataSource" destination="v2k-gg-js3" id="WCE-EK-aV6"/>
+                            <outlet property="delegate" destination="v2k-gg-js3" id="h9r-eb-oJF"/>
+                        </connections>
+                    </tableView>
+                    <tabBarItem key="tabBarItem" title="フレンド" selectedImage="person.2" catalog="system" id="xuX-1k-iaR"/>
+                    <navigationItem key="navigationItem" id="JRq-ac-d0v"/>
+                </tableViewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="pEe-1a-ZQ0" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
             <point key="canvasLocation" x="-709" y="1622"/>
         </scene>

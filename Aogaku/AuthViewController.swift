@@ -1,0 +1,340 @@
+import UIKit
+
+final class AuthViewController: UIViewController, SideMenuDrawerDelegate {
+
+    // MARK: - UI
+    private let titleLabel = UILabel()
+    private let gradeField = UITextField()         // 学年
+    private let facultyDeptField = UITextField()   // 学部・学科（2コンポーネントピッカー）
+    private let idField = UITextField()
+    private let pwField = UITextField()
+    private let signupButton = UIButton(type: .system)
+    private let loginButton = UIButton(type: .system)
+    private let noteLabel = UILabel()
+
+    private let stack = UIStackView()
+
+    // MARK: - Pickers
+    private let gradePicker = UIPickerView()
+    private let facultyDeptPicker = UIPickerView()
+    private let gradeOptions = ["1年","2年","3年","4年"]
+
+    // 学部→学科（必要に応じて編集）
+    private let FACULTY_DATA: [String: [String]] = [
+        "文学部": ["英米文学科","フランス文学科","日本文学科","史学科","比較芸術学科"],
+        "教育人間科学部": ["教育学科","心理学科"],
+        "経済学部": ["経済学科","現代経済デザイン学科"],
+        "法学部": ["法学科","ヒューマンライツ学科"],
+        "経営学部": ["経営学科","マーケティング学科"],
+        "国際政治経済学部": ["国際政治学科","国際経済学科","国際コミュニケーション学科"],
+        "総合文化政策学部": ["総合文化政策学科"],
+        "理工学部": ["物理科学科","数理サイエンス学科","化学・生命科学科","電気電子工学科","機械創造工学科","経営システム工学科","情報テクノロジー学科"],
+        "コミュニティ人間科学部": ["コミュニティ人間科学科"],
+        "社会情報学部": ["社会情報学科"],
+        "地球社会共生学部": ["地球社会共生学科"],
+    ]
+    private var facultyNames: [String] { FACULTY_DATA.keys.sorted() }
+    private var selectedFacultyIndex = 0
+    private var selectedDepartmentIndex = 0
+
+    // MARK: - Helpers
+    private func makeHamburgerButton(target: Any?, action: Selector) -> UIButton {
+        let img = UIImage(
+            systemName: "line.3.horizontal",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .regular)
+        )
+        let b = UIButton(type: .system)
+        b.setImage(img, for: .normal)
+        b.tintColor = .label
+        b.backgroundColor = .clear
+        b.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            b.widthAnchor.constraint(equalToConstant: 34),
+            b.heightAnchor.constraint(equalToConstant: 34),
+        ])
+        b.addTarget(target, action: action, for: .touchUpInside)
+        return b
+    }
+
+    private func makeDoneToolbar(selector: Selector) -> UIToolbar {
+        let tb = UIToolbar()
+        tb.sizeToFit()
+        tb.items = [
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            UIBarButtonItem(title: "完了", style: .done, target: self, action: selector)
+        ]
+        return tb
+    }
+
+    // MARK: - LifeCycle
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+
+        setupUI()
+        setupPickers()
+        setupKeyboardToolbars()
+        setupPasswordToggle()
+        setupDismissKeyboardGesture()
+
+        // 右上のメニューボタン（未ログインは「その他」だけ）
+        let menuButton = makeHamburgerButton(target: self, action: #selector(didTapSideMenuButton(_:)))
+        view.addSubview(menuButton)
+        NSLayoutConstraint.activate([
+            menuButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            menuButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
+        ])
+    }
+
+    // MARK: - UI
+    private func setupUI() {
+        titleLabel.text = "Aogaku アカウント"
+        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
+        titleLabel.textAlignment = .center
+
+        // Placeholder（薄いグレー）
+        gradeField.attributedPlaceholder = NSAttributedString(
+            string: "学年を選択",
+            attributes: [.foregroundColor: UIColor.placeholderText]
+        )
+        gradeField.borderStyle = .roundedRect
+        gradeField.inputView = gradePicker
+
+        facultyDeptField.attributedPlaceholder = NSAttributedString(
+            string: "学部・学科を選択",
+            attributes: [.foregroundColor: UIColor.placeholderText]
+        )
+        facultyDeptField.borderStyle = .roundedRect
+        facultyDeptField.inputView = facultyDeptPicker
+
+        idField.placeholder = "ID（英数字・._）"
+        idField.autocapitalizationType = .none
+        idField.autocorrectionType = .no
+        idField.borderStyle = .roundedRect
+        idField.clearButtonMode = .whileEditing
+        idField.returnKeyType = .next
+
+        pwField.placeholder = "パスワード（6文字以上）"
+        pwField.isSecureTextEntry = true
+        pwField.borderStyle = .roundedRect
+        pwField.returnKeyType = .done
+
+        signupButton.setTitle("アカウント作成", for: .normal)
+        signupButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        signupButton.addTarget(self, action: #selector(signUp), for: .touchUpInside)
+
+        loginButton.setTitle("ログイン", for: .normal)
+        loginButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        loginButton.addTarget(self, action: #selector(login), for: .touchUpInside)
+
+        noteLabel.text = "＊IDは公開名として使われます。メール入力は不要です。"
+        noteLabel.textColor = .secondaryLabel
+        noteLabel.font = .systemFont(ofSize: 12)
+        noteLabel.numberOfLines = 0
+        noteLabel.textAlignment = .center
+
+        // スタック：上下に広げる（中央寄せをやめる）
+        stack.axis = .vertical
+        stack.spacing = 18
+        [titleLabel,
+         gradeField, facultyDeptField,
+         idField, pwField,
+         signupButton, loginButton,
+         noteLabel].forEach { stack.addArrangedSubview($0) }
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        view.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+
+            gradeField.heightAnchor.constraint(equalToConstant: 44),
+            facultyDeptField.heightAnchor.constraint(equalToConstant: 44),
+            idField.heightAnchor.constraint(equalToConstant: 44),
+            pwField.heightAnchor.constraint(equalToConstant: 44),
+            signupButton.heightAnchor.constraint(equalToConstant: 50),
+            loginButton.heightAnchor.constraint(equalToConstant: 50)
+        ])
+    }
+
+    private func setupPickers() {
+        gradePicker.dataSource = self
+        gradePicker.delegate = self
+
+        facultyDeptPicker.dataSource = self
+        facultyDeptPicker.delegate = self
+    }
+
+    private func setupKeyboardToolbars() {
+        // すべての入力に「完了」ボタン
+        gradeField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
+        facultyDeptField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
+        idField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
+        pwField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
+
+        // Return キーの動作
+        idField.addTarget(self, action: #selector(focusPassword), for: .editingDidEndOnExit)
+        pwField.addTarget(self, action: #selector(submitOrDismiss), for: .editingDidEndOnExit)
+    }
+
+    private func setupPasswordToggle() {
+        // 目アイコンで表示/非表示を切替
+        let eye = UIButton(type: .system)
+        eye.tintColor = .secondaryLabel
+        eye.setImage(UIImage(systemName: "eye.slash"), for: .normal)
+        eye.frame = CGRect(x: 0, y: 0, width: 30, height: 24)
+        eye.addTarget(self, action: #selector(togglePasswordVisibility(_:)), for: .touchUpInside)
+
+        pwField.rightView = eye
+        pwField.rightViewMode = .always
+        pwField.clearButtonMode = .never
+    }
+
+    private func setupDismissKeyboardGesture() {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(doneEditing))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
+    }
+
+    // MARK: - Actions (Keyboard)
+    @objc private func doneEditing() { view.endEditing(true) }
+    @objc private func focusPassword() { pwField.becomeFirstResponder() }
+    @objc private func submitOrDismiss() { view.endEditing(true) } // ここで login() にしてもOK
+
+    @objc private func togglePasswordVisibility(_ sender: UIButton) {
+        pwField.isSecureTextEntry.toggle()
+        let name = pwField.isSecureTextEntry ? "eye.slash" : "eye"
+        sender.setImage(UIImage(systemName: name), for: .normal)
+
+        // isSecureTextEntry 切替時にカーソル位置が飛ぶのを防ぐ処理
+        if let existingText = pwField.text, pwField.isFirstResponder {
+            pwField.deleteBackward()
+            pwField.insertText(existingText + " ")
+            pwField.deleteBackward()
+        }
+    }
+
+    // MARK: - SideMenu（未ログインは「その他」だけ）
+    @IBAction func didTapSideMenuButton(_ sender: Any) {
+        let menu = SideMenuDrawerViewController()
+        menu.modalPresentationStyle = .overFullScreen
+        menu.modalTransitionStyle = .crossDissolve
+        menu.delegate = self
+        menu.showsAccountSection = false
+        present(menu, animated: false)
+    }
+
+    // MARK: - Auth Flow
+    @objc private func signUp() { authFlow(isSignup: true) }
+    @objc private func login()  { authFlow(isSignup: false) }
+
+    private func authFlow(isSignup: Bool) {
+        let id = idField.text ?? ""
+        let pw = pwField.text ?? ""
+        let gradeText = gradeField.text ?? ""
+        let facultyDeptText = facultyDeptField.text ?? ""
+
+        guard !id.isEmpty, !pw.isEmpty, !gradeText.isEmpty, !facultyDeptText.isEmpty else {
+            showAlert(title: "入力エラー", message: "学年・学部学科・ID・パスワードを入力してください。")
+            return
+        }
+
+        let grade = max(1, min(4, Int(gradeText.replacingOccurrences(of: "年", with: "")) ?? 1))
+        let comps = facultyDeptText.components(separatedBy: "・")
+        let faculty = comps.first ?? ""
+        let department = comps.count > 1 ? comps[1] : ""
+
+        let hud = UIActivityIndicatorView(style: .large)
+        hud.startAnimating()
+        view.isUserInteractionEnabled = false
+        view.addSubview(hud)
+        hud.center = view.center
+
+        Task { [weak self] in
+            defer {
+                DispatchQueue.main.async {
+                    hud.removeFromSuperview()
+                    self?.view.isUserInteractionEnabled = true
+                }
+            }
+            do {
+                if isSignup {
+                    try await AuthManager.shared.signUp(
+                        id: id, password: pw,
+                        grade: grade, faculty: faculty, department: department
+                    )
+                } else {
+                    try await AuthManager.shared.login(id: id, password: pw)
+                }
+                await MainActor.run { self?.tabBarController?.selectedIndex = 2 }
+            } catch let e as AuthError {
+                await MainActor.run { self?.showAlert(title: "エラー", message: e.localizedDescription) }
+            } catch {
+                await MainActor.run { self?.showAlert(title: "エラー", message: error.localizedDescription) }
+            }
+        }
+    }
+
+    // MARK: - SideMenuDrawerDelegate（未ログイン時に使う項目）
+    func sideMenuDidSelectContact() { showAlert(title: "お問い合わせ", message: "お問い合わせページへ遷移（TODO）") }
+    func sideMenuDidSelectTerms()   { showAlert(title: "利用規約", message: "規約ページへ遷移（TODO）") }
+    func sideMenuDidSelectPrivacy() { showAlert(title: "プライバシーポリシーへ遷移（TODO）") }
+    func sideMenuDidSelectFAQ()     { showAlert(title: "よくある質問", message: "FAQページへ遷移（TODO）") }
+    func sideMenuDidSelectLogout() {}
+    func sideMenuDidSelectDeleteAccount() {}
+
+    // MARK: - Alert
+    private func showAlert(title: String, message: String = "") {
+        let ac = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        ac.addAction(UIAlertAction(title: "OK", style: .default))
+        present(ac, animated: true)
+    }
+}
+
+// MARK: - UIPickerView DataSource/Delegate
+extension AuthViewController: UIPickerViewDataSource, UIPickerViewDelegate {
+    func numberOfComponents(in pickerView: UIPickerView) -> Int {
+        if pickerView === gradePicker { return 1 }
+        return 2 // faculty & department
+    }
+
+    func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
+        if pickerView === gradePicker { return gradeOptions.count }
+        if component == 0 { return facultyNames.count }
+        let faculty = facultyNames[safe: selectedFacultyIndex] ?? facultyNames.first ?? ""
+        return FACULTY_DATA[faculty]?.count ?? 0
+    }
+
+    func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
+        if pickerView === gradePicker { return gradeOptions[row] }
+        if component == 0 { return facultyNames[row] }
+        let faculty = facultyNames[safe: selectedFacultyIndex] ?? facultyNames.first ?? ""
+        return FACULTY_DATA[faculty]?[row] ?? ""
+    }
+
+    func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
+        if pickerView === gradePicker {
+            gradeField.text = gradeOptions[row]
+            return
+        }
+        if component == 0 {
+            selectedFacultyIndex = row
+            selectedDepartmentIndex = 0
+            pickerView.reloadComponent(1)
+            pickerView.selectRow(0, inComponent: 1, animated: true)
+        } else {
+            selectedDepartmentIndex = row
+        }
+        let faculty = facultyNames[safe: selectedFacultyIndex] ?? facultyNames.first ?? ""
+        let department = FACULTY_DATA[faculty]?[safe: selectedDepartmentIndex] ?? ""
+        facultyDeptField.text = "\(faculty)・\(department)"
+    }
+}
+
+// 安全添字ヘルパ
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}

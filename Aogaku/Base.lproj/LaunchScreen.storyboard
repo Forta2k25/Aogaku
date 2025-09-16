@@ -4,7 +4,6 @@
     <dependencies>
         <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="23721"/>
         <capability name="Safe area layout guides" minToolsVersion="9.0"/>
-        <capability name="System colors in document resources" minToolsVersion="11.0"/>
         <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
     </dependencies>
     <scenes>
@@ -16,31 +15,28 @@
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Loading..." textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontForContentSizeCategory="YES" adjustsFontSizeToFit="NO" preferredMaxLayoutWidth="102" translatesAutoresizingMaskIntoConstraints="NO" id="tkz-TU-4NO">
-                                <rect key="frame" x="0.0" y="118" width="393" height="666"/>
-                                <fontDescription key="fontDescription" type="system" pointSize="27"/>
-                                <nil key="textColor"/>
-                                <nil key="highlightedColor"/>
-                            </label>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="loadscreen2" translatesAutoresizingMaskIntoConstraints="NO" id="qFe-zN-QvC">
+                                <rect key="frame" x="47" y="333" width="346" height="519"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="346" id="wiR-V6-waR"/>
+                                    <constraint firstAttribute="height" constant="519" id="yxL-te-3vR"/>
+                                </constraints>
+                            </imageView>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
-                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                        <color key="backgroundColor" red="0.11372549830000001" green="0.28627452250000002" blue="0.22745099660000001" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                         <constraints>
-                            <constraint firstItem="6Tk-OE-BBY" firstAttribute="bottom" secondItem="tkz-TU-4NO" secondAttribute="bottom" id="1qq-9C-ToN"/>
-                            <constraint firstItem="tkz-TU-4NO" firstAttribute="top" secondItem="6Tk-OE-BBY" secondAttribute="top" id="2TJ-dg-uZ4"/>
-                            <constraint firstItem="6Tk-OE-BBY" firstAttribute="trailing" secondItem="tkz-TU-4NO" secondAttribute="trailing" id="qtY-U7-9xv"/>
-                            <constraint firstItem="tkz-TU-4NO" firstAttribute="leading" secondItem="6Tk-OE-BBY" secondAttribute="leading" id="ukp-oc-Ztd"/>
+                            <constraint firstItem="qFe-zN-QvC" firstAttribute="trailing" secondItem="6Tk-OE-BBY" secondAttribute="trailing" id="PGy-Wd-dCG"/>
+                            <constraint firstAttribute="bottom" secondItem="qFe-zN-QvC" secondAttribute="bottom" id="pOS-CV-5ab"/>
                         </constraints>
                     </view>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
             </objects>
-            <point key="canvasLocation" x="53" y="375"/>
+            <point key="canvasLocation" x="52.671755725190835" y="374.64788732394368"/>
         </scene>
     </scenes>
     <resources>
-        <systemColor name="systemBackgroundColor">
-            <color white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-        </systemColor>
+        <image name="loadscreen2" width="341.33334350585938" height="512"/>
     </resources>
 </document>

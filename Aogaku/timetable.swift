@@ -75,8 +75,12 @@ private struct TimetableRemoteStore {
             let snap = try await doc.getDocument()
             guard let data = snap.data(), let cells = data["cells"] as? [String: Any] else { return [:] }
             var out: [String:String] = [:]
-            for (k, v) in cells {
-                if let m = v as? [String: Any], let h = m["h"] as? String { out["cells.\(k)"] = h }
+            for (k, v) in data {
+                // [FIX] フラットなフィールド名 "cells.dXpY" を拾う
+                guard k.hasPrefix("cells.d"),
+                      let m = v as? [String: Any],
+                      let h = m["h"] as? String else { continue }
+                out[k] = h            // 例: "cells.d2p4" : "<hash>"
             }
             return out
         } catch { return [:] }
@@ -84,9 +88,13 @@ private struct TimetableRemoteStore {
 
     func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> ListenerRegistration {
         return doc.addSnapshotListener { snap, _ in
-            guard let data = snap?.data(), let cells = data["cells"] as? [String: Any] else { return }
+            //guard let data = snap?.data(), let cells = data["cells"] as? [String: Any] else { return }
+            guard let data = snap?.data() else { return }
             var dict: [String:[String:Any]] = [:]
-            for (k, v) in cells { if let m = v as? [String: Any] { dict["cells.\(k)"] = m } }
+            for (k, v) in data {
+                guard k.hasPrefix("cells.d"), let m = v as? [String: Any] else { continue }
+                dict[k] = m
+            }
             onChange(dict)
         }
     }
@@ -114,49 +122,73 @@ private struct TimetableRemoteStore {
         do {
             let snap = try await doc.getDocument()
             let data = snap.data() ?? [:]
-            let remoteCells = (data["cells"] as? [String: Any]) ?? [:]
+
+            // [FIX] 既にあるキー集合をフラット名で把握
+            let existingKeys: Set<String> = Set(data.keys.filter { $0.hasPrefix("cells.d") })
 
             var payload: [String: Any] = [:]
             let rows = (localAssigned.count + columns - 1) / columns
+
             for period in 1...rows {
                 for day in 0..<columns {
                     let idx = (period - 1) * columns + day
                     guard idx < localAssigned.count, let course = localAssigned[idx] else { continue }
-                    let key = fieldKey(day: day, period: period)
-                    if remoteCells[key] == nil {
+                    let key = fieldKey(day: day, period: period) // "cells.dXpY"
+                    if !existingKeys.contains(key) {
                         let color = SlotColorStore.color(for: SlotLocation(day: day, period: period))?.rawValue
-                        payload[key] = encodeCourseMap(course, colorKey: color)
+                        var map = encodeCourseMap(course, colorKey: color)
+                        map["h"] = slotHash(course, colorKey: color)  // [FIX] ハッシュを保存
+                        payload[key] = map
+                        payload["\(key).u"] = FieldValue.serverTimestamp()
                     }
                 }
             }
+
             if !payload.isEmpty {
                 payload["updatedAt"] = FieldValue.serverTimestamp()
                 try await doc.setData(payload, merge: true)
+                print("[TTRemote] backfilled \(payload.filter{ $0.key.hasPrefix("cells.d") }.count) slots")
+            } else {
+                print("[TTRemote] backfill: nothing to add")
             }
-        } catch { print("[TTRemote] backfill FAILED:", error.localizedDescription) }
+        } catch {
+            print("[TTRemote] backfill FAILED:", error.localizedDescription)
+        }
     }
+
 
     func pullMerge(into assigned: inout [Course?], columns: Int) async {
         do {
             let snap = try await doc.getDocument()
-            guard let data = snap.data(),
-                  let cells = data["cells"] as? [String: Any] else { return }
-            for (k, v) in cells {
-                guard let m = v as? [String: Any] else { continue }
-                if let _ = k.range(of: #"^d(\d+)p(\d+)$"#, options: .regularExpression) {
-                    let comps = k.dropFirst().split(separator: "p")
-                    if comps.count == 2, let day = Int(comps[0].dropFirst()), let period = Int(comps[1]) {
-                        let idx = (period - 1) * columns + day
-                        if assigned.indices.contains(idx) { assigned[idx] = decodeCourseMap(m) }
-                        if let color = m["colorKey"] as? String,
-                           let key = SlotColorKey(rawValue: color) ?? SlotColorKey.allCases.first(where: { "\($0)" == color }) {
-                            SlotColorStore.set(key, for: SlotLocation(day: day, period: period))
-                        }
+            let data = snap.data() ?? [:]
+            for (key, val) in data {
+                // [FIX] "cells.dXpY" 形式のみ処理
+                guard key.hasPrefix("cells.d"),
+                      let m = val as? [String: Any],
+                      let r = key.range(of: #"cells\.d(\d+)p(\d+)"#, options: .regularExpression) else { continue }
+
+                let tag = String(key[r]).dropFirst(6) // "dXpY"
+                let comps = tag.dropFirst().split(separator: "p")
+                guard comps.count == 2,
+                      let day = Int(comps[0]),
+                      let period = Int(comps[1]) else { continue }
+
+                let idx = (period - 1) * columns + day
+                if assigned.indices.contains(idx) {
+                    assigned[idx] = decodeCourseMap(m)
+                }
+                if let color = m["colorKey"] as? String {
+                    let loc = SlotLocation(day: day, period: period)
+                    if let key = SlotColorKey(rawValue: color) ?? SlotColorKey.allCases.first(where: { "\($0)" == color }) {
+                        SlotColorStore.set(key, for: loc)
                     }
                 }
             }
-        } catch { print("pullMerge error:", error.localizedDescription) }
+        } catch {
+            print("pullMerge error:", error.localizedDescription)
+        }
     }
+
 }
 
 // MARK: - timetable

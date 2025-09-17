@@ -5,6 +5,8 @@ import GoogleMobileAds
 private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
 }
+
+
 final class AuthViewController: UIViewController, SideMenuDrawerDelegate, BannerViewDelegate {
 
     // MARK: - UI

@@ -652,7 +652,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         for m in loadManualCredits() where m.termText != currentTermText {
             let fake = Course(id: "manual:\(m.id)", title: m.title,
                               room: "", teacher: "", credits: m.credits,
-                              campus: "", category: nil, syllabusURL: "")
+                              campus: "", category: nil, syllabusURL: "", term: nil)
             earnedTermText[courseKey(fake)] = m.termText   // 例: "2023 年前期"
         }
         // --- 追加ここまで ---
@@ -677,7 +677,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                     case .free:       return "自由選択"
                     }
                 }(),
-                syllabusURL: ""                    // ← String 型なら空文字 / URL? なら nil
+                syllabusURL: "",
+                term: ""                    // ← String 型なら空文字 / URL? なら nil
             )
             let isPlannedNow = (m.termText == currentTermText)   // ★ 比較で判定
             if isPlannedNow { planned.append(course) } else { earned.append(course) }

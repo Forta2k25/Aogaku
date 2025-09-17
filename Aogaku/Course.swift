@@ -18,6 +18,7 @@ struct Course: Codable, Equatable {
     var campus: String?       // Firestore: campus
     var category: String?     // Firestore: category
     var syllabusURL: String?  // Firestore: url
+    var term: String?            // [ADDED]
 
     init(id: String,
          title: String,
@@ -26,7 +27,8 @@ struct Course: Codable, Equatable {
          credits: Int?,
          campus: String?,
          category: String?,
-         syllabusURL: String?) {
+         syllabusURL: String?,
+         term: String?) {
         self.id = id
         self.title = title
         self.room = room
@@ -35,6 +37,7 @@ struct Course: Codable, Equatable {
         self.campus = campus
         self.category = category
         self.syllabusURL = syllabusURL
+        self.term = term         // [ADDED]
     }
 
     /// Firestore のドキュメントから生成するためのイニシャライザ

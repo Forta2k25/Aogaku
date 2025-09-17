@@ -181,7 +181,8 @@ final class AddCourseViewController: UITableViewController {
             credits: creditsValue,   // 未入力なら nil
             campus: campusText,                   // 任意
             category: categoryText,                // 必須
-            syllabusURL: syllabusString                      // URL? 型
+            syllabusURL: syllabusString,       // URL? 型
+            term: nil
         )
 
         CourseStore.add(course)

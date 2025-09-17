@@ -98,7 +98,8 @@ final class FirestoreService {
         let campus  = asStringOrFirst(d["campus"])             // "青山" or ["青山"]
         let category = asStringOrFirst(d["category"])          // "英米文学科" など
         let url     = asString(d["url"])
-
+        let term     = asStringOrFirst(d["term"])        // [ADDED] 配列/文字列どちらでも吸収
+        
         return Course(
             id: id,
             title: title,
@@ -107,7 +108,8 @@ final class FirestoreService {
             credits: credits,
             campus: campus,
             category: category,
-            syllabusURL: url
+            syllabusURL: url,
+            term: term 
         )
     }
 

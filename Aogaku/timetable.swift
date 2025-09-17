@@ -56,7 +56,7 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
     let category = m["category"] as? String
     let url      = m["syllabusURL"] as? String
     return Course(id: id, title: title, room: room, teacher: teacher,
-                  credits: credits, campus: campus, category: category, syllabusURL: url)
+                  credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
 }
 
 // MARK: - Firestore Remote Store（users/{uid}/timetable/{term} に cells マップで保存）
@@ -503,7 +503,7 @@ final class timetable: UIViewController,
         let category = d["category"] as? String
         let url      = d["url"]      as? String
         return Course(id: code, title: title, room: room, teacher: teacher,
-                      credits: credits, campus: campus, category: category, syllabusURL: url)
+                      credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
     }
 
     // MARK: - Settings change

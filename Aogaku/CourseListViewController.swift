@@ -106,6 +106,19 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         // 初回 10 件取得
         loadFirstPage()
     }
+    
+    // [ADDED] term のカッコだけを外して返す
+    private func termDisplay(_ raw: String?) -> String? {
+        guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !s.isEmpty else { return nil }
+        let t = s
+            .replacingOccurrences(of: "（", with: "") // 全角
+            .replacingOccurrences(of: "）", with: "")
+            .replacingOccurrences(of: "(", with: "") // 半角
+            .replacingOccurrences(of: ")", with: "")
+        return t.isEmpty ? nil : t
+    }
+
 
     // MARK: - Footer
     private func setupFooter() {
@@ -479,6 +492,7 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         if let campus = c.campus, !campus.isEmpty { tail.append(campus) }
         if let credits = c.credits { tail.append("\(credits)単位") }
         if let category = c.category, !category.isEmpty { tail.append(category) }
+        if let term = termDisplay(c.term) { tail.append(term) }   // ← [ADDED]
         return tail.isEmpty ? line1 : line1 + "\n" + tail.joined(separator: " ・ ")
     }
 }

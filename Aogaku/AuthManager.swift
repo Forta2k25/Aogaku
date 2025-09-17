@@ -16,6 +16,23 @@ enum AuthError: LocalizedError {
     }
 }
 
+private let kCachedUIDKey = "auth.uid"
+
+extension AuthManager {
+    // 成功時に呼ぶ
+    private func cacheCurrentUID() {
+        if let uid = Auth.auth().currentUser?.uid {
+            UserDefaults.standard.set(uid, forKey: kCachedUIDKey)
+        }
+    }
+    private func clearCachedUID() {
+        UserDefaults.standard.removeObject(forKey: kCachedUIDKey)
+    }
+    var cachedUID: String? {
+        UserDefaults.standard.string(forKey: kCachedUIDKey)
+    }
+}
+
 final class AuthManager {
     static let shared = AuthManager()
     private init() {}
@@ -111,6 +128,8 @@ final class AuthManager {
             let req = result.user.createProfileChangeRequest()
             req.displayName = id
             try await req.commitChanges()
+            
+            self.cacheCurrentUID() // 追加
 
         } catch {
             // ロールバック
@@ -131,9 +150,13 @@ final class AuthManager {
         } catch {
             throw mapAuthError(error)
         }
+        self.cacheCurrentUID()
     }
 
-    func logout() throws { try Auth.auth().signOut() }
+    func logout() throws {
+        try Auth.auth().signOut()
+        clearCachedUID()
+    }
 
     var currentUserID: String? { Auth.auth().currentUser?.displayName }
     var currentUID: String? { Auth.auth().currentUser?.uid }

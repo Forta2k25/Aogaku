@@ -3,6 +3,8 @@ import UIKit
 import Foundation
 import Photos
 import GoogleMobileAds
+import FirebaseAuth
+import FirebaseFirestore
 
 
 @inline(__always)
@@ -15,6 +17,176 @@ struct SlotLocation : Codable, Hashable {
     let day: Int   // 0=月…5=土
     let period: Int   // 1..rows
     var dayName: String { ["月","火","水","木","金","土"][day] }
+}
+
+private func cellKey(day: Int, period: Int) -> String { "cells.d\(day)p\(period)" }
+private func cellKey(_ loc: SlotLocation) -> String { cellKey(day: loc.day, period: loc.period) }
+
+private func slotHash(_ c: Course, colorKey: String?) -> String {
+    [
+        c.id, c.title, c.room, c.teacher,
+        c.credits.map(String.init) ?? "",
+        c.campus ?? "", c.category ?? "", c.syllabusURL ?? "",
+        colorKey ?? ""
+    ].joined(separator: "|")
+}
+// Firestore 1コマのエンコード
+private func encodeCourseMap(_ c: Course, colorKey: String?) -> [String: Any] {
+    var m: [String: Any] = [
+        "id": c.id,
+        "title": c.title,
+        "room": c.room,
+        "teacher": c.teacher
+    ]
+    if let v = c.credits     { m["credits"] = v }
+    if let v = c.campus      { m["campus"] = v }
+    if let v = c.category    { m["category"] = v }
+    if let v = c.syllabusURL { m["syllabusURL"] = v }
+    if let v = colorKey      { m["colorKey"] = v }
+    return m
+}
+private func decodeCourseMap(_ m: [String: Any]) -> Course {
+    let id      = (m["id"] as? String) ?? ""
+    let title   = (m["title"] as? String) ?? "（無題）"
+    let room    = (m["room"] as? String) ?? ""
+    let teacher = (m["teacher"] as? String) ?? ""
+    let credits: Int? = {
+        if let n = m["credits"] as? Int { return n }
+        if let s = m["credits"] as? String, let n = Int(s) { return n }
+        return nil
+    }()
+    let campus   = m["campus"] as? String
+    let category = m["category"] as? String
+    let url      = m["syllabusURL"] as? String
+    return Course(id: id, title: title, room: room, teacher: teacher,
+                  credits: credits, campus: campus, category: category, syllabusURL: url)
+}
+
+// 同期ストア（term 単位の doc に cells マップで持つ）
+private struct TimetableRemoteStore {
+    let uid: String
+    let termID: String
+    private let db = Firestore.firestore()
+    private var doc: DocumentReference {
+        db.collection("users").document(uid).collection("timetable").document(termID)
+    }
+    private func fieldKey(day: Int, period: Int) -> String { "cells.d\(day)p\(period)" }
+    func path() -> String { doc.path }   // 例: users/xxx/timetable/assignedCourses.2025_前期
+    
+    func fetchHashes() async -> [String:String] {
+        do {
+            let snap = try await doc.getDocument()
+            guard let data = snap.data(), let cells = data["cells"] as? [String: Any] else { return [:] }
+            var out: [String:String] = [:]
+            for (k, v) in cells {
+                if let m = v as? [String: Any], let h = m["h"] as? String { out["cells.\(k)"] = h }
+            }
+            return out
+        } catch { return [:] }
+    }
+
+    func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> ListenerRegistration {
+        return doc.addSnapshotListener { snap, _ in
+            guard let data = snap?.data(), let cells = data["cells"] as? [String: Any] else { return }
+            var dict: [String:[String:Any]] = [:]
+            for (k, v) in cells { if let m = v as? [String: Any] { dict["cells.\(k)"] = m } }
+            onChange(dict)
+        }
+    }
+    
+
+    // 差分アップサート
+    func upsert(course: Course, colorKey: String?, day: Int, period: Int) async {
+        let key = fieldKey(day: day, period: period)          // "cells.dXpY"
+        var base = encodeCourseMap(course, colorKey: colorKey)
+        base["h"] = slotHash(course, colorKey: colorKey)      // ← 追加
+
+        var payload: [String: Any] = [
+            key: base,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        payload["\(key).u"] = FieldValue.serverTimestamp()    // ← スロット更新時刻
+        try? await doc.setData(payload, merge: true)
+    }
+
+    // コマ削除
+    func delete(day: Int, period: Int) async {
+        let payload: [String: Any] = [
+            fieldKey(day: day, period: period): FieldValue.delete(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        try? await doc.setData(payload, merge: true)
+    }
+    // 既存: private struct TimetableRemoteStore { ... } の中に追加
+    func backfillMissing(from localAssigned: [Course?], columns: Int) async {
+        do {
+            let snap = try await doc.getDocument()
+            let data = snap.data() ?? [:]
+            let remoteCells = (data["cells"] as? [String: Any]) ?? [:]
+
+            var payload: [String: Any] = [:]
+
+            // localAssigned を走査して、リモートに無いキーだけ入れる
+            let rows = (localAssigned.count + columns - 1) / columns
+            for period in 1...rows {
+                for day in 0..<columns {
+                    let idx = (period - 1) * columns + day
+                    guard idx < localAssigned.count, let course = localAssigned[idx] else { continue }
+                    let key = fieldKey(day: day, period: period)
+                    if remoteCells[key] == nil {            // ← 無ければ追加対象
+                        let color = SlotColorStore.color(for: SlotLocation(day: day, period: period))?.rawValue
+                        payload[key] = encodeCourseMap(course, colorKey: color)
+                    }
+                }
+            }
+
+            if !payload.isEmpty {
+                payload["updatedAt"] = FieldValue.serverTimestamp()
+                try await doc.setData(payload, merge: true)
+                print("[TTRemote] backfilled \(payload.count - 1) slots") // updatedAt 分を除く簡易ログ
+            } else {
+                print("[TTRemote] backfill: nothing to add")
+            }
+        } catch {
+            print("[TTRemote] backfill FAILED:", error.localizedDescription)
+        }
+    }
+
+
+    // リモート→ローカルへマージ（リモートが勝ち）
+    func pullMerge(into assigned: inout [Course?], columns: Int) async {
+        do {
+            let snap = try await doc.getDocument()
+            guard let data = snap.data(),
+                  let cells = data["cells"] as? [String: Any] else { return }
+            for (k, v) in cells {
+                guard let m = v as? [String: Any] else { continue }
+                // 形式 "d{day}p{period}"
+                if let dRange = k.range(of: #"^d(\d+)p(\d+)$"#, options: .regularExpression) {
+                    let tag = String(k[dRange])
+                    let comps = tag.dropFirst().split(separator: "p") // "dX" / "Y"
+                    if comps.count == 2,
+                       let day = Int(comps[0].dropFirst()),
+                       let period = Int(comps[1]) {
+                        let idx = (period - 1) * columns + day
+                        if assigned.indices.contains(idx) {
+                            assigned[idx] = decodeCourseMap(m)
+                        }
+                        // 色キー復元（保存していれば）
+                        if let color = m["colorKey"] as? String {
+                            let loc = SlotLocation(day: day, period: period)
+                            // 任意: 保存名→実際の色キーへのマッピング（存在しなければ無視）
+                            if let key = SlotColorKey(rawValue: color) ?? SlotColorKey.allCases.first(where: { "\($0)" == color }) {
+                                SlotColorStore.set(key, for: loc)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            print("pullMerge error:", error.localizedDescription)
+        }
+    }
 }
 
 // MARK: - timetable
@@ -63,6 +235,12 @@ final class timetable: UIViewController,
     private var bgObserver: NSObjectProtocol?
     
     private var scrollBottomConstraint: NSLayoutConstraint?
+    
+    //オンライン同期
+    private var remoteHashes: [String:String] = [:] // "cells.dXpY" -> h
+    private var termListener: ListenerRegistration?
+    
+    private var authHandle: AuthStateDidChangeListenerHandle? // [CHANGED] 追加
 
     // 1限〜7限までの開始・終了
     private let timePairs: [(start: String, end: String)] = [
@@ -121,6 +299,91 @@ final class timetable: UIViewController,
             assigned = Array(repeating: nil, count: dayLabels.count * periodLabels.count)
         }
         normalizeAssigned()
+    }
+    
+    // 画面クラス内（適当な位置）
+    private func startTermSync() {
+        // すでに監視中なら一度外す
+        termListener?.remove(); termListener = nil
+
+        guard let store = remoteStore else {
+            print("[TTSync] remoteStore=nil (uid not found)"); return
+        }
+        print("[TTSync] start for termID=\(currentTerm.storageKey) path=\(store.path())") // [CHANGED]
+
+        Task { [weak self] in
+            guard let self else { return }
+            let cols = self.dayLabels.count
+
+            // ① ローカルのコピー
+            var localAssigned: [Course?] = await MainActor.run { self.assigned }
+
+            // ② リモート→ローカル（勝ち）＋不足分の一括アップロード
+            await self.remoteStore?.pullMerge(into: &localAssigned, columns: cols)
+            await self.remoteStore?.backfillMissing(from: localAssigned, columns: cols)
+
+            // ③ ハッシュ取得＆リスナー開始（差分だけ反映）
+            self.remoteHashes = await self.remoteStore?.fetchHashes() ?? [:]
+            print("[TTSync] fetched hashes: \(self.remoteHashes.count)")                   // [CHANGED]
+
+            self.termListener = self.remoteStore?.startListener { [weak self] cells in
+                guard let self else { return }
+                print("[TTSync] snapshot cells=\(cells.count)")                            // [CHANGED]
+                var patches: [(Int, Int, Course, String?)] = []
+
+                for (absKey, m) in cells {
+                    guard let r = absKey.range(of: #"cells\.d(\d+)p(\d+)"#, options: .regularExpression) else { continue }
+                    let tag = String(absKey[r]).dropFirst(6) // dXpY
+                    let comps = tag.dropFirst().split(separator: "p")
+                    guard comps.count == 2,
+                          let day = Int(comps[0]),
+                          let period = Int(comps[1]) else { continue }
+
+                    let remoteH = m["h"] as? String ?? ""
+                    if self.remoteHashes[absKey] == remoteH { continue }  // 変化なしは無視
+                    print("[TTSync] changed \(absKey)")                                     // [CHANGED]
+                    self.remoteHashes[absKey] = remoteH
+
+                    let course = decodeCourseMap(m)
+                    let color  = m["colorKey"] as? String
+                    patches.append((day, period, course, color))
+                }
+
+                guard !patches.isEmpty else { return }
+                Task { @MainActor in
+                    let cols = self.dayLabels.count
+                    for (day, period, course, color) in patches {
+                        let idx = (period - 1) * cols + day
+                        if self.assigned.indices.contains(idx) {
+                            self.assigned[idx] = course
+                            if let c = color, let key = SlotColorKey(rawValue: c) {
+                                SlotColorStore.set(key, for: SlotLocation(day: day, period: period))
+                            }
+                            if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
+                                self.configureButton(btn, at: idx)
+                            }
+                        }
+                    }
+                    self.reloadAllButtons()
+                    self.saveAssigned()
+                }
+            }
+
+            // ④ UI へ反映
+            await MainActor.run {
+                self.assigned = localAssigned
+                self.reloadAllButtons()
+            }
+        }
+    }
+
+    
+    // 追加（timetable クラス内）
+    private var remoteStore: TimetableRemoteStore? {
+        // Auth の現在UID or キャッシュUID
+        let uid = AuthManager.shared.currentUID ?? UserDefaults.standard.string(forKey: "auth.uid")
+        guard let uid, !uid.isEmpty else { return nil }
+        return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey)
     }
     
     // MARK: - AdMob banner
@@ -198,6 +461,14 @@ final class timetable: UIViewController,
         normalizeAssigned()
         loadAssigned(for: currentTerm)    // ← ここだけ置換
         
+
+        // 既存の同期ブロックは削除して ↓ に置き換え
+        startTermSync() // [CHANGED] 追加：起動時に開始
+        // ログイン状態が変わったら再セットアップ
+        authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, _ in
+            self?.startTermSync() // [CHANGED] 追加：ログイン/ログアウトで再構築
+        }
+        
         view.backgroundColor = .systemBackground
         buildHeader()
         layoutGridContainer()
@@ -228,8 +499,19 @@ final class timetable: UIViewController,
     }
 
     deinit {
-        if let bgObserver { NotificationCenter.default.removeObserver(bgObserver) }
-        NotificationCenter.default.removeObserver(self, name: .timetableSettingsChanged, object: nil)
+        termListener?.remove()                                // [CHANGED] Firestoreリスナー解除
+        termListener = nil                                    // [CHANGED] 念のため解放
+        
+        if let h = authHandle { Auth.auth().removeStateDidChangeListener(h) } // [CHANGED] 追加
+
+        if let bgObserver {                                   // 既存：トークン方式の通知を解除
+            NotificationCenter.default.removeObserver(bgObserver)
+        }
+        NotificationCenter.default.removeObserver(            // 既存：selector方式の通知を解除
+            self,
+            name: .timetableSettingsChanged,
+            object: nil
+        )
     }
 
     override func viewDidLayoutSubviews() {
@@ -249,6 +531,7 @@ final class timetable: UIViewController,
         // どのコマか（未指定時はとりあえず月1）
         let day    = (info["day"] as? Int) ?? 0
         let period = (info["period"] as? Int) ?? 1
+        let cols   = dayLabels.count
         let idx    = (period - 1) * dayLabels.count + day
         guard assigned.indices.contains(idx) else { return }
 
@@ -263,7 +546,19 @@ final class timetable: UIViewController,
             reloadAllButtons()
         }
         saveAssigned()
+        // 🔽 ここを day/period を使う形に置き換え（location は不要）
+        let loc = SlotLocation(day: day, period: period)
+        let colorName: String? = SlotColorStore.color(for: loc)?.rawValue
+        let key = cellKey(day: day, period: period)     // ✅ 統一
+        let localH = slotHash(course, colorKey: colorName)
 
+        // リモートの h と同じなら送信しない
+        if remoteHashes[key] != localH {
+            Task {
+                await remoteStore?.upsert(course: course, colorKey: colorName,
+                                          day: day, period: period) // ✅ 統一
+            }
+        }
         // 軽いフィードバック
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let ac = UIAlertController(title: "登録しました", message: "\(["月","火","水","木","金","土"][day]) \(period)限に「\(course.title)」を登録しました。", preferredStyle: .alert)
@@ -728,6 +1023,10 @@ final class timetable: UIViewController,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        if termListener == nil, remoteStore != nil {     // ← uid があって未監視なら開始
+            print("[TTSync] viewWillAppear startTermSync()")
+            startTermSync()
+        }
         reloadAllButtons()
     }
 
@@ -933,9 +1232,12 @@ final class timetable: UIViewController,
         currentTerm = newTerm
         leftButton.setTitle(newTerm.displayTitle, for: .normal)
         loadAssigned(for: newTerm)
-        reloadAllButtons()
-        saveAssigned() // 選択学期記憶
+
+        startTermSync() // [CHANGED] 追加：学期変更時も再セットアップ
+
+        saveAssigned() // 既存：選択学期記憶
     }
+
 
     @objc private func tapRightA() {
         let term = TermStore.loadSelected()                  // いま表示中の学期
@@ -1018,6 +1320,22 @@ final class timetable: UIViewController,
             reloadAllButtons()
         }
         saveAssigned()
+        
+        let day = location.day                     // ← まず day/period を取り出す
+        let period = location.period
+        let loc = SlotLocation(day: day, period: period)
+        let colorName = SlotColorStore.color(for: loc)?.rawValue
+
+        let key = cellKey(day: day, period: period)     // ✅ 統一
+        let localH = slotHash(course, colorKey: colorName)
+
+        if remoteHashes[key] != localH {                // ✅ 統一
+            Task {
+                await remoteStore?.upsert(course: course, colorKey: colorName,
+                                          day: day, period: period)  // ✅ 統一
+            }
+        }
+
 
         if let nav = vc.navigationController {
             if nav.viewControllers.first === vc { vc.dismiss(animated: true) }
@@ -1063,6 +1381,12 @@ final class timetable: UIViewController,
         }
         vc.dismiss(animated: true)
         saveAssigned()
+        
+        // 削除の直後に追加
+        Task {
+            await remoteStore?.delete(day: location.day, period: location.period)
+        }
+
     }
 
     func courseDetail(_ vc: CourseDetailViewController, didUpdate counts: AttendanceCounts, for course: Course, at location: SlotLocation) {
@@ -1073,12 +1397,34 @@ final class timetable: UIViewController,
         assigned[index(for: location)] = nil
         reloadAllButtons()
         saveAssigned()
+        let day = location.day, period = location.period
+        let key = cellKey(day: day, period: period)     // ✅ 統一
+        remoteHashes.removeValue(forKey: key)           // 任意：ハッシュも消す
+        Task { await remoteStore?.delete(day: day, period: period) }
     }
+    
 
     func courseDetail(_ vc: CourseDetailViewController, didEdit course: Course, at location: SlotLocation) {
         assigned[index(for: location)] = course
         reloadAllButtons()
         saveAssigned()
+        
+        // 登録・変更の直後に追加（日=col, 時限=row+1 は既存と同じ計算）
+        let day = location.day
+        let period = location.period
+        let loc = SlotLocation(day: day, period: period)
+        let colorName = SlotColorStore.color(for: loc)?.rawValue
+
+        let key = cellKey(day: day, period: period)     // ✅ 統一
+        let localH = slotHash(course, colorKey: colorName)
+
+        // リモートの h と同じなら送信しない（通信量セーブ）
+        if remoteHashes[key] != localH {
+            Task {
+                await remoteStore?.upsert(course: course, colorKey: colorName,
+                                          day: day, period: period) // ✅ 統一
+            }
+        }
     }
 
     // MARK: - Helpers

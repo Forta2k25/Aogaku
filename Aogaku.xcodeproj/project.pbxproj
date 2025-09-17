@@ -322,6 +322,9 @@
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Aogaku/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "QRコードを読み取るためにカメラを使用します。";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "時間割のスクリーンショットを写真に保存するために使用します。";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -350,6 +353,9 @@
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Aogaku/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "QRコードを読み取るためにカメラを使用します。";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "時間割のスクリーンショットを写真に保存するために使用します。";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;

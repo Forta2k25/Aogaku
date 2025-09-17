@@ -1028,8 +1028,8 @@
                     <connections>
                         <segue destination="grd-V5-3ap" kind="relationship" relationship="viewControllers" id="3nb-MB-67I"/>
                         <segue destination="C4X-cj-t5t" kind="relationship" relationship="viewControllers" id="lW0-0l-yaJ"/>
-                        <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="zpf-zM-2cW"/>
                         <segue destination="47C-D0-pTL" kind="relationship" relationship="viewControllers" id="SG3-Tm-7Hd"/>
+                        <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="8lL-yh-Rj0"/>
                     </connections>
                 </tabBarController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="A0p-Uc-iZb" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
@@ -1115,11 +1115,11 @@
             </objects>
             <point key="canvasLocation" x="-709" y="949"/>
         </scene>
-        <!--Item-->
+        <!--友だち-->
         <scene sceneID="Uq4-DX-hdD">
             <objects>
                 <navigationController id="47C-D0-pTL" sceneMemberID="viewController">
-                    <tabBarItem key="tabBarItem" title="Item" id="Xdb-0I-oLg"/>
+                    <tabBarItem key="tabBarItem" title="友だち" selectedImage="person.2" catalog="system" id="Xdb-0I-oLg"/>
                     <navigationBar key="navigationBar" contentMode="scaleToFill" id="OeP-6L-blo">
                         <rect key="frame" x="0.0" y="118" width="393" height="44"/>
                         <autoresizingMask key="autoresizingMask"/>
@@ -1132,7 +1132,7 @@
             </objects>
             <point key="canvasLocation" x="-1550" y="1622"/>
         </scene>
-        <!--フレンド-->
+        <!--友だち-->
         <scene sceneID="elB-GX-mES">
             <objects>
                 <tableViewController id="v2k-gg-js3" customClass="FriendListViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
@@ -1155,7 +1155,7 @@
                             <outlet property="delegate" destination="v2k-gg-js3" id="h9r-eb-oJF"/>
                         </connections>
                     </tableView>
-                    <tabBarItem key="tabBarItem" title="フレンド" selectedImage="person.2" catalog="system" id="xuX-1k-iaR"/>
+                    <tabBarItem key="tabBarItem" title="友だち" selectedImage="person.2" catalog="system" id="xuX-1k-iaR"/>
                     <navigationItem key="navigationItem" id="JRq-ac-d0v"/>
                 </tableViewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="pEe-1a-ZQ0" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
@@ -1217,6 +1217,21 @@
                 <placeholder placeholderIdentifier="IBFirstResponder" id="wSh-SQ-mOK" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
             <point key="canvasLocation" x="792" y="1622"/>
+        </scene>
+        <!--Friend Timetable View Controller-->
+        <scene sceneID="ghN-t3-dea">
+            <objects>
+                <viewController id="enM-0o-sci" customClass="FriendTimetableViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="hyE-3L-XWG">
+                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <viewLayoutGuide key="safeArea" id="a9o-I4-nxW"/>
+                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                    </view>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="h6i-v1-K4Z" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="1511" y="1622"/>
         </scene>
         <!--設定-->
         <scene sceneID="Rt8-dv-Toj">

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-8730273808494471~8905053964</string>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict>
@@ -9,10 +11,6 @@
 			<string>cstr6suwn9.skadnetwork</string>
 		</dict>
 	</array>
-	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-8730273808494471~8905053964</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>時間割のスクリーンショットを写真に保存するために使用します。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

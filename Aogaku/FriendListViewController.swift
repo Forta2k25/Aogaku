@@ -1,6 +1,6 @@
 import UIKit
 import FirebaseAuth
-import FirebaseFirestore   // ListenerRegistration
+import FirebaseFirestore
 
 // MARK: - Avatar付きセル
 final class FriendListCell: UITableViewCell {
@@ -9,7 +9,6 @@ final class FriendListCell: UITableViewCell {
     private let avatarView = UIImageView()
     private let nameLabel = UILabel()
     private let idLabel = UILabel()
-
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -31,13 +30,13 @@ final class FriendListCell: UITableViewCell {
         idLabel.font   = .systemFont(ofSize: 13)
         idLabel.textColor = .secondaryLabel
 
-        let stack = UIStackView(arrangedSubviews: [nameLabel, idLabel])
-        stack.axis = .vertical
-        stack.spacing = 2
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let vStack = UIStackView(arrangedSubviews: [nameLabel, idLabel])
+        vStack.axis = .vertical
+        vStack.spacing = 2
+        vStack.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(avatarView)
-        contentView.addSubview(stack)
+        contentView.addSubview(vStack)
 
         NSLayoutConstraint.activate([
             avatarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
@@ -45,9 +44,9 @@ final class FriendListCell: UITableViewCell {
             avatarView.widthAnchor.constraint(equalToConstant: 56),
             avatarView.heightAnchor.constraint(equalToConstant: 56),
 
-            stack.leadingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 12),
-            stack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16)
+            vStack.leadingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 12),
+            vStack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            vStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16)
         ])
     }
 
@@ -66,44 +65,52 @@ final class FriendListCell: UITableViewCell {
 // MARK: - FriendList
 final class FriendListViewController: UITableViewController, UISearchBarDelegate {
 
-    private var allFriends: [Friend] = []        // 取得結果の全件
-    private var friends: [Friend] = []           // 表示用（検索で絞り込み）
-    private var badgeListener: ListenerRegistration?
-    private var profileCache: [String: (name: String, id: String, photoURL: String?)] = [:]
-    private let db = Firestore.firestore() // すでにあれば重複不要
+    private let db = Firestore.firestore()
 
-    // 右上：通知バッジ＆追加ボタン
+    private var allFriends: [Friend] = []
+    private var friends: [Friend] = []
+    private var profileCache: [String: (name: String, id: String, photoURL: String?)] = [:]
+
+    private var badgeListener: ListenerRegistration?
+    private var listenerIsActive = false
+
     private let bellButton = BadgeButton(type: .system)
-    private lazy var addButtonItem: UIBarButtonItem = {
-        let item = UIBarButtonItem(
-            image: UIImage(systemName: "person.badge.plus"),
-            style: .plain,
-            target: self,
-            action: #selector(openFind)
-        )
-        return item
+
+    // 左：QR + 追加
+    private lazy var qrItem: UIBarButtonItem = {
+        UIBarButtonItem(image: UIImage(systemName: "qrcode.viewfinder"),
+                        style: .plain,
+                        target: self,
+                        action: #selector(openQR))
+    }()
+    private lazy var addItem: UIBarButtonItem = {
+        UIBarButtonItem(image: UIImage(systemName: "person.badge.plus"),
+                        style: .plain,
+                        target: self,
+                        action: #selector(openFind))
     }()
 
-    // 検索バー（友だちリストのローカルフィルタ）
+    // 検索バー（既存フレンドのローカル検索）
     private let searchBar = UISearchBar(frame: .zero)
 
+    // 未ログインガード
     private var loginAlertShown = false
-    private var listenerIsActive = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "友だち"
 
-        // テーブル外観
+        title = "友だち"
         tableView.register(FriendListCell.self, forCellReuseIdentifier: FriendListCell.reuseID)
         tableView.rowHeight = 80
 
-        // 右上：ベル + 追加
+        // 右：ベル
         bellButton.addTarget(self, action: #selector(openRequests), for: .touchUpInside)
-        let bellItem = UIBarButtonItem(customView: bellButton)
-        navigationItem.rightBarButtonItems = [addButtonItem, bellItem]
+        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: bellButton)
 
-        // 検索バー（ローカルフィルタ）
+        // 左：QR + 追加
+        navigationItem.leftBarButtonItems = [qrItem, addItem]
+
+        // 検索バー
         searchBar.placeholder = "ユーザー名、IDから検索"
         searchBar.autocapitalizationType = .none
         searchBar.autocorrectionType = .no
@@ -114,10 +121,9 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         header.addSubview(searchBar)
         tableView.tableHeaderView = header
 
-        // 下部「友だちを探す」緑ボタン
+        // 下部「友だちを探す」ボタン（暗めの緑）
         tableView.tableFooterView = makeFindFriendsFooter()
 
-        // friendsDidChange 通知を受けて一覧更新
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(handleFriendsDidChange),
                                                name: .friendsDidChange,
@@ -140,35 +146,34 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
     deinit { badgeListener?.remove() }
 
-    @objc private func handleFriendsDidChange() { reload() }
-
     // MARK: - Login Gate
     @discardableResult
     private func ensureLoggedInOrRedirect() -> Bool {
-        if Auth.auth().currentUser != nil { return true }
+        guard Auth.auth().currentUser != nil else {
+            if !loginAlertShown {
+                loginAlertShown = true
+                friends.removeAll()
+                allFriends.removeAll()
+                tableView.reloadData()
+                bellButton.setBadgeVisible(false)
 
-        if loginAlertShown { return false }
-        loginAlertShown = true
-
-        friends.removeAll()
-        allFriends.removeAll()
-        tableView.reloadData()
-        bellButton.setBadgeVisible(false)
-
-        let ac = UIAlertController(
-            title: "ログインが必要です",
-            message: "フレンド機能はログイン状態でのみ使用可能です。",
-            preferredStyle: .alert
-        )
-        ac.addAction(UIAlertAction(title: "閉じる", style: .cancel, handler: { _ in
-            self.loginAlertShown = false
-        }))
-        ac.addAction(UIAlertAction(title: "設定へ", style: .default, handler: { _ in
-            self.loginAlertShown = false
-            self.tabBarController?.selectedIndex = 2
-        }))
-        present(ac, animated: true)
-        return false
+                let ac = UIAlertController(
+                    title: "ログインが必要です",
+                    message: "フレンド機能はログイン状態でのみ使用可能です。",
+                    preferredStyle: .alert
+                )
+                ac.addAction(UIAlertAction(title: "閉じる", style: .cancel, handler: { _ in
+                    self.loginAlertShown = false
+                }))
+                ac.addAction(UIAlertAction(title: "設定へ", style: .default, handler: { _ in
+                    self.loginAlertShown = false
+                    self.tabBarController?.selectedIndex = 2
+                }))
+                present(ac, animated: true)
+            }
+            return false
+        }
+        return true
     }
 
     private func startListenersIfNeeded() {
@@ -184,21 +189,25 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         guard ensureLoggedInOrRedirect() else { return }
         FriendService.shared.fetchFriends { [weak self] result in
             guard let self = self else { return }
-            if case .success(let list) = result {
+            switch result {
+            case .success(let list):
                 self.allFriends = list
+                self.applyFilter(text: self.searchBar.text)
+            case .failure:
+                self.allFriends = []
                 self.applyFilter(text: self.searchBar.text)
             }
         }
     }
 
-    // MARK: - UI Builders
+    // MARK: - Builders
     private func makeFindFriendsFooter() -> UIView {
         let container = UIView(frame: CGRect(x: 0, y: 0, width: view.bounds.width, height: 100))
         let button = UIButton(type: .system)
         button.setTitle("友だちを探す", for: .normal)
         button.titleLabel?.font = .systemFont(ofSize: 18, weight: .bold)
         button.tintColor = .white
-        button.backgroundColor = UIColor.systemGreen
+        button.backgroundColor = UIColor(displayP3Red: 0.00, green: 0.60, blue: 0.27, alpha: 1.0)
         button.layer.cornerRadius = 14
         button.contentEdgeInsets = UIEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         button.addTarget(self, action: #selector(openFind), for: .touchUpInside)
@@ -225,24 +234,33 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         navigationController?.pushViewController(FriendRequestsViewController(), animated: true)
     }
 
-    // MARK: - Search (friends ローカルフィルタ)
+    @objc private func openQR() {
+        guard ensureLoggedInOrRedirect() else { return }
+        let nav = UINavigationController(rootViewController: QRScannerViewController())
+        if let scanner = nav.viewControllers.first as? QRScannerViewController {
+            scanner.onFoundID = { [weak self] _ in self?.startListenersIfNeeded() }
+        }
+        present(nav, animated: true)
+    }
+
+    @objc private func handleFriendsDidChange() { reload() }
+
+    // MARK: - Search（ローカル）
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
         applyFilter(text: searchText)
     }
     func searchBarCancelButtonClicked(_ searchBar: UISearchBar) {
         searchBar.text = nil
-        applyFilter(text: nil)
         view.endEditing(true)
+        applyFilter(text: nil)
     }
     private func applyFilter(text: String?) {
         let q = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if q.isEmpty {
-            friends = allFriends
-        } else {
-            friends = allFriends.filter { f in
+        friends = q.isEmpty
+            ? allFriends
+            : allFriends.filter { f in
                 f.friendName.lowercased().contains(q) || f.friendId.lowercased().contains(q)
             }
-        }
         tableView.reloadData()
     }
 
@@ -253,10 +271,10 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         let f = friends[indexPath.row]
         let cell = tableView.dequeueReusableCell(withIdentifier: FriendListCell.reuseID, for: indexPath) as! FriendListCell
 
-        // まずは friends ドキュメントにある情報で描画（photoURL は通常 nil）
+        // まずは friends コレクションの内容で描画
         cell.configure(name: f.friendName, id: f.friendId, photoURL: nil)
 
-        // キャッシュにあれば即反映
+        // キャッシュがあれば即反映
         if let p = profileCache[f.friendUid] {
             cell.configure(name: p.name.isEmpty ? f.friendName : p.name,
                            id: p.id.isEmpty ? f.friendId : p.id,
@@ -264,7 +282,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
             return cell
         }
 
-        // 無ければ users/{uid} を一度だけ取得 → 可視セルだけを更新
+        // users/{uid} を単発取得して可視セルだけ更新
         db.collection("users").document(f.friendUid).getDocument { [weak self, weak tableView] snap, _ in
             guard let self = self, let tableView = tableView else { return }
             let data = snap?.data()
@@ -273,7 +291,6 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
             let url  = data?["photoURL"] as? String
             self.profileCache[f.friendUid] = (name, id, url)
 
-            // まだ表示中の同じ行ならだけ更新
             if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
                 visible.configure(name: name, id: id, photoURL: url)
             }
@@ -281,7 +298,6 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
         return cell
     }
-
 
     override func tableView(_ tableView: UITableView,
                             trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
@@ -295,5 +311,13 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
             }
         }
         return UISwipeActionsConfiguration(actions: [act])
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let friend = friends[indexPath.row]
+        let vc = FriendTimetableViewController(friendUid: friend.friendUid,
+                                               friendName: friend.friendName)
+        navigationController?.pushViewController(vc, animated: true)
     }
 }

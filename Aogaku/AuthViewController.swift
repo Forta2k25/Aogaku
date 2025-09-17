@@ -1,6 +1,11 @@
 import UIKit
+import GoogleMobileAds
 
-final class AuthViewController: UIViewController, SideMenuDrawerDelegate {
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
+final class AuthViewController: UIViewController, SideMenuDrawerDelegate, BannerViewDelegate {
 
     // MARK: - UI
     private let titleLabel = UILabel()
@@ -18,6 +23,17 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate {
     private let gradePicker = UIPickerView()
     private let facultyDeptPicker = UIPickerView()
     private let gradeOptions = ["1年","2年","3年","4年"]
+    
+    // ===== AdMob (Banner) =====
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
+
+    // stack の下端制約を付け替えるため保持
+    private var stackBottomToSafeArea: NSLayoutConstraint?
+    private var stackBottomToAdTop: NSLayoutConstraint?
 
     // 学部→学科（必要に応じて編集）
     private let FACULTY_DATA: [String: [String]] = [
@@ -76,6 +92,7 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate {
         setupKeyboardToolbars()
         setupPasswordToggle()
         setupDismissKeyboardGesture()
+        setupAdBanner()
 
         // 右上のメニューボタン（未ログインは「その他」だけ）
         let menuButton = makeHamburgerButton(target: self, action: #selector(didTapSideMenuButton(_:)))
@@ -84,6 +101,11 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate {
             menuButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             menuButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
         ])
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // ▼ 追加：幅に合わせて一度だけロード
+        loadBannerIfNeeded()
     }
 
     // MARK: - UI
@@ -144,12 +166,14 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         view.addSubview(stack)
+        
+        stackBottomToSafeArea = stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24)
 
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            stackBottomToSafeArea!,
 
             gradeField.heightAnchor.constraint(equalToConstant: 44),
             facultyDeptField.heightAnchor.constraint(equalToConstant: 44),
@@ -158,6 +182,80 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate {
             signupButton.heightAnchor.constraint(equalToConstant: 50),
             loginButton.heightAnchor.constraint(equalToConstant: 50)
         ])
+    }
+    private func setupAdBanner() {
+        // 画面下に広告コンテナを固定
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        // stack の下端を広告コンテナの上端に付け替え（重なり防止）
+        stackBottomToSafeArea?.isActive = false
+        stackBottomToAdTop = stack.bottomAnchor.constraint(lessThanOrEqualTo: adContainer.topAnchor, constant: -24)
+        stackBottomToAdTop?.isActive = true
+
+        // GADBannerView（プロジェクトの typealias: BannerView / Request / AdSize）
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"   // テスト用ID
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner
+        bv.delegate = self
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+
+        bannerView = bv
+    }
+
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        if safeWidth <= 0 { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 連続ロード抑止
+        lastBannerWidth = useWidth
+
+        let size = makeAdaptiveAdSize(width: useWidth)
+
+        // 先に高さを確保しておく
+        adContainerHeight?.constant = size.size.height
+        view.layoutIfNeeded()
+
+        guard size.size.height > 0 else { return }
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+
+    // MARK: - BannerViewDelegate
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        let h = bannerView.adSize.size.height
+        adContainerHeight?.constant = h
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+    }
+
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainerHeight?.constant = 0
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        print("Ad failed:", error.localizedDescription)
     }
 
     private func setupPickers() {

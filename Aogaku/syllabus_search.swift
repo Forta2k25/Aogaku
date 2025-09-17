@@ -1,6 +1,11 @@
 import UIKit
+import GoogleMobileAds
 
-final class syllabus_search: UIViewController {
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
+final class syllabus_search: UIViewController, BannerViewDelegate {
 
     // 入出力
     var initialCategory: String?
@@ -12,6 +17,14 @@ final class syllabus_search: UIViewController {
     var initialPeriods: [Int]?
     var initialTimeSlots: [(String, Int)]?   // ★ 複数コマの復元用
     var onApply: ((SyllabusSearchCriteria) -> Void)?
+    
+    // ===== AdMob (Banner) =====
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
+    private let bannerBottomOffset: CGFloat = 45   // ← 下へ 8pt ずらす（好みで調整）
 
     // Outlets
     @IBOutlet weak var keywordTextField: UITextField!
@@ -108,13 +121,84 @@ final class syllabus_search: UIViewController {
 
         configureSlotButtons()
         // グリッド制約/タグ採番/初期選択は viewDidLayoutSubviews で
+        
+        setupAdBanner()
     }
+    
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         assignTagsIfNeeded()
         buildGridConstraintsIfNeeded()
         applyInitialSelectionIfNeeded()
+        loadBannerIfNeeded()
+    }
+    private func setupAdBanner() {
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: bannerBottomOffset),
+            adContainerHeight!
+        ])
+
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner  // 仮サイズ
+        bv.delegate = self
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+        bannerView = bv
+    }
+
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        if safeWidth <= 0 { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 無駄な再ロード防止
+        lastBannerWidth = useWidth
+
+        let size = makeAdaptiveAdSize(width: useWidth)
+
+        // 先に高さを確保し、重なりを避けるため Safe Area を広げる
+        adContainerHeight?.constant = size.size.height
+        additionalSafeAreaInsets.bottom = max(0, size.size.height - bannerBottomOffset)
+        view.layoutIfNeeded()
+
+        guard size.size.height > 0 else { return }
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) { bv.adSize = size }
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+
+    // MARK: - BannerViewDelegate
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        let h = bannerView.adSize.size.height
+        adContainerHeight?.constant = h
+        additionalSafeAreaInsets.bottom = max(0, h - bannerBottomOffset)  // ← 修正
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+    }
+
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainerHeight?.constant = 0
+        additionalSafeAreaInsets.bottom = 0
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        print("Ad failed:", error.localizedDescription)
     }
 
     // Actions

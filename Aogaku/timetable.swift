@@ -70,21 +70,22 @@ private struct TimetableRemoteStore {
     private func fieldKey(day: Int, period: Int) -> String { "cells.d\(day)p\(period)" }
     func path() -> String { doc.path }
 
+   
     func fetchHashes() async -> [String:String] {
         do {
             let snap = try await doc.getDocument()
-            guard let data = snap.data(), let cells = data["cells"] as? [String: Any] else { return [:] }
+            let data = snap.data() ?? [:]                 // [FIX] cells マップの存在を要求しない
             var out: [String:String] = [:]
-            for (k, v) in data {
-                // [FIX] フラットなフィールド名 "cells.dXpY" を拾う
+            for (k, v) in data {                          // [FIX] "cells.dXpY" を総なめ
                 guard k.hasPrefix("cells.d"),
                       let m = v as? [String: Any],
                       let h = m["h"] as? String else { continue }
-                out[k] = h            // 例: "cells.d2p4" : "<hash>"
+                out[k] = h
             }
             return out
         } catch { return [:] }
     }
+
 
     func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> ListenerRegistration {
         return doc.addSnapshotListener { snap, _ in
@@ -344,34 +345,66 @@ final class timetable: UIViewController,
 
             self.termListener = store.startListener { [weak self] cells in
                 guard let self else { return }
+                
+                // --- ① まず削除検出（前回はあって今回は無いキー） ---      // [FIX] 追加
+                let currentKeys = Set(cells.keys)
+                let prevKeys    = Set(self.remoteHashes.keys)
+                let deletedKeys = prevKeys.subtracting(currentKeys).filter { $0.hasPrefix("cells.d") }
+
+                var didAnyChange = false
+
+                for key in deletedKeys {
+                    // "cells.dXpY" -> day, period を取り出す
+                    guard let r = key.range(of: #"cells\.d(\d+)p(\d+)"#, options: .regularExpression) else { continue }
+                    let tag = String(key[r]).dropFirst(6) // dXpY
+                    let comps = tag.dropFirst().split(separator: "p")
+                    guard comps.count == 2,
+                          let day = Int(comps[0]),
+                          let period = Int(comps[1]) else { continue }
+
+                    let idx = (period - 1) * self.dayLabels.count + day
+                    if self.assigned.indices.contains(idx) {
+                        self.assigned[idx] = nil
+                        if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
+                            self.configureButton(btn, at: idx)
+                        }
+                        didAnyChange = true
+                    }
+                    self.remoteHashes.removeValue(forKey: key)     // [FIX] ハッシュも消す
+                }
+                // --- ② 更新/追加（既存ロジック） ---
                 var patches: [(Int, Int, Course, String?)] = []
                 for (absKey, m) in cells {
                     guard let r = absKey.range(of: #"cells\.d(\d+)p(\d+)"#, options: .regularExpression) else { continue }
-                    let tag = String(absKey[r]).dropFirst(6) // dXpY
+                    let tag = String(absKey[r]).dropFirst(6)
                     let comps = tag.dropFirst().split(separator: "p")
                     guard comps.count == 2, let day = Int(comps[0]), let period = Int(comps[1]) else { continue }
+
                     let remoteH = m["h"] as? String ?? ""
-                    if self.remoteHashes[absKey] == remoteH { continue }
+                    if self.remoteHashes[absKey] == remoteH { continue } // 変化なしはスキップ
                     self.remoteHashes[absKey] = remoteH
                     patches.append((day, period, decodeCourseMap(m), m["colorKey"] as? String))
                 }
-                guard !patches.isEmpty else { return }
-                Task { @MainActor in
-                    let cols = self.dayLabels.count
-                    for (day, period, course, color) in patches {
-                        let idx = (period - 1) * cols + day
-                        if self.assigned.indices.contains(idx) {
-                            self.assigned[idx] = course
-                            if let c = color, let key = SlotColorKey(rawValue: c) {
-                                SlotColorStore.set(key, for: SlotLocation(day: day, period: period))
-                            }
-                            if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
-                                self.configureButton(btn, at: idx)
+                
+                // --- ③ UI反映 ---
+                if !patches.isEmpty || didAnyChange {
+                    Task { @MainActor in
+                        let cols = self.dayLabels.count
+                        for (day, period, course, color) in patches {
+                            let idx = (period - 1) * cols + day
+                            if self.assigned.indices.contains(idx) {
+                                self.assigned[idx] = course
+                                if let c = color, let key = SlotColorKey(rawValue: c) {
+                                    SlotColorStore.set(key, for: SlotLocation(day: day, period: period))
+                                }
+                                if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
+                                    self.configureButton(btn, at: idx)
+                                }
                             }
                         }
+                        self.reloadAllButtons()
+                        self.saveAssigned()
                     }
-                    self.reloadAllButtons()
-                    self.saveAssigned()
                 }
             }
             await MainActor.run {
@@ -881,12 +914,31 @@ final class timetable: UIViewController,
     }
 
     // MARK: - CourseDetail delegate
+    // 置き換え：courseDetail(_:didChangeColor:at:)
     func courseDetail(_ vc: CourseDetailViewController, didChangeColor key: SlotColorKey, at location: SlotLocation) {
+        // 1) ローカルの色とUI
         SlotColorStore.set(key, for: location)
         let idx = gridIndex(for: location)
         if (0..<slotButtons.count).contains(idx) { configureButton(slotButtons[idx], at: idx) }
         else { rebuildGrid() }
+
+        // 2) そのコマに科目が入っているなら、色変更としてリモートへ反映
+        if assigned.indices.contains(idx), let course = assigned[idx] {
+            let k = cellKey(day: location.day, period: location.period)   // [ADD]
+            let localH = slotHash(course, colorKey: key.rawValue)         // [ADD]
+            if remoteHashes[k] != localH {                                // [ADD] 変化がある時だけ送信
+                Task {
+                    await remoteStore?.upsert(
+                        course: course,
+                        colorKey: key.rawValue,
+                        day: location.day,
+                        period: location.period
+                    )
+                }
+            }
+        }
     }
+
     func courseDetail(_ vc: CourseDetailViewController, requestEditFor course: Course, at location: SlotLocation) {
         vc.dismiss(animated: true) {
             let listVC = CourseListViewController(location: location)
@@ -906,12 +958,16 @@ final class timetable: UIViewController,
         else { self.reloadAllButtons() }
         vc.dismiss(animated: true)
         saveAssigned()
+        let key = cellKey(day: location.day, period: location.period)   // [FIX] 追加
+        remoteHashes.removeValue(forKey: key)                            // [FIX] 追加
         Task { await remoteStore?.delete(day: location.day, period: location.period) }
     }
     func courseDetail(_ vc: CourseDetailViewController, didDeleteAt location: SlotLocation) {
         assigned[index(for: location)] = nil
         reloadAllButtons()
         saveAssigned()
+        let key = cellKey(day: location.day, period: location.period)   // [FIX] 追加
+        remoteHashes.removeValue(forKey: key)                            // [FIX] 追加
         Task { await remoteStore?.delete(day: location.day, period: location.period) }
     }
     func courseDetail(_ vc: CourseDetailViewController, didEdit course: Course, at location: SlotLocation) {

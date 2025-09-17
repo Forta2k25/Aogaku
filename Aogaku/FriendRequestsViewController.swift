@@ -1,13 +1,26 @@
 import UIKit
 import FirebaseAuth
 import FirebaseFirestore
+import GoogleMobileAds
 
-final class FriendRequestsViewController: UITableViewController {
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
+
+final class FriendRequestsViewController: UITableViewController, BannerViewDelegate {
     private var items: [FriendRequest] = []
     private let db = Firestore.firestore()
 
     // 送信者プロフィールの軽量キャッシュ
     private var profileCache: [String: (name: String, id: String, photoURL: String?)] = [:]
+    
+    // MARK: - AdMob (Banner)
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -15,7 +28,94 @@ final class FriendRequestsViewController: UITableViewController {
         tableView.register(RequestCell.self, forCellReuseIdentifier: RequestCell.reuseID)
         tableView.rowHeight = 92
         reload()
+        setupAdBanner()            // [ADDED]
     }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()       // [ADDED]
+    }
+    
+    private func setupAdBanner() {
+        // 画面下に広告コンテナを固定
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        // GADBannerView（プロジェクトの typealias: BannerView / Request / AdSize を使用）
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"   // テスト用
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner
+        bv.delegate = self
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+
+        bannerView = bv
+    }
+
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        if safeWidth <= 0 { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 連続ロード抑止
+        lastBannerWidth = useWidth
+
+        // 1) 幅からサイズ算出
+        let size = makeAdaptiveAdSize(width: useWidth)
+
+        // 2) 先にコンテナの高さを確保（0 回避）
+        adContainerHeight?.constant = size.size.height
+        updateInsetsForBanner(height: size.size.height)  // テーブル下に余白
+        view.layoutIfNeeded()
+
+        // 3) 高さ 0 は不正 → ロードしない
+        guard size.size.height > 0 else { return }
+
+        // 4) サイズ反映（同一ならスキップ）
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+
+        // 5) 初回だけロード
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+    private func updateInsetsForBanner(height: CGFloat) {
+        var inset = tableView.contentInset
+        inset.bottom = height
+        tableView.contentInset = inset
+        tableView.verticalScrollIndicatorInsets.bottom = height
+    }
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+            let h = bannerView.adSize.size.height
+            adContainerHeight?.constant = h
+            updateInsetsForBanner(height: h)
+            UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        }
+        func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+            adContainerHeight?.constant = 0
+            updateInsetsForBanner(height: 0)
+            UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+            print("Ad failed:", error.localizedDescription)
+        }
 
     private func reload() {
         FriendService.shared.fetchIncomingRequests { [weak self] result in

@@ -879,8 +879,12 @@ final class timetable: UIViewController,
 
         if viewOnly { return } // 読み取り専用時は編集不可
         if let course = assigned[idx] { presentCourseDetail(course, at: loc); return }
+        
+        // ▼▼▼ ここから変更 ▼▼▼
+        let termRaw = firestoreTermRaw(for: currentTerm)      // [CHANGED] 画面上の学期→Firestoreの生文字列（"（前期）" 等）に変換して取得
+        let listVC = CourseListViewController(location: loc,  // [CHANGED] termRaw を渡す
+                                              termRaw: termRaw)
 
-        let listVC = CourseListViewController(location: loc)
         listVC.delegate = self
         if let nav = navigationController { nav.pushViewController(listVC, animated: true) }
         else {
@@ -938,10 +942,26 @@ final class timetable: UIViewController,
             }
         }
     }
+    // [ADDED] 表示中の TermKey → Firestore の term 生文字列に変換
+    private func firestoreTermRaw(for term: TermKey) -> String? {
+        // TermKey の表示題目に含まれる語で判定（例: "2025年前期" など）
+        let t = term.displayTitle
+        if t.contains("前期") { return "（前期）" }
+        if t.contains("後期") { return "（後期）" }
+        /*
+        if t.contains("前期前半") { return "（前期）" }
+        if t.contains("前期後半") { return "（前期）" }
+        if t.contains("後期前半") { return "（後期）" }
+        if t.contains("後期後半") { return "（後期）" }*/
+        // 年間や集中など他の種別も使うならここでマップを追加
+        return nil // 不明ならフィルタなし
+    }
+
 
     func courseDetail(_ vc: CourseDetailViewController, requestEditFor course: Course, at location: SlotLocation) {
         vc.dismiss(animated: true) {
-            let listVC = CourseListViewController(location: location)
+            let termRaw = self.firestoreTermRaw(for: self.currentTerm)   // [ADDED]
+            let listVC = CourseListViewController(location: location, termRaw: termRaw) // [CHANGED]
             listVC.delegate = self
             if let nav = self.navigationController { nav.pushViewController(listVC, animated: true) }
             else {

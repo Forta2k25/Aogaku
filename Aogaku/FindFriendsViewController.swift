@@ -1,8 +1,15 @@
 import UIKit
 import FirebaseAuth
 import FirebaseFirestore
+import GoogleMobileAds
 
-final class FindFriendsViewController: UITableViewController, UISearchBarDelegate {
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    // プロジェクトにあるヘルパと同名ならそちらでもOK
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
+
+final class FindFriendsViewController: UITableViewController, UISearchBarDelegate, BannerViewDelegate {
 
     private var outgoingListener: ListenerRegistration?
     
@@ -16,6 +23,13 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
     private let searchBar = UISearchBar()
     private let db = Firestore.firestore()
+    
+    // MARK: - AdMob (Banner) [ADDED]
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -33,7 +47,14 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         refreshControl?.addTarget(self, action: #selector(reloadAll), for: .valueChanged)
 
         reloadAll()
+        setupAdBanner()        // [ADDED]
     }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()   // [ADDED]
+    }
+    
 
     // MARK: - 初期ロード & 更新
     @objc private func reloadAll() {
@@ -84,6 +105,86 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         }
     }
 
+    // [ADDED]
+    private func setupAdBanner() {
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID [ADDED]
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner
+        bv.delegate = self   // ← delegate に準拠させる（下の extension を追加）
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+
+        bannerView = bv
+    }
+
+    // [ADDED] 初回のみロード、回転時はサイズだけ更新
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        if safeWidth <= 0 { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 無駄な再ロード防止
+        lastBannerWidth = useWidth
+
+        let size = makeAdaptiveAdSize(width: useWidth)
+
+        // 先に高さを確保
+        adContainerHeight?.constant = size.size.height
+        updateInsetsForBanner(height: size.size.height)
+        view.layoutIfNeeded()
+
+        guard size.size.height > 0 else { return }
+
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+    // [ADDED] UITableView の下余白を広告高に合わせる
+    private func updateInsetsForBanner(height: CGFloat) {
+        var inset = tableView.contentInset
+        inset.bottom = height
+        tableView.contentInset = inset
+        tableView.verticalScrollIndicatorInsets.bottom = height
+    }
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+            let h = bannerView.adSize.size.height
+            adContainerHeight?.constant = h
+            updateInsetsForBanner(height: h)
+            UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        }
+
+        func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+            adContainerHeight?.constant = 0
+            updateInsetsForBanner(height: 0)
+            UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+            print("Ad failed:", error.localizedDescription)
+        }
+    
     // MARK: - 検索
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
         let keyword = searchBar.text ?? ""

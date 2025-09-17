@@ -19,13 +19,19 @@ final class FirestoreService {
     /// 1ページ目：曜日と時限で10件取得（並びは documentID）
     func fetchFirstPageForDay(day: String,
                               period: Int,
+                              term: [String]? = nil,
                               limit: Int,
                               completion: @escaping (Result<FirestorePage, Error>) -> Void) {
-        let q = baseQuery
+        var q: Query = baseQuery
+        //var q = db.collection("classes")
             .whereField("time.day", isEqualTo: day)
             .whereField("time.periods", arrayContains: period)
             .order(by: FieldPath.documentID())
             .limit(to: max(1, limit))
+        
+        if let ts = term, !ts.isEmpty {
+            q = q.whereField("term", in: ts)   // ← [CHANGED] “前期/前半/後半”などまとめてマッチ
+        }
 
         q.getDocuments { [weak self] snap, err in
             if let err = err { return completion(.failure(err)) }
@@ -41,15 +47,23 @@ final class FirestoreService {
     // 次ページ取得（曜日と時限の条件を維持して 10 件など）
     func fetchNextPageForDay(day: String,
                              period: Int,
+                             term: [String]? = nil,
                              after cursor: DocumentSnapshot,
                              limit: Int,
                              completion: @escaping (Result<FirestorePage, Error>) -> Void) {
-        let q = db.collection("classes")
+        
+        //var q = db.collection("classes")
+        var q: Query = baseQuery
             .whereField("time.day", isEqualTo: day)
             .whereField("time.periods", arrayContains: period)
             .order(by: FieldPath.documentID())
             .start(afterDocument: cursor)
             .limit(to: max(1, limit))
+        
+        if let ts = term, !ts.isEmpty {
+            q = q.whereField("term", in: ts)   // ← [CHANGED] “前期/前半/後半”などまとめてマッチ
+        }
+
 
         q.getDocuments { [weak self] snap, err in
             if let err = err { return completion(.failure(err)) }

@@ -1,4 +1,3 @@
-
 import UIKit
 import WebKit
 import FirebaseFirestore
@@ -29,8 +28,8 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     @IBOutlet weak var webContainer: UIView?
 
     // 保存キー
-    private let plannedKey  = "plannedClassIDs"
-    private let favoriteKey = "favoriteClassIDs"
+    private let plannedKey  = "plannedClassIDs"   // 予定（時間割登録）
+    private let favoriteKey = "favoriteClassIDs"  // ブックマーク
 
     // Web
     private var webView: WKWebView!
@@ -61,6 +60,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         roomLabel?.text    = "-"
         codeLabel?.text    = "-"
 
+        setupButtonsBaseAppearance()   // ← 文字を出さず、アイコンで表示
         setupWebView()
         refreshButtons()
 
@@ -87,7 +87,42 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         tv.textContainerInset = UIEdgeInsets(top: top, left: 0, bottom: max(0, tv.bounds.height - fit.height - top), right: 0)
     }
 
-    // MARK: - WebView（infoStackの直下に貼る）
+    // MARK: - Buttons base
+    private func setupButtonsBaseAppearance() {
+        // 文字は常に非表示
+        addButton?.setTitle("", for: .normal)
+        bookmarkButton?.setTitle("", for: .normal)
+
+        // 押しやすいように余白
+        if #available(iOS 15.0, *) {
+            var addCfg = UIButton.Configuration.plain()
+            addCfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
+            addButton?.configuration = addCfg
+
+            var bmCfg = UIButton.Configuration.plain()
+            bmCfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
+            bookmarkButton?.configuration = bmCfg
+        } else {
+            addButton?.contentEdgeInsets = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+            bookmarkButton?.contentEdgeInsets = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+        }
+
+        // アイコンサイズ
+        let sym = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
+        addButton?.setPreferredSymbolConfiguration(sym, forImageIn: .normal)
+        bookmarkButton?.setPreferredSymbolConfiguration(sym, forImageIn: .normal)
+
+        addButton?.accessibilityLabel = "時間割に追加"
+        bookmarkButton?.accessibilityLabel = "ブックマーク"
+    }
+
+    private func headerBottomAnchor() -> NSLayoutYAxisAnchor {
+        if let stack = infoStack { return stack.bottomAnchor }
+        if let v = addButton?.superview { return v.bottomAnchor }      // 追加/しおりボタンを内包するビュー
+        if let tv = titleTextView { return tv.bottomAnchor }
+        return view.safeAreaLayoutGuide.topAnchor
+    }
+
     private func setupWebView() {
         let cfg = WKWebViewConfiguration()
         cfg.defaultWebpagePreferences.preferredContentMode = .mobile
@@ -99,26 +134,20 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.alwaysBounceVertical = true
+        if #available(iOS 11.0, *) {
+            webView.scrollView.contentInsetAdjustmentBehavior = .never // 余計な自動インセットを無効化
+        }
 
         let host: UIView = webContainer ?? view
         host.addSubview(webView)
         webView.translatesAutoresizingMaskIntoConstraints = false
 
-        if let stack = infoStack, stack.isDescendant(of: host.superview ?? host) {
-            NSLayoutConstraint.activate([
-                webView.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: 12),
-                webView.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-                webView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-                webView.bottomAnchor.constraint(equalTo: host.bottomAnchor)
-            ])
-        } else {
-            NSLayoutConstraint.activate([
-                webView.topAnchor.constraint(equalTo: host.safeAreaLayoutGuide.topAnchor, constant: 160),
-                webView.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-                webView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-                webView.bottomAnchor.constraint(equalTo: host.bottomAnchor)
-            ])
-        }
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: headerBottomAnchor(), constant: 8), // ← 固定160をやめる
+            webView.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: host.bottomAnchor)
+        ])
 
         indicator.hidesWhenStopped = true
         host.addSubview(indicator)
@@ -129,6 +158,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         ])
         host.sendSubviewToBack(webView)
     }
+
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
         return nil
@@ -186,8 +216,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     @IBAction func didTapAdd(_ sender: Any) {
         // まだ Firestore 読み込みが終わっていない場合は読み込み→アラートへ
         if lastFetched.isEmpty, let id = docID {
-            // 読み直してからアラートを出す
-            fetchDetail(docID: id)
+            fetchDetail(docID: id) // 読み直し
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 self?.presentAddConfirmAndPost()
             }
@@ -195,6 +224,8 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             presentAddConfirmAndPost()
         }
     }
+    
+
     /// 確認アラートを出し、OK なら timetable へ通知して追加
     private func presentAddConfirmAndPost() {
         let (payload, d, p) = buildPayload(from: lastFetched)
@@ -213,14 +244,14 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         ac.addAction(UIAlertAction(title: "登録", style: .default, handler: { [weak self] _ in
             guard let self = self, let id = self.docID, !id.isEmpty else { return }
 
-            // planned フラグ（任意・従来動作維持）
+            // planned フラグ（トグル）
             var set = Set(UserDefaults.standard.stringArray(forKey: self.plannedKey) ?? [])
             if set.contains(id) { set.remove(id) } else { set.insert(id) }
             UserDefaults.standard.set(Array(set), forKey: self.plannedKey)
             self.refreshButtons()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-            // timetable へ通知（既存の受信側がコマへ登録してくれる）
+            // timetable へ通知（既存の受信側がコマへ登録）
             var info: [String: Any] = ["course": payload, "docID": id]
             if let d = d { info["day"] = d }
             if let p = p { info["period"] = p }
@@ -239,12 +270,23 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
+    /// ボタンの見た目更新（文字は使わずアイコンだけ）
     private func refreshButtons() {
         guard let id = docID else { return }
         let planned = Set(UserDefaults.standard.stringArray(forKey: plannedKey) ?? [])
         let fav     = Set(UserDefaults.standard.stringArray(forKey: favoriteKey) ?? [])
-        addButton?.setTitle(planned.contains(id) ? "登録済み" : "AddButton", for: .normal)
-        bookmarkButton?.setTitle(fav.contains(id) ? "Bookmarked" : "Bookmark", for: .normal)
+
+        // Add（登録済み → チェック / 未登録 → プラス）
+        let addSymbol = planned.contains(id) ? "checkmark.circle.fill" : "plus.circle"
+        addButton?.setImage(UIImage(systemName: addSymbol), for: .normal)
+        addButton?.tintColor = planned.contains(id) ? .systemGreen : .label
+        addButton?.setTitle("", for: .normal)
+
+        // Bookmark（ON → 塗りつぶし / OFF → アウトライン）
+        let bmSymbol = fav.contains(id) ? "bookmark.fill" : "bookmark"
+        bookmarkButton?.setImage(UIImage(systemName: bmSymbol), for: .normal)
+        bookmarkButton?.tintColor = fav.contains(id) ? .systemOrange : .label
+        bookmarkButton?.setTitle("", for: .normal)
     }
 
     // MARK: - Payload 構築
@@ -292,7 +334,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         return ([
             "class_name": name,
             "code": code,
-            "credit": credit,              // ← timetable 側で Int/Int? を受けられるよう実装済み
+            "credit": credit,
             "room": room,
             "teacher_name": teacher,
             "url": urlStr,

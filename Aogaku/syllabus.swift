@@ -138,8 +138,9 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
 
         let nav = UINavigationController(rootViewController: searchVC)
         nav.modalPresentationStyle = .pageSheet
+        nav.modalPresentationStyle = .pageSheet
         if let sheet = nav.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
+            sheet.detents = [.large()]                 // ← .medium() を消す
             sheet.selectedDetentIdentifier = .large
             sheet.prefersGrabberVisible = true
             sheet.preferredCornerRadius = 16
@@ -445,11 +446,11 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         // モーダル表示（シート）
         detail.modalPresentationStyle = .pageSheet
         if let sheet = detail.sheetPresentationController {
-            sheet.detents = [.large(), .medium()]
+            sheet.detents = [.large()]                 // ← medium を無くす
             sheet.selectedDetentIdentifier = .large
             sheet.prefersGrabberVisible = true
             sheet.preferredCornerRadius = 16
-            sheet.prefersScrollingExpandsWhenScrolledToEdge = true
+            sheet.prefersScrollingExpandsWhenScrolledToEdge = true // これは残してOK
         }
 
         present(detail, animated: true)

@@ -244,6 +244,14 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         let handler = self.onApply
         dismiss(animated: true) { handler?(criteria) }
     }
+    
+    @IBAction func didTapFavorites(_ sender: Any) {
+        let vc = FavoritesListViewController()
+        let nav = UINavigationController(rootViewController: vc)
+        present(nav, animated: true)
+        // または navigationController?.pushViewController(vc, animated: true)
+    }
+
 
     // メニュー
     private func setupFacultyMenu() {

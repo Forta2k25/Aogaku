@@ -130,23 +130,39 @@
                         </constraints>
                     </view>
                     <navigationItem key="navigationItem" id="jGL-Yh-hmj">
-                        <barButtonItem key="rightBarButtonItem" style="plain" id="va9-Iy-LLa">
-                            <button key="customView" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" id="Cod-gn-tbm">
-                                <rect key="frame" x="320" y="4.6666666666666679" width="57" height="35"/>
-                                <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                <state key="normal" title="Button"/>
-                                <buttonConfiguration key="configuration" style="gray" image="line.3.horizontal.decrease" catalog="system" title=""/>
+                        <centerItemGroups>
+                            <barButtonItemGroup customizationDisposition="fixed" id="I6j-KP-TwT"/>
+                        </centerItemGroups>
+                        <rightBarButtonItems>
+                            <barButtonItem style="plain" id="FLf-es-hKM">
+                                <button key="customView" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" id="dP0-bR-m12">
+                                    <rect key="frame" x="320" y="4.6666666666666679" width="57" height="35"/>
+                                    <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
+                                    <state key="normal" title="Button"/>
+                                    <buttonConfiguration key="configuration" style="gray" image="line.3.horizontal.decrease" catalog="system" title=""/>
+                                    <connections>
+                                        <action selector="didTapSearchButton:" destination="Ach-8h-faD" eventType="touchUpInside" id="oYw-eu-b5B"/>
+                                    </connections>
+                                </button>
+                            </barButtonItem>
+                            <barButtonItem style="plain" id="va9-Iy-LLa">
+                                <button key="customView" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" id="Cod-gn-tbm">
+                                    <rect key="frame" x="255" y="4.6666666666666679" width="57" height="35"/>
+                                    <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
+                                    <state key="normal" title="Button"/>
+                                    <buttonConfiguration key="configuration" style="gray" image="bookmark" catalog="system" title=""/>
+                                    <connections>
+                                        <action selector="didTapFavorites:" destination="Ach-8h-faD" eventType="touchUpInside" id="8mr-K8-8EJ"/>
+                                    </connections>
+                                </button>
                                 <connections>
-                                    <action selector="didTapSearchButton:" destination="Ach-8h-faD" eventType="touchUpInside" id="5OP-Mc-bTw"/>
+                                    <segue destination="XWM-mO-tUM" kind="show" id="38x-Ii-Kr3"/>
                                 </connections>
-                            </button>
-                            <connections>
-                                <segue destination="XWM-mO-tUM" kind="show" id="38x-Ii-Kr3"/>
-                            </connections>
-                        </barButtonItem>
+                            </barButtonItem>
+                        </rightBarButtonItems>
                     </navigationItem>
                     <connections>
-                        <outlet property="search_button" destination="Cod-gn-tbm" id="tt9-cF-nse"/>
+                        <outlet property="search_button" destination="dP0-bR-m12" id="co1-uf-r2U"/>
                         <outlet property="syllabus_table" destination="IGG-Mg-aDD" id="hJc-LO-z67"/>
                     </connections>
                 </viewController>

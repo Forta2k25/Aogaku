@@ -455,6 +455,13 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
 
         present(detail, animated: true)
     }
+    
+    @IBAction func didTapFavorites(_ sender: Any) {
+        let vc = FavoritesListViewController()
+        let nav = UINavigationController(rootViewController: vc)
+        present(nav, animated: true)
+        // または navigationController?.pushViewController(vc, animated: true)
+    }
 
     // 無限スクロール（検索中はオフ）
     func scrollViewDidScroll(_ scrollView: UIScrollView) {

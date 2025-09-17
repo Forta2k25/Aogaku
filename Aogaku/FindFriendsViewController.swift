@@ -4,6 +4,8 @@ import FirebaseFirestore
 
 final class FindFriendsViewController: UITableViewController, UISearchBarDelegate {
 
+    private var outgoingListener: ListenerRegistration?
+    
     // 一覧データ
     private var allUsers: [UserPublic] = []   // 初期表示用（自分以外）
     private var results: [UserPublic] = []    // 現在表示（検索結果 or allUsers）
@@ -105,6 +107,29 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             results = allUsers
             tableView.reloadData()
         }
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        startOutgoingListener()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        outgoingListener?.remove()
+        outgoingListener = nil
+    }
+
+    private func startOutgoingListener() {
+        guard let me = Auth.auth().currentUser?.uid else { return }
+        outgoingListener?.remove()
+        outgoingListener = db.collection("users").document(me)
+            .collection("requestsOutgoing")
+            .addSnapshotListener { [weak self] snap, _ in
+                guard let self = self else { return }
+                self.outgoing = Set(snap?.documents.map { $0.documentID } ?? [])
+                self.tableView.reloadData() // ここで「申請済」⇄「追加」が即時反映
+            }
     }
 
     // MARK: - TableView

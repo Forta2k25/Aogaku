@@ -2,6 +2,11 @@ import Foundation
 import FirebaseAuth
 import FirebaseFirestore
 
+extension Notification.Name {
+    static let friendsDidChange = Notification.Name("friendsDidChange")
+}
+
+
 final class FriendService {
     static let shared = FriendService()
     private let db = Firestore.firestore()
@@ -138,7 +143,12 @@ final class FriendService {
             batch.deleteDocument(rqOutRef)
 
             batch.commit { error in
-                if let error = error { completion(.failure(error)) } else { completion(.success(())) }
+                if let error = error {
+                    completion(.failure(error))
+                } else {
+                    NotificationCenter.default.post(name: .friendsDidChange, object: nil)
+                    completion(.success(()))
+                }
             }
         }
     }
@@ -150,7 +160,11 @@ final class FriendService {
         batch.deleteDocument(myRef.collection("friends").document(friendUid))
         batch.deleteDocument(hisRef.collection("friends").document(meUid))
         batch.commit { error in
-            if let error = error { completion(.failure(error)) } else { completion(.success(())) }
+            if let error = error { completion(.failure(error)) }
+            else {
+                NotificationCenter.default.post(name: .friendsDidChange, object: nil)
+                completion(.success(()))
+            }
         }
     }
 
@@ -180,18 +194,22 @@ final class FriendService {
     }
 
     func fetchIncomingRequests(completion: @escaping (Result<[FriendRequest], Error>) -> Void) {
-        db.collection("users").document(meUid).collection("requestsIncoming")
+        let ref = db.collection("users").document(meUid).collection("requestsIncoming")
             .whereField("status", isEqualTo: "pending")
-            .order(by: "createdAt", descending: true)
-            .getDocuments { snap, err in
-                if let err = err { completion(.failure(err)); return }
-                let list: [FriendRequest] = snap?.documents.compactMap { d in
-                    guard let name = d["senderName"] as? String,
-                          let sid  = d["senderId"] as? String,
-                          let ts = d["createdAt"] as? Timestamp else { return nil }
-                    return FriendRequest(fromUid: d.documentID, fromName: name, fromId: sid, createdAt: ts.dateValue())
-                } ?? []
-                completion(.success(list))
+
+        ref.getDocuments { snap, err in
+            if let err = err { completion(.failure(err)); return }
+            var list: [FriendRequest] = []
+            for d in snap?.documents ?? [] {
+                let data = d.data()
+                let name = (data["senderName"] as? String) ?? ""
+                let sid  = (data["senderId"] as? String) ?? ""
+                let ts   = (data["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast
+                list.append(FriendRequest(fromUid: d.documentID, fromName: name, fromId: sid, createdAt: ts))
             }
+            list.sort { $0.createdAt > $1.createdAt } // 新しい順
+            completion(.success(list))
+        }
     }
+
 }

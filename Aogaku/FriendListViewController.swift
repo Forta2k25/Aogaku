@@ -1,6 +1,12 @@
 import UIKit
 import FirebaseAuth
 import FirebaseFirestore
+import GoogleMobileAds
+
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
 
 // MARK: - Avatar付きセル
 final class FriendListCell: UITableViewCell {
@@ -9,6 +15,9 @@ final class FriendListCell: UITableViewCell {
     private let avatarView = UIImageView()
     private let nameLabel = UILabel()
     private let idLabel = UILabel()
+    
+
+    
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -63,7 +72,7 @@ final class FriendListCell: UITableViewCell {
 }
 
 // MARK: - FriendList
-final class FriendListViewController: UITableViewController, UISearchBarDelegate {
+final class FriendListViewController: UITableViewController, UISearchBarDelegate, BannerViewDelegate{
 
     private let db = Firestore.firestore()
 
@@ -75,6 +84,14 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
     private var listenerIsActive = false
 
     private let bellButton = BadgeButton(type: .system)
+    
+    // ===== AdMob: ここを追加 =====
+    private let adContainer = UIView()                           // [ADD]
+    private var bannerView: BannerView?                          // [ADD]
+    private var adContainerHeight: NSLayoutConstraint?           // [ADD]
+    private var lastBannerWidth: CGFloat = 0                     // [ADD]
+    private var didLoadBannerOnce = false                        // [ADD]
+
 
     // 左：QR + 追加
     private lazy var qrItem: UIBarButtonItem = {
@@ -128,6 +145,13 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
                                                selector: #selector(handleFriendsDidChange),
                                                name: .friendsDidChange,
                                                object: nil)
+        
+        setupAdBanner()            // [ADDED]
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()       // [ADDED]
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -183,6 +207,87 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         }
         listenerIsActive = true
     }
+    
+    //Admob
+    // [ADDED]
+    private func setupAdBanner() {
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID [ADDED]
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner
+        bv.delegate = self   // ← delegate に準拠させる（下の extension を追加）
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+
+        bannerView = bv
+    }
+
+    
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        if safeWidth <= 0 { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 連続ロード抑止
+        lastBannerWidth = useWidth
+
+        // 1) 幅からサイズ算出
+        let size = makeAdaptiveAdSize(width: useWidth)
+
+        // 2) 先にコンテナの高さを確保（0 回避）
+        adContainerHeight?.constant = size.size.height
+        updateInsetsForBanner(height: size.size.height)  // テーブル下に余白
+        view.layoutIfNeeded()
+
+        // 3) 高さ 0 は不正 → ロードしない
+        guard size.size.height > 0 else { return }
+
+        // 4) サイズ反映（同一ならスキップ）
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+
+        // 5) 初回だけロード
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+    private func updateInsetsForBanner(height: CGFloat) {
+        var inset = tableView.contentInset
+        inset.bottom = height
+        tableView.contentInset = inset
+        tableView.verticalScrollIndicatorInsets.bottom = height
+    }
+    
+    // MARK: - BannerViewDelegate                        // [ADD]
+    func bannerViewDidReceiveAd(_ banner: BannerView) {
+            // 表示済みなので特別なことは不要（必要ならフェードイン等）
+    }
+    func bannerView(_ banner: BannerView, didFailToReceiveAdWithError error: Error) {
+            // 失敗時は高さを 0 に
+        adContainerHeight?.constant = 0
+    }
+
 
     // MARK: - Data
     private func reload() {
@@ -321,3 +426,4 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         navigationController?.pushViewController(vc, animated: true)
     }
 }
+

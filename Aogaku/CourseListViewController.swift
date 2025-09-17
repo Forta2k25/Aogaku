@@ -23,6 +23,7 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
 
     // MARK: - Firestore state
     private let service = FirestoreService()
+    private let termRaw: String?        // [ADDED] "（前期）" / "（後期）" などを保持
     private var remote: [Course] = []                 // サーバーから得た一覧を蓄積
     private var lastSnapshot: DocumentSnapshot?       // 次ページ用カーソル
     private var hasMore: Bool = true                  // まだ次があるか
@@ -31,6 +32,8 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
 
     // MARK: - Currently displayed list (検索の有無で変わる)
     private var courses: [Course] = []
+    
+    
 
     // MARK: - UI (Search)
     private let searchField: UITextField = {
@@ -64,8 +67,9 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
     private let spinner = UIActivityIndicatorView(style: .medium)
 
     // MARK: - Init
-    init(location: SlotLocation) {
+    init(location: SlotLocation, termRaw: String? = nil) {
         self.location = location
+        self.termRaw  = termRaw
         super.init(style: .insetGrouped)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -171,6 +175,7 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         service.fetchFirstPageForDay(
             day: location.dayName,
             period: location.period,
+            term: expandedTerms(for: termRaw),
             limit: 10
         ) { [weak self] result in
             DispatchQueue.main.async {
@@ -235,6 +240,7 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         service.fetchNextPageForDay(
             day: location.dayName,
             period: location.period,
+            term: expandedTerms(for: termRaw),
             after: cursor,
             limit: 10
         ) { [weak self] result in
@@ -265,6 +271,20 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
             }
         }
     }
+    
+    // [ADDED] 前/後期を前半・後半まで含む配列に展開
+    private func expandedTerms(for raw: String?) -> [String]? {
+        guard let s = raw, !s.isEmpty else { return nil }
+        if s.contains("前期") {
+            return ["（前期）", "（前期前半）", "（前期後半）", "（前期隔1）", "（前期隔2）", "（通年）", "（通年隔1）", "（通年隔2）", "（前期集中）", "（集中）", //"（夏休集中）", "（春休集中）", "（通年集中）" 最大10個
+            ]
+        } else if s.contains("後期") {
+            return ["（後期）", "（後期前半）", "（後期後半）", "（後期隔1）", "（後期隔2）", "（通年）", "（通年隔1）", "（通年隔2）", "（後期集中）", "（集中）", //"（夏休集中）", "（春休集中）", "（通年集中）" 最大10個
+            ]
+        }
+        return [s] // それ以外（通年/集中など）はそのまま
+    }
+
 
     // MARK: - 「さらに読み込む」（検索中のみ可）
     @objc private func tapLoadMore() {
@@ -306,6 +326,7 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
                         self.service.fetchNextPageForDay(
                             day: self.location.dayName,
                             period: self.location.period,
+                            term: self.expandedTerms(for: self.termRaw),
                             after: cursor,
                             limit: 25,
                             completion: handle
@@ -324,11 +345,13 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         if let cursor = lastSnapshot {
             service.fetchNextPageForDay(
                 day: location.dayName, period: location.period,
+                term: expandedTerms(for: termRaw),
                 after: cursor, limit: 25, completion: handle
             )
         } else {
             service.fetchFirstPageForDay(
                 day: location.dayName, period: location.period,
+                term: expandedTerms(for: termRaw),
                 limit: 25, completion: handle
             )
         }

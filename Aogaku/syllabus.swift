@@ -72,6 +72,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         let grade: String
         let category: String
         let credit: String
+        let term: String
     }
     private var data: [SyllabusData] = []
     private var filteredData: [SyllabusData] = []
@@ -89,6 +90,10 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        syllabus_table.rowHeight = UITableView.automaticDimension
+            syllabus_table.estimatedRowHeight = 110
+        
         if FirebaseApp.app() == nil { FirebaseApp.configure() }
 
         syllabus_table.dataSource = self
@@ -210,6 +215,11 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         }
         bv.load(Request())
     }
+    
+    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        UITableView.automaticDimension
+    }
+
 
     // MARK: - BannerViewDelegate
     func bannerViewDidReceiveAd(_ bannerView: BannerView) {
@@ -421,10 +431,9 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         cell.grade.text = subject.grade
         cell.category.text = subject.category
         cell.credit.text = subject.credit
+        cell.termLabel.text   = subject.term.isEmpty ? "-" : subject.term
         return cell
     }
-
-    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat { 90 }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
@@ -472,6 +481,19 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         if offsetY > contentH - frameH - 400 { loadNextPage() }
     }
 
+    // 表記ゆれを統一
+    private func normalizeTerm(_ s: String) -> String {
+        // カッコ/空白を除去
+        let t = s.replacingOccurrences(of: "[()（）\\s]", with: "", options: .regularExpression)
+                 .lowercased()
+        switch t {
+        case "前期", "春学期", "spring": return "前期"
+        case "後期", "秋学期", "autumn", "fall": return "後期"
+        case "通年", "年間", "fullyear", "yearlong": return "通年"
+        default: return s.replacingOccurrences(of: "[()（）]", with: "", options: .regularExpression)
+        }
+    }
+
     // Firestore -> Model（← docID を受け取る形に）
     private func toModel(docID: String, _ x: [String: Any]) -> SyllabusData {
         var timeStr = ""
@@ -489,6 +511,11 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
             if let arr = x["campus"] as? [String] { return arr.joined(separator: ",") }
             return ""
         }()
+
+        // ★ 追加：term 取り出し
+        let termRaw = (x["term"] as? String) ?? ""
+        let term = normalizeTerm(termRaw)
+
         return SyllabusData(
             docID: docID,
             class_name: x["class_name"] as? String ?? "",
@@ -497,7 +524,8 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
             campus: campusStr,
             grade: x["grade"] as? String ?? "",
             category: x["category"] as? String ?? "",
-            credit: String(x["credit"] as? Int ?? 0)
+            credit: String(x["credit"] as? Int ?? 0),
+            term: term
         )
     }
 

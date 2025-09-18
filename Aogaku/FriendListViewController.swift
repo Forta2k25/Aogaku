@@ -329,7 +329,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
                 }))
                 ac.addAction(UIAlertAction(title: "設定へ", style: .default, handler: { _ in
                     self.loginAlertShown = false
-                    self.tabBarController?.selectedIndex = 2
+             //       self.tabBarController?.selectedIndex = 3
                 }))
                 present(ac, animated: true)
             }

@@ -44,7 +44,7 @@ private final class SelfAvatarCache {
         let versions = files.compactMap { url -> Int? in
             let name = url.lastPathComponent
             guard name.hasPrefix(prefix), name.hasSuffix(".jpg") else { return nil }
-            let vStr = name.dropFirst(prefix.count).dropLast(4) // remove ".jpg"
+            let vStr = name.dropFirst(prefix.count).dropLast(4)
             return Int(vStr)
         }
         return versions.max()
@@ -81,7 +81,6 @@ private final class SelfAvatarCache {
         }
     }
 
-    // photoURL から簡易バージョン推定（avatarVersion が無い場合のフォールバック）
     func versionFrom(urlString: String?) -> Int? {
         guard let s = urlString, let u = URL(string: s) else { return nil }
         if let q = u.query, !q.isEmpty { return abs(q.hashValue) }
@@ -102,6 +101,9 @@ private enum ImageFetcher {
 
 // MARK: - Main VC
 final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate, BannerViewDelegate {
+
+    // 設定タブのインデックス（必要なら調整）
+    private let settingsTabIndex = 3
 
     // MARK: UI（アイコンのみ・カメラボタン削除）
     private let avatarView = UIImageView()
@@ -174,16 +176,12 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         setupNavMenuButtonIfNeeded()
         setupDismissKeyboardGesture()
 
-        // まずはローカルキャッシュを即表示（通信なし）
         if let uid = uid, let cached = SelfAvatarCache.shared.latestImage(uid: uid) {
             avatarView.image = cached.image
             currentAvatarVersion = cached.version
         }
 
-        // 次にプロフィールを読み込み（avatarVersion 確定→必要時のみDL）
         loadUserProfile()
-
-        // 最後に広告（これ以降で stack の下端制約を adContainer に付け替える）
         setupAdBanner()
     }
 
@@ -204,7 +202,6 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             adContainerHeight!
         ])
 
-        // ここで SafeArea → adContainer に付け替え
         stackBottomToSafeArea?.isActive = false
         stackBottomToAdTop = stack.bottomAnchor.constraint(lessThanOrEqualTo: adContainer.topAnchor, constant: -24)
         stackBottomToAdTop?.isActive = true
@@ -249,17 +246,6 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         }
     }
 
-    // BannerViewDelegate
-    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
-        let h = bannerView.adSize.size.height
-        adContainerHeight?.constant = h
-        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
-    }
-    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
-        adContainerHeight?.constant = 0
-        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
-    }
-
     // MARK: - UI
     private func setupNavMenuButtonIfNeeded() {
         if navigationItem.rightBarButtonItem == nil {
@@ -290,7 +276,6 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         avatarView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(avatarView)
 
-        // アイコンは中央寄り（上の余白を少し広げる）
         NSLayoutConstraint.activate([
             avatarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 40),
             avatarView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -300,7 +285,6 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         view.layoutIfNeeded()
         avatarView.layer.cornerRadius = 70
 
-        // アイコンタップで変更（カメラボタンは廃止）
         let tap = UITapGestureRecognizer(target: self, action: #selector(selectAvatar))
         avatarView.addGestureRecognizer(tap)
     }
@@ -316,18 +300,19 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             return tb
         }
 
-        // 学年（短く）
+        // 学年（さらに短く & 中央寄せ）
         gradeField.attributedPlaceholder = NSAttributedString(
             string: "学年",
             attributes: [.foregroundColor: UIColor.placeholderText]
         )
         gradeField.borderStyle = .roundedRect
+        gradeField.textAlignment = .center
         gradeField.inputView = gradePicker
         gradeField.inputAccessoryView = doneToolbar(#selector(endEditingFields))
         gradePicker.dataSource = self
         gradePicker.delegate = self
 
-        // 学部・学科（長く）
+        // 学部・学科（さらに長く）
         facultyDeptField.attributedPlaceholder = NSAttributedString(
             string: "学部・学科",
             attributes: [.foregroundColor: UIColor.placeholderText]
@@ -364,8 +349,8 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         row1.distribution = .fill
         row1.spacing = 12
 
-        // 比率: grade : facultyDept ≈ 0.375 : 0.625
-        let ratio = gradeField.widthAnchor.constraint(equalTo: facultyDeptField.widthAnchor, multiplier: 0.6)
+        // 新比率: grade : facultyDept ≈ 0.31 : 0.69（grade = 0.45 * faculty）
+        let ratio = gradeField.widthAnchor.constraint(equalTo: facultyDeptField.widthAnchor, multiplier: 0.45)
         ratio.priority = .required
         ratio.isActive = true
 
@@ -383,7 +368,7 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
 
         [row1, nameStack, idStack].forEach { stack.addArrangedSubview($0) }
 
-        // ★ 初期は SafeArea への下端制約のみ（adContainer 生成後に付け替える）
+        // 初期は SafeArea への下端制約（adContainer 生成後に付け替え）
         stackBottomToSafeArea = stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24)
         stackBottomToSafeArea?.isActive = true
 
@@ -428,13 +413,11 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             let data = snap?.data() ?? [:]
 
             DispatchQueue.main.async {
-                // 学年
                 if let grade = data["grade"] as? Int, (1...4).contains(grade) {
                     self.gradeField.text = "\(grade)年"
                     self.gradePicker.selectRow(grade - 1, inComponent: 0, animated: false)
                 }
 
-                // 学部・学科
                 let faculty = data["faculty"] as? String ?? ""
                 let dept = data["department"] as? String ?? ""
                 if !faculty.isEmpty {
@@ -451,14 +434,12 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
                     }
                 }
 
-                // 名前
                 if let name = data["name"] as? String, !name.isEmpty {
                     self.nameField.text = name
                 } else {
                     self.nameField.text = nil
                 }
 
-                // ID
                 if let id = data["id"] as? String {
                     self.idField.text = id
                 } else if let disp = Auth.auth().currentUser?.displayName {
@@ -466,7 +447,6 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
                 }
             }
 
-            // アイコン（avatarVersion を見て必要時のみDL）
             let url  = data["photoURL"] as? String
             let verRaw = (data["avatarVersion"] as? Int) ?? (data["photoVersion"] as? Int)
             let ver = verRaw ?? SelfAvatarCache.shared.versionFrom(urlString: url)
@@ -515,7 +495,7 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         ], merge: true)
     }
 
-    // MARK: - Avatar load/upload
+    // MARK: - Avatar flow
     @objc private func selectAvatar() {
         var config = PHPickerConfiguration(photoLibrary: .shared())
         config.filter = .images
@@ -525,18 +505,34 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         present(picker, animated: true)
     }
 
+    private func presentCropper(with image: UIImage) {
+        let cropVC = ImageCropViewController(image: image, titleText: "アイコンを切り取る")
+        cropVC.modalPresentationStyle = .fullScreen
+        cropVC.onCancel = { [weak self] in self?.dismiss(animated: true) }
+        cropVC.onDone = { [weak self] cropped in
+            guard let self else { return }
+            self.dismiss(animated: true) {
+                self.uploadAvatar(cropped)
+            }
+        }
+        present(cropVC, animated: true)
+    }
+
     private func uploadAvatar(_ image: UIImage) {
         guard let uid = self.uid else {
             showAlert(title: "ログインが必要です", message: "先にログインしてください。")
             return
         }
 
-        // 即時UI反映（通信前）
+        // 即時UI反映
         self.avatarView.image = image
+
+        // 転送量削減（保険のダブルチェック：最大辺512pxに）
+        let resized = image.resized(maxEdge: 512)
 
         // Storage
         let ref = Storage.storage().reference(withPath: "avatars/\(uid).jpg")
-        guard let data = image.jpegData(compressionQuality: 0.85) else {
+        guard let data = resized.jpegData(compressionQuality: 0.75) else {
             showAlert(title: "エラー", message: "画像の変換に失敗しました。")
             return
         }
@@ -576,7 +572,7 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
 
                 // 予測版（現行 + 1）でキャッシュ保存して即時反映
                 let newVersion = (self.currentAvatarVersion ?? (SelfAvatarCache.shared.latestVersion(for: uid) ?? 0)) + 1
-                SelfAvatarCache.shared.store(image, uid: uid, version: newVersion)
+                SelfAvatarCache.shared.store(resized, uid: uid, version: newVersion)
                 self.currentAvatarVersion = newVersion
 
                 // Auth プロフィール（任意）
@@ -625,12 +621,12 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             showAlert(title: "ログアウトに失敗", message: error.localizedDescription)
             return
         }
-        tabBarController?.selectedIndex = 2
+        tabBarController?.selectedIndex = settingsTabIndex
     }
 
     private func performDeleteAccount() {
         guard let user = Auth.auth().currentUser else {
-            tabBarController?.selectedIndex = 2
+            tabBarController?.selectedIndex = settingsTabIndex
             return
         }
         let uid = user.uid
@@ -656,7 +652,7 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             // Auth 削除
             do {
                 try await user.delete()
-                await MainActor.run { self.tabBarController?.selectedIndex = 2 }
+                await MainActor.run { self.tabBarController?.selectedIndex = self.settingsTabIndex }
             } catch {
                 let ns = error as NSError
                 if ns.domain == AuthErrorDomain,
@@ -699,7 +695,7 @@ extension UserSettingsViewController: PHPickerViewControllerDelegate {
         if provider.canLoadObject(ofClass: UIImage.self) {
             provider.loadObject(ofClass: UIImage.self) { [weak self] object, error in
                 guard let self, let image = object as? UIImage, error == nil else { return }
-                DispatchQueue.main.async { self.uploadAvatar(image) }
+                DispatchQueue.main.async { self.presentCropper(with: image) }
             }
         }
     }
@@ -752,4 +748,19 @@ extension UserSettingsViewController: UIPickerViewDataSource, UIPickerViewDelega
 // 安全添字
 private extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+// 画像ユーティリティ
+private extension UIImage {
+    func resized(maxEdge: CGFloat) -> UIImage {
+        let w = size.width, h = size.height
+        let scale = min(1.0, maxEdge / max(w, h))
+        if scale >= 0.999 { return self }
+        let newSize = CGSize(width: w * scale, height: h * scale)
+        UIGraphicsBeginImageContextWithOptions(newSize, true, 1.0)
+        draw(in: CGRect(origin: .zero, size: newSize))
+        let img = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        return img ?? self
+    }
 }

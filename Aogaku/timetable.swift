@@ -5,6 +5,7 @@ import Photos
 import GoogleMobileAds
 import FirebaseAuth
 import FirebaseFirestore
+import WidgetKit   // ← 追加
 
 @inline(__always) private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
@@ -301,6 +302,7 @@ final class timetable: UIViewController,
             UserDefaults.standard.set(data, forKey: currentTerm.storageKey)
             TermStore.saveSelected(currentTerm)
         } catch { print("Save error:", error) }
+        publishWidgetSnapshot()   // ← 追加（ここが肝）
     }
     private func loadAssigned(for term: TermKey) {
         let key = term.storageKey
@@ -323,6 +325,38 @@ final class timetable: UIViewController,
             // 通常表示（必要あれば右上ボタンを再構築）
         }
         reloadAllButtons()
+    }
+    
+    // 今日のスナップショットを作って WidgetShared に保存
+    private func publishWidgetSnapshot() {
+        let cal = Calendar.current
+        let now = Date()
+        let wk = cal.component(.weekday, from: now)     // 1=Sun ... 7=Sat
+        // あなたの配列は 0=月 なので変換（範囲外は最後の列に丸め）
+        let dayIndex = max(0, min(dayLabels.count - 1, (wk + 5) % 7))
+
+        // 「木曜日」などのラベル
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "ja_JP")
+        df.setLocalizedDateFormatFromTemplate("EEEE")
+        let dayLabel = df.string(from: now)
+
+        var ps: [WidgetPeriod] = []
+        for period in 1...periodLabels.count {
+            let idx = (period - 1) * dayLabels.count + dayIndex
+            let tp = timePairs[period - 1]          // ("09:00","10:30") など
+            let title = assigned.indices.contains(idx) ? (assigned[idx]?.title ?? "") : ""
+            let room  = assigned.indices.contains(idx) ? (assigned[idx]?.room  ?? "") : ""
+            let teacher = assigned.indices.contains(idx) ? (assigned[idx]?.teacher  ?? "") : ""
+            ps.append(WidgetPeriod(index: period,
+                                   title: title.isEmpty ? " " : title,
+                                   room:  room,
+                                   start: tp.start, end: tp.end, teacher: teacher))
+        }
+
+        let snap = WidgetSnapshot(date: now, weekday: wk, dayLabel: dayLabel, periods: ps)
+        WidgetBridge.save(snap)                             // ← shared/WidgetShared.swift のやつ
+        WidgetCenter.shared.reloadTimelines(ofKind: "AogakuWidgets")
     }
 
     // MARK: - Sync
@@ -462,6 +496,11 @@ final class timetable: UIViewController,
         let safeHeight = view.safeAreaLayoutGuide.layoutFrame.height
         headerTopConstraint.constant = safeHeight * 0.02
         loadBannerIfNeeded()
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
     }
 
     // MARK: - Register from detail (既存通知)
@@ -1013,6 +1052,10 @@ final class timetable: UIViewController,
         }
         return out
     }
+    
+    
+    
+    
 
     // MARK: - AdMob
     private func setupAdBanner() {
@@ -1322,7 +1365,7 @@ extension timetable {
             let c = today[i]
             let slot = PeriodTime.slots[i]
             periods.append(.init(index: i+1, title: c.title, room: c.room,
-                                 start: slot.start, end: slot.end))
+                                 start: slot.start, end: slot.end, teacher: c.teacher))
         }
 
         let labels = ["日曜日","月曜日","火曜日","水曜日","木曜日","金曜日","土曜日"]

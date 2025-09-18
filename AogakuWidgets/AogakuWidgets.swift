@@ -57,6 +57,14 @@ struct TodayProvider: TimelineProvider {
     }()
 }
 
+// === Font tuning for medium widget ===
+private enum WFont {
+    static let titleSize: CGFloat = 12   // 既存 17 → 12 に
+    static let timeSize:  CGFloat = 9   // 開始/終了時刻の数字を少し小さく
+    static let indexFont: Font = .footnote.weight(.semibold)  // 見出しの 1〜5 も小さく
+    static let roomSize:  CGFloat = 10  // ← 教室（例: 1111, B304 など）
+    static let weekdayFont: Font = .system(size: 15, weight: .semibold) // ← 追加：曜日
+}
 
 struct TodayView: View {
     @Environment(\.widgetFamily) var family
@@ -85,6 +93,11 @@ struct TodayView: View {
         case .systemSmall:
             smallList()                      // ← 小サイズは“時限＋授業名”のみ
                 .widgetURL(URL(string: "aogaku://timetable?day=today"))
+        // 既存の TodayView.body 内
+        case .systemMedium:
+            mediumStrip()                      // ← 新しい中サイズ
+                .widgetURL(URL(string: "aogaku://timetable?day=today"))
+     /*
         case .systemMedium:
             GeometryReader { geo in
                 // 表示するコマ数（5〜7を自動）
@@ -107,6 +120,8 @@ struct TodayView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("今日の時間割")
                         .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .multilineTextAlignment(.center)
 
                     HStack(spacing: spacing) {
                         ForEach(entry.snapshot.periods.prefix(columns), id: \.self) { p in
@@ -121,7 +136,7 @@ struct TodayView: View {
                 .padding(.bottom, 4)
                 .widgetURL(URL(string: "aogaku://timetable?day=today"))
             }
-
+*/
             
         case .systemLarge:
             largeDetail()// ⬅︎ これを追加
@@ -137,6 +152,8 @@ struct TodayView: View {
             .font(.caption)                  // 小さめ
             .foregroundStyle(.secondary)     // 薄めの色
     }
+    
+    
 
     
     // === 小サイズ用：時限＋授業名のみ ===
@@ -168,7 +185,133 @@ struct TodayView: View {
         )
     }
 
-    // MARK: - Large (詳細リスト)
+    // MARK: - Medium（画像の見た目）
+    private func mediumStrip() -> some View {
+        GeometryReader { geo in
+            let columns = lastActivePeriod(limit: 7)      // 5〜7コマまで自動
+            let outerX: CGFloat = 2                      // 左右余白
+            let spacing: CGFloat = (columns >= 7) ? 3 : 3 // コマ間のすき間をやや詰め
+
+            // 高さ配分を先に決めて「確実に収める」
+            let dayLabelH: CGFloat = 18                   // 曜日ラベルの高さ
+            let timeHeaderH: CGFloat = 28                // 「9:00 / 1 / 10:30」の高さ（小さめ）
+            let dotH: CGFloat = 10                        // 下の丸インジケータ
+            let verticalGaps: CGFloat = 2 + 2            // VStack間の余白（上4 + 下6）
+
+            // 使える高さ ＝ 全体 − ヘッダー類
+            let usableH = geo.size.height - dayLabelH - timeHeaderH - dotH - verticalGaps
+            let cardH   = max(usableH, 44)                // 安全値
+
+            // セル幅（左右余白・コマ間スペースを引いて等分）
+            let usableW = geo.size.width - outerX*2 - CGFloat(columns-1)*spacing
+            let cellW   = floor(usableW / CGFloat(columns))
+
+            VStack(spacing: 2) {                          // ← 上余白を詰める
+                // 上：曜日を中央に
+                Text(entry.snapshot.dayLabel)
+                    .font(WFont.weekdayFont)     // ← ここだけでサイズ調整できる
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                // 列
+                HStack(alignment: .top, spacing: spacing) {
+                    ForEach(1...columns, id: \.self) { i in
+                        let p = entry.snapshot.periods.first { $0.index == i }
+                        let nowHere = p.map(isNow(in:)) ?? isNowSlot(i)
+
+                        VStack(spacing: 1) {              // ← ヘッダーとカードの間隔も詰める
+                            // 時間ヘッダーを小さめにして上に寄せる
+                            timeHeaderCompact(for: i)
+                                .frame(height: timeHeaderH)
+
+                            // 本体カード（計算した高さを必ず当てる）
+                            miniCard(index: i,
+                                    period: p,
+                                    highlight: nowHere,
+                                    height: cardH)
+                            .frame(width: cellW, height: cardH)
+
+                            // 現在コマの丸印
+                            Circle()
+                                .fill(nowHere ? Color.secondary : .clear)
+                                .frame(width: dotH, height: dotH)
+                        }
+                        .frame(width: cellW)
+                    }
+                }
+            }
+            .padding(.horizontal, outerX)
+            .padding(.top, -1)                             // ← さらに上詰め
+            .padding(.bottom, 2)
+        }
+    }
+
+    private func timeHeader(for index: Int) -> some View {
+        let slot = PeriodTime.slots[index - 1]
+        return VStack(spacing: 2) {
+            Text(slot.start).font(.caption.monospacedDigit())
+            Text("\(index)").font(.title3.weight(.bold))
+            Text(slot.end).font(.caption.monospacedDigit())
+        }
+        .frame(maxWidth: .infinity)
+    }
+    // 追加：詰めた時間ヘッダー
+    private func timeHeaderCompact(for index: Int) -> some View {
+        let slot = PeriodTime.slots[index - 1]
+        return VStack(spacing: -3) {
+            Text(slot.start)
+                .font(.system(size: WFont.timeSize, weight: .regular).monospacedDigit())
+            Text("\(index)")
+                .font(WFont.indexFont)
+            Text(slot.end)
+                .font(.system(size: WFont.timeSize, weight: .regular).monospacedDigit())
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+
+    @ViewBuilder
+    private func miniCard(index: Int, period: WidgetPeriod?, highlight: Bool, height: CGFloat) -> some View {
+        let title = period?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let room  = period?.room.trimmingCharacters(in: .whitespacesAndNewlines)  ?? ""
+        let hasContent = !(title.isEmpty && room.isEmpty)
+
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(hasContent ? (highlight ? Color.accentColor : Color(.systemFill))
+                                 : Color(.tertiarySystemFill))
+
+            if hasContent {
+                VStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: WFont.titleSize, weight: .semibold))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)  // ほんの少しだけ縮小も許容
+                    Text(room.isEmpty ? " " : room)
+                        .font(.system(size: WFont.roomSize, weight: .medium).monospacedDigit())
+                        .lineLimit(1)
+                }
+                .foregroundStyle(highlight ? .white : .primary)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
+        }
+    }
+
+    private func isNowSlot(_ index: Int) -> Bool {
+        let slot = PeriodTime.slots[index - 1]
+        let cal = Calendar.current
+        let now = Date()
+        func t(_ s: String) -> Date {
+            var c = cal.dateComponents([.year,.month,.day], from: now)
+            let p = s.split(separator: ":").map { Int($0) ?? 0 }
+            c.hour = p[0]; c.minute = p[1]
+            return cal.date(from: c)!
+        }
+        return (t(slot.start)...t(slot.end)).contains(now)
+    }
+
+
     // MARK: - Large (詳細リスト)
     // === Large（詳細リスト）: 画面内に確実に収める版 ===
     @ViewBuilder

@@ -251,6 +251,10 @@ final class timetable: UIViewController,
     private var colGuides: [UILayoutGuide] = []
     private var rowGuides: [UILayoutGuide] = []
     private(set) var slotButtons: [UIButton] = []
+    
+    private var dayHeaderViews: [UILabel] = []
+    private var periodHeaderViews: [UIView] = []
+    private var nowTimer: Timer?
 
     // ===== Data / Settings =====
     private var registeredCourses: [Int: Course] = [:]
@@ -501,6 +505,19 @@ final class timetable: UIViewController,
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
+        startNowTicker()                     // 追加
+        updateNowHighlight()                 // 追加（すぐ反映）
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        nowTimer?.invalidate()               // 追加
+    }
+
+    private func startNowTicker() {
+        nowTimer?.invalidate()
+        nowTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.updateNowHighlight()
+        }
     }
 
     // MARK: - Register from detail (既存通知)
@@ -767,24 +784,108 @@ final class timetable: UIViewController,
 
     // MARK: - Headers / Time markers
     private func placeHeaders() {
+        dayHeaderViews.removeAll()
+        periodHeaderViews.removeAll()
+
         for i in 0..<dayLabels.count {
             let l = headerLabel(dayLabels[i])
             gridContainerView.addSubview(l)
             NSLayoutConstraint.activate([
-                l.centerXAnchor.constraint(equalTo: colGuides[i+1].centerXAnchor),
-                l.centerYAnchor.constraint(equalTo: rowGuides[0].centerYAnchor)
+                l.leadingAnchor.constraint(equalTo: colGuides[i+1].leadingAnchor),
+                l.trailingAnchor.constraint(equalTo: colGuides[i+1].trailingAnchor),
+                l.topAnchor.constraint(equalTo: rowGuides[0].topAnchor),
+                l.bottomAnchor.constraint(equalTo: rowGuides[0].bottomAnchor)
             ])
+            l.layer.cornerRadius = 6
+            l.clipsToBounds = true
+            dayHeaderViews.append(l)            // 追加
         }
         for r in 0..<periodLabels.count {
             let marker = makeTimeMarker(for: r + 1)
             gridContainerView.addSubview(marker)
             NSLayoutConstraint.activate([
-                marker.centerXAnchor.constraint(equalTo: colGuides[0].centerXAnchor),
-                marker.widthAnchor.constraint(equalToConstant: timeColWidth),
-                marker.centerYAnchor.constraint(equalTo: rowGuides[r+1].centerYAnchor)
+                marker.leadingAnchor.constraint(equalTo: colGuides[0].leadingAnchor),
+                marker.trailingAnchor.constraint(equalTo: colGuides[0].trailingAnchor),
+                marker.topAnchor.constraint(equalTo: rowGuides[r+1].topAnchor),
+                marker.bottomAnchor.constraint(equalTo: rowGuides[r+1].bottomAnchor)
             ])
+
+            // 行ヘッダーも角丸にしたい場合（任意）
+            marker.layer.cornerRadius = 6
+            marker.clipsToBounds = true
+            periodHeaderViews.append(marker)    // 追加
+        }
+
+        // 見出し作り直しのたびに最新状態へ
+        updateNowHighlight()
+    }
+    
+    // どこか private メソッド群の末尾に追加
+    private func currentDayAndPeriod() -> (day: Int?, period: Int?) {
+        let cal = Calendar.current
+        let now = Date()
+
+        // 曜日（1=Sun...7=Sat）→ 0=月..6=日 に変換してから使用
+        let wk  = cal.component(.weekday, from: now)
+        let dayIdx = (wk + 5) % 7
+        let day: Int? = (0..<dayLabels.count).contains(dayIdx) ? dayIdx : nil
+
+        // 文字列 "9:00" → 今日の日付の Date にする
+        func time(_ s: String) -> Date? {
+            let comps = s.split(separator: ":")
+            guard comps.count == 2,
+                  let h = Int(comps[0]), let m = Int(comps[1]) else { return nil }
+            var c = cal.dateComponents([.year,.month,.day], from: now)
+            c.hour = h; c.minute = m
+            return cal.date(from: c)
+        }
+
+        var hit: Int? = nil
+        for (i, pair) in timePairs.enumerated() {
+            if let s = time(pair.start), let e = time(pair.end) {
+                if (s...e).contains(now) { hit = i + 1; break }
+            }
+        }
+        let period: Int? = {
+            guard let p = hit, (1...periodLabels.count).contains(p) else { return nil }
+            return p
+        }()
+
+        return (day, period)
+    }
+
+    private func updateNowHighlight() {
+        // ベースをクリア
+        for l in dayHeaderViews {
+            l.backgroundColor = .clear
+            l.textColor = .label
+            l.layer.cornerRadius = 0
+            l.clipsToBounds = false
+        }
+        for v in periodHeaderViews {
+            v.backgroundColor = .clear
+            v.layer.cornerRadius = 0
+            v.clipsToBounds = false
+        }
+
+        let hiBG = UIColor.systemBlue.withAlphaComponent(0.15)
+
+        let nowPos = currentDayAndPeriod()
+        if let d = nowPos.day, dayHeaderViews.indices.contains(d) {
+            let l = dayHeaderViews[d]
+            l.backgroundColor = hiBG
+            l.layer.cornerRadius = 6
+            l.clipsToBounds = true
+        }
+        if let p = nowPos.period, periodHeaderViews.indices.contains(p-1) {
+            let v = periodHeaderViews[p-1]
+            v.backgroundColor = hiBG
+            v.layer.cornerRadius = 6
+            v.clipsToBounds = true
         }
     }
+
+
     private func headerLabel(_ text: String) -> UILabel {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
@@ -793,18 +894,46 @@ final class timetable: UIViewController,
         l.textAlignment = .center
         return l
     }
+
     private func makeTimeMarker(for period: Int) -> UIView {
-        let v = UIStackView()
-        v.axis = .vertical; v.alignment = .center; v.spacing = 2
+        let v = UIView()
         v.translatesAutoresizingMaskIntoConstraints = false
-        let top = UILabel(); top.font = .systemFont(ofSize: 11); top.textColor = .secondaryLabel; top.textAlignment = .center
-        let mid = UILabel(); mid.font = .systemFont(ofSize: 16, weight: .semibold); mid.textAlignment = .center; mid.text = "\(period)"
-        let bottom = UILabel(); bottom.font = .systemFont(ofSize: 11); bottom.textColor = .secondaryLabel; bottom.textAlignment = .center
-        if period-1 < timePairs.count {
-            top.text    = timePairs[period-1].start
-            bottom.text = timePairs[period-1].end
+
+        let start = UILabel()
+        start.font = .systemFont(ofSize: 11)
+        start.textColor = .secondaryLabel
+        start.textAlignment = .center
+
+        let mid = UILabel()
+        mid.font = .systemFont(ofSize: 16, weight: .semibold)
+        mid.textAlignment = .center
+        mid.text = "\(period)"
+
+        let end = UILabel()
+        end.font = .systemFont(ofSize: 11)
+        end.textColor = .secondaryLabel
+        end.textAlignment = .center
+
+        if period - 1 < timePairs.count {
+            start.text = timePairs[period - 1].start
+            end.text   = timePairs[period - 1].end
         }
-        [top, mid, bottom].forEach { v.addArrangedSubview($0) }
+
+        [start, mid, end].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            v.addSubview($0)
+            NSLayoutConstraint.activate([
+                $0.leadingAnchor.constraint(equalTo: v.leadingAnchor),
+                $0.trailingAnchor.constraint(equalTo: v.trailingAnchor)
+            ])
+        }
+
+        NSLayoutConstraint.activate([
+            start.topAnchor.constraint(equalTo: v.topAnchor, constant: 2),
+            mid.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            end.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -2)
+        ])
+
         return v
     }
 
@@ -897,14 +1026,14 @@ final class timetable: UIViewController,
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController {
             if #available(iOS 16.0, *) {
-                let id = UISheetPresentationController.Detent.Identifier("ninetyTwo")
-                sheet.detents = [.custom(identifier: id){ $0.maximumDetentValue * 0.92 }, .large()]
-                sheet.selectedDetentIdentifier = id
+                // ① 最初から large で開く
+                sheet.detents = [.large()]
+                sheet.selectedDetentIdentifier = .large
             } else {
-                sheet.detents = [.large()]; sheet.selectedDetentIdentifier = .large
+                // iOS 15 では large のみを指定
+                sheet.detents = [.large()]
             }
             sheet.prefersGrabberVisible = true
-            sheet.preferredCornerRadius = 16
         }
         present(vc, animated: true)
     }

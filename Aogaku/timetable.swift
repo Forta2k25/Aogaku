@@ -1068,7 +1068,7 @@ final class timetable: UIViewController,
     // MARK: - Header actions
     @objc private func tapLeft() {
         let thisYear = Calendar.current.component(.year, from: Date())
-        let years = Array(((thisYear - 4)...(thisYear + 1)).reversed())
+        let years = Array((thisYear - 4)...(thisYear + 1))
         let vc = TermPickerViewController(years: years, selected: currentTerm) { [weak self] picked in
             guard let self = self, let picked = picked else { return }
             self.changeTerm(to: picked)

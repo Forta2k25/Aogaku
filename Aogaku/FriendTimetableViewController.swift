@@ -1,7 +1,7 @@
 import UIKit
 import FirebaseFirestore
 
-/// 友だちの時間割（閲覧専用）
+/// 友だちの時間割（学期トグル／モーダル詳細／色反映）
 final class FriendTimetableViewController: UIViewController {
 
     // MARK: - Public
@@ -15,30 +15,41 @@ final class FriendTimetableViewController: UIViewController {
     // MARK: - Props
     private let friendUid: String
     private let friendName: String?
-    private var courses: [GridCell] = []          // 取得したコマ
-    // 土曜は「ある時だけ出す」ため、既定は平日(= index 0...4)にしておく
-    private var maxDay: Int = 4                   // 0:月 … 4:金（5=土があれば拡張）
-    private var maxPeriod: Int = 5                // 1..N（6,7限はデータがある時だけ拡張）
+
+    // 学年は「3月から次年度」に切り替える（例：2026/03〜は 2026）
+    private var year: Int = FriendTimetableViewController.academicYear(for: Date())
+    private var semester: FriendSemester = .latest()   // 10月〜は後期
+
+    private var courses: [GridCell] = []
+    private var maxDay: Int = 4
+    private var maxPeriod: Int = 5
+
+    private var cellMap: [Int: GridCell] = [:]
+    private var nextTag: Int = 1000
 
     // MARK: - UI
     private let scroll = UIScrollView()
     private let content = UIStackView()
     private let spinner = UIActivityIndicatorView(style: .large)
-    private let header = UILabel()
-    
-    // MARK: - Layout tuning
+
+    // スリムなピル型トグル
+    private let termSegment = UISegmentedControl(items: [FriendSemester.first.jp, FriendSemester.second.jp])
+
+    // Storyboard のシラバス詳細を起動するための ID
+    private let detailSceneID = "SyllabusDetailViewController"
+
+    // MARK: - Layout
     private enum Layout {
-        static let afterWeekHeaderSpacing: CGFloat = 20   // 曜日→1限の間
-        static let leftColumnWidth: CGFloat = 30      // ← 左の1〜5を極細に
-        static let minBadgeHeight: CGFloat = 28
-        static let interItemSpacing: CGFloat = 4      // ← マス間の横・縦の隙間を最小に
-        static let rowSpacing: CGFloat = 4            // ← 行と行の間
-        static let contentMargins = UIEdgeInsets(top: 4, left: 0, bottom: 16, right: 8)
-        static let headerFontSize: CGFloat = 12
-        static let periodTimeGap: CGFloat = 2   // 時限番号と時間ラベルの間隔
-
+        static let afterWeekHeaderSpacing: CGFloat = 18
+        static let leftColumnWidth: CGFloat = 30
+        static let minBadgeHeight: CGFloat = 4
+        static let interItemSpacing: CGFloat = 6
+        static let rowSpacing: CGFloat = 6
+        static let contentMargins = UIEdgeInsets(top: 8, left: 8, bottom: 16, right: 8)
+        static let periodTimeGap: CGFloat = 2
+        static let sectionSpacing: CGFloat = 12
+        static let courseMinHeight: CGFloat = 116
     }
-
 
     // MARK: - Lifecycle
     override func viewDidLoad() {
@@ -46,25 +57,30 @@ final class FriendTimetableViewController: UIViewController {
         view.backgroundColor = .systemBackground
         title = friendName.map { "\($0) の時間割" } ?? "友だちの時間割"
 
+        // 学期の保存値（友だち＋年度）を復元
+        let key = Self.prefKey(uid: friendUid, year: year)
+        if let saved = UserDefaults.standard.string(forKey: key) {
+            semester = (saved == FriendSemester.second.rawValue) ? .second : .first
+        }
+
         setupUI()
+        termSegment.selectedSegmentIndex = (semester == .first) ? 0 : 1
+
         spinner.startAnimating()
-        loadLatestTermAndBuild()
+        loadAndBuild(for: year, semester: semester)
     }
 
-    // MARK: - UI build
+    // MARK: - UI
     private func setupUI() {
-        header.text = ""
-        header.font = .systemFont(ofSize: Layout.headerFontSize, weight: .medium)
-        header.textColor = .secondaryLabel
-        header.textAlignment = .center
-
+        // スクロール & スタック
         content.axis = .vertical
+        content.alignment = .fill
         content.spacing = Layout.rowSpacing
         content.layoutMargins = Layout.contentMargins
         content.isLayoutMarginsRelativeArrangement = true
 
-        scroll.addSubview(content)
         view.addSubview(scroll)
+        scroll.addSubview(content)
         view.addSubview(spinner)
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -87,40 +103,59 @@ final class FriendTimetableViewController: UIViewController {
             spinner.centerYAnchor.constraint(equalTo: view.centerYAnchor)
         ])
 
-        content.addArrangedSubview(header)
-        // ヘッダ直下の余白もキツめに
-        content.setCustomSpacing(4, after: header)
+        // スリムなピル型セグメント（幅制約は貼らない＝スタックが横いっぱいにしてくれる）
+        termSegment.selectedSegmentTintColor = .label.withAlphaComponent(0.08)
+        termSegment.backgroundColor = .secondarySystemBackground
+        termSegment.setTitleTextAttributes([.foregroundColor: UIColor.label,
+                                            .font: UIFont.systemFont(ofSize: 13, weight: .semibold)], for: .normal)
+        termSegment.setTitleTextAttributes([.foregroundColor: UIColor.label,
+                                            .font: UIFont.systemFont(ofSize: 13, weight: .bold)], for: .selected)
+        termSegment.addTarget(self, action: #selector(didChangeSemester(_:)), for: .valueChanged)
+
+        let segContainer = UIView()
+        segContainer.translatesAutoresizingMaskIntoConstraints = false
+        segContainer.layoutMargins = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+        segContainer.addSubview(termSegment)
+        termSegment.translatesAutoresizingMaskIntoConstraints = false
+
+        // 先にスタックへ追加 → その後で termSegment の制約を有効化（共通祖先の問題を避ける）
+        content.addArrangedSubview(segContainer)
+        NSLayoutConstraint.activate([
+            termSegment.leadingAnchor.constraint(equalTo: segContainer.layoutMarginsGuide.leadingAnchor),
+            termSegment.trailingAnchor.constraint(equalTo: segContainer.layoutMarginsGuide.trailingAnchor),
+            termSegment.topAnchor.constraint(equalTo: segContainer.topAnchor),
+            termSegment.bottomAnchor.constraint(equalTo: segContainer.bottomAnchor),
+            termSegment.heightAnchor.constraint(equalToConstant: 30)
+        ])
+        termSegment.layer.cornerRadius = 15
+        termSegment.layer.masksToBounds = true
+
+        content.setCustomSpacing(Layout.sectionSpacing, after: segContainer)
     }
 
     private func buildGrid() {
-        // 既存をクリア（header は残す）
+        // 先頭（セグメント）以外をクリア
         content.arrangedSubviews.dropFirst().forEach { $0.removeFromSuperview() }
+        cellMap.removeAll(); nextTag = 1000
 
         let weekTitles = ["月","火","水","木","金","土"]
         let columns = min(maxDay + 1, weekTitles.count)
 
-        // 見出し行（曜日）
         let headerRow = makeWeekHeader(columns: columns, titles: weekTitles)
         content.addArrangedSubview(headerRow)
-
-        // ★ 曜日ラベルの直後だけ少し大きめの余白を入れる
         content.setCustomSpacing(Layout.afterWeekHeaderSpacing, after: headerRow)
 
-        // コマ行
         for p in 1...maxPeriod {
             content.addArrangedSubview(makeRow(period: p, columns: columns))
         }
     }
 
-
-    // 左端（コマ番号）を固定幅に、右側を等幅で並べる二段スタック
     private func makeWeekHeader(columns: Int, titles: [String]) -> UIView {
         let row = UIStackView()
         row.axis = .horizontal
         row.alignment = .fill
         row.spacing = Layout.interItemSpacing
 
-        // 左端は “幅だけあるダミー” で列位置を揃える
         let spacer = UIView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
         spacer.widthAnchor.constraint(equalToConstant: Layout.leftColumnWidth).isActive = true
@@ -128,7 +163,7 @@ final class FriendTimetableViewController: UIViewController {
 
         let cols = UIStackView()
         cols.axis = .horizontal
-        cols.alignment = .top         // ← 一番上に詰める
+        cols.alignment = .top
         cols.distribution = .fillEqually
         cols.spacing = Layout.interItemSpacing
 
@@ -138,12 +173,11 @@ final class FriendTimetableViewController: UIViewController {
             lbl.font = .systemFont(ofSize: 13, weight: .semibold)
             lbl.textAlignment = .center
             lbl.textColor = .secondaryLabel
-            // 上下の余白を極小化
             let wrapper = UIView()
             wrapper.addSubview(lbl)
             lbl.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                lbl.topAnchor.constraint(equalTo: wrapper.topAnchor, constant: 0),
+                lbl.topAnchor.constraint(equalTo: wrapper.topAnchor),
                 lbl.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor)
             ])
             cols.addArrangedSubview(wrapper)
@@ -153,64 +187,42 @@ final class FriendTimetableViewController: UIViewController {
         return row
     }
 
-
     private func makeRow(period: Int, columns: Int) -> UIView {
         let row = UIStackView()
         row.axis = .horizontal
         row.alignment = .fill
         row.spacing = Layout.interItemSpacing
 
-        // 左端：コマ番号（細く / 高さは“以上”）
         row.addArrangedSubview(makePeriodBadge(period: period))
 
         let cols = UIStackView()
         cols.axis = .horizontal
         cols.alignment = .fill
         cols.distribution = .fillEqually
-        cols.spacing = Layout.interItemSpacing   // ← セル間を狭く
+        cols.spacing = Layout.interItemSpacing
+
         for day in 0..<columns {
             let cellView = makeCourseCell()
             if let course = courses.first(where: { $0.day == day && $0.period == period }) {
                 apply(course: course, to: cellView)
+                let tag = nextTag; nextTag += 1
+                cellMap[tag] = course
+                cellView.tag = tag
+                let tap = UITapGestureRecognizer(target: self, action: #selector(didTapCell(_:)))
+                cellView.isUserInteractionEnabled = true
+                cellView.addGestureRecognizer(tap)
             }
             cols.addArrangedSubview(cellView)
         }
         row.addArrangedSubview(cols)
         return row
     }
-    
-    private func makeBadge(text: String, bg: UIColor,
-                           width: CGFloat = Layout.leftColumnWidth,
-                           minHeight: CGFloat = Layout.minBadgeHeight) -> UIView {
-        let v = UIView()
-        v.backgroundColor = bg
-        v.layer.cornerRadius = 8
 
-        let label = UILabel()
-        label.text = text
-        label.font = .systemFont(ofSize: 14, weight: .semibold)
-        label.textAlignment = .center
-        label.textColor = .secondaryLabel
-
-        v.addSubview(label)
-        v.translatesAutoresizingMaskIntoConstraints = false
-        label.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            v.widthAnchor.constraint(equalToConstant: width),
-            v.heightAnchor.constraint(greaterThanOrEqualToConstant: minHeight),
-            label.centerXAnchor.constraint(equalTo: v.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: v.centerYAnchor)
-        ])
-        label.setContentCompressionResistancePriority(.required, for: .vertical)
-        return v
-    }
-    
     private func makePeriodBadge(period: Int) -> UIView {
         let v = UIView()
         v.backgroundColor = .clear
         v.translatesAutoresizingMaskIntoConstraints = false
 
-        // 上時間
         let top = UILabel()
         top.text = periodTimes(period)?.start ?? ""
         top.font = .systemFont(ofSize: 11)
@@ -218,7 +230,6 @@ final class FriendTimetableViewController: UIViewController {
         top.textAlignment = .center
         top.translatesAutoresizingMaskIntoConstraints = false
 
-        // 中央の時限番号
         let mid = UILabel()
         mid.text = "\(period)"
         mid.font = .systemFont(ofSize: 18, weight: .bold)
@@ -227,7 +238,6 @@ final class FriendTimetableViewController: UIViewController {
         mid.setContentCompressionResistancePriority(.required, for: .vertical)
         mid.translatesAutoresizingMaskIntoConstraints = false
 
-        // 下時間
         let bottom = UILabel()
         bottom.text = periodTimes(period)?.end ?? ""
         bottom.font = .systemFont(ofSize: 11)
@@ -235,75 +245,62 @@ final class FriendTimetableViewController: UIViewController {
         bottom.textAlignment = .center
         bottom.translatesAutoresizingMaskIntoConstraints = false
 
-        v.addSubview(top)
-        v.addSubview(mid)
-        v.addSubview(bottom)
+        v.addSubview(top); v.addSubview(mid); v.addSubview(bottom)
 
         NSLayoutConstraint.activate([
-            // 列幅はそのまま
             v.widthAnchor.constraint(equalToConstant: Layout.leftColumnWidth),
             v.heightAnchor.constraint(greaterThanOrEqualToConstant: Layout.minBadgeHeight),
 
-            // 中央に時限番号
             mid.centerYAnchor.constraint(equalTo: v.centerYAnchor),
             mid.leadingAnchor.constraint(equalTo: v.leadingAnchor),
             mid.trailingAnchor.constraint(equalTo: v.trailingAnchor),
 
-            // 時間ラベルは「中央のすぐ上/下」に寄せる
             top.bottomAnchor.constraint(equalTo: mid.topAnchor, constant: -Layout.periodTimeGap),
             bottom.topAnchor.constraint(equalTo: mid.bottomAnchor, constant: Layout.periodTimeGap),
 
-            // 左右いっぱい使って表示切れを防ぐ
             top.leadingAnchor.constraint(equalTo: v.leadingAnchor),
             top.trailingAnchor.constraint(equalTo: v.trailingAnchor),
             bottom.leadingAnchor.constraint(equalTo: v.leadingAnchor),
             bottom.trailingAnchor.constraint(equalTo: v.trailingAnchor),
 
-            // 端との最小マージン（上下に貼り付きすぎないように弱め制約）
             top.topAnchor.constraint(greaterThanOrEqualTo: v.topAnchor, constant: 2),
             bottom.bottomAnchor.constraint(lessThanOrEqualTo: v.bottomAnchor, constant: -2),
         ])
-
-        // つぶれ防止
         top.setContentCompressionResistancePriority(.required, for: .vertical)
         bottom.setContentCompressionResistancePriority(.required, for: .vertical)
-
         return v
     }
-
-
 
     private func makeCourseCell() -> UIView {
         let container = UIView()
         container.backgroundColor = .secondarySystemBackground
-        container.layer.cornerRadius = 6
+        container.layer.cornerRadius = 8
         container.layer.borderWidth = 0.5
         container.layer.borderColor = UIColor.separator.cgColor
 
         let title = UILabel()
         title.numberOfLines = 3
         title.font = .systemFont(ofSize: 12, weight: .semibold)
-        title.textColor = .label
+        title.textColor = .white
         title.textAlignment = .center
         title.tag = 11
 
         let sub = UILabel()
         sub.numberOfLines = 2
         sub.font = .systemFont(ofSize: 12)
-        sub.textColor = .secondaryLabel
+        sub.textColor = .white
         sub.textAlignment = .center
         sub.tag = 12
 
         let stack = UIStackView(arrangedSubviews: [title, sub])
         stack.axis = .vertical
-        stack.spacing = 2
+        stack.spacing = 4
 
         container.addSubview(stack)
         container.translatesAutoresizingMaskIntoConstraints = false
         stack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            // 最低高さをしっかり確保
-            container.heightAnchor.constraint(greaterThanOrEqualToConstant: 116),
+            container.heightAnchor.constraint(greaterThanOrEqualToConstant: Layout.courseMinHeight),
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
             stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
@@ -311,8 +308,7 @@ final class FriendTimetableViewController: UIViewController {
         ])
         return container
     }
-    
-    // MARK: - Period time table（必要に応じて調整可）
+
     private func periodTimes(_ p: Int) -> (start: String, end: String)? {
         let map: [Int: (String, String)] = [
             1: ("9:00",  "10:30"),
@@ -326,145 +322,255 @@ final class FriendTimetableViewController: UIViewController {
         return map[p]
     }
 
-
     private func apply(course: GridCell, to view: UIView) {
         (view.viewWithTag(11) as? UILabel)?.text = course.title
-        // 要望に合わせて「教室番号のみ」をサブに表示（無ければ空）
         (view.viewWithTag(12) as? UILabel)?.text = course.room ?? ""
+
+        // colorkey → 背景色（なければ淡い緑）
+        let bg = Self.color(for: course.colorKey)
+        view.backgroundColor = bg
+        view.layer.borderWidth = 0                       // 枠線は消して発色を優先
+        // 文字は常に白
+        (view.viewWithTag(11) as? UILabel)?.textColor = .white
+        (view.viewWithTag(12) as? UILabel)?.textColor = .white
     }
 
+    // MARK: - Actions
+    @objc private func didChangeSemester(_ sender: UISegmentedControl) {
+        semester = (sender.selectedSegmentIndex == 0) ? .first : .second
 
-    // MARK: - Firestore load（最新学期 → ドキュメント名決定）
-    private func loadLatestTermAndBuild() {
-        let term = Term.latest()
-        // CHANGE: Firestore の命名に合わせて "年_前期/後期" のピリオド区切りにする
-        // 例: assignedCourses.2025_前期
-        let docId = "assignedCourses.\(term.year)_\(term.semesterRaw)"
+        // 学期を保存（友だち＋年度）
+        UserDefaults.standard.set(semester.rawValue, forKey: Self.prefKey(uid: friendUid, year: year))
 
-        Firestore.firestore()
-            .collection("users")
-            .document(friendUid)
-            .collection("timetable")
-            .document(docId)
-            .getDocument { [weak self] snap, error in
-                guard let self else { return }
-                self.spinner.stopAnimating()
+        spinner.startAnimating()
+        loadAndBuild(for: year, semester: semester)
+    }
 
-                guard error == nil, let data = snap?.data() else {
-                    self.header.text = "時間割が見つかりません（\(docId)）"
-                    self.buildGrid()
-                    return
-                }
-                // ── データ取り出し ────────────────────────────────
-                // 期待: cells = { "d0p1": {...}, "d4p4": {...}, ... }
-                // ほか: ドキュメント直下に "cells.d0p1": {...} の形で平坦化されている可能性もある
-                var parsed: [GridCell] = []
+    // MARK: - タップ → 詳細（モーダル）
+    @objc private func didTapCell(_ gr: UITapGestureRecognizer) {
+        guard let v = gr.view, let cell = cellMap[v.tag] else { return }
 
-                // 1) まずは通常のネスト { cells: { d0p1: {...} } } を試す
-                if let cells = data["cells"] as? [String: Any] {
-                    for (k, v) in cells {
-                        guard let dict = v as? [String: Any] else { continue }
-                        if let gc = gridCell(fromKey: k, value: dict) {
-                            parsed.append(gc)
-                        } else if let day = k.firstMatch(#"d(\d+)"#).flatMap({ Int($0[1]) }) {
-                            // ネスト: "d0": { "p1": {...} }
-                            for (pk, pv) in dict {
-                                if let pd = pk.firstMatch(#"p(\d+)"#).flatMap({ Int($0[1]) }),
-                                   let inner = pv as? [String: Any],
-                                   let title = (inner["title"] as? String), !title.isEmpty {
-                                    parsed.append(GridCell(day: day, period: pd,
-                                                           title: title,
-                                                           teacher: inner["teacher"] as? String,
-                                                           room: inner["room"] as? String))
-                                }
+        let sb = UIStoryboard(name: "Main", bundle: nil)
+        guard let vc = sb.instantiateViewController(withIdentifier: detailSceneID) as? SyllabusDetailViewController else { return }
+
+        vc.initialTitle = cell.title
+        vc.initialTeacher = cell.teacher
+        vc.targetDay = cell.day
+        vc.targetPeriod = cell.period
+        vc.initialURLString = cell.syllabusURL           // Firestore の URL
+        vc.docID = cell.docID
+        vc.initialRegNumber = cell.regNumber             // Firestore の id
+
+        let nav = UINavigationController(rootViewController: vc)
+        nav.modalPresentationStyle = .pageSheet
+        if let sheet = nav.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(nav, animated: true)
+    }
+
+    // MARK: - Firestore 読み込み
+    private func loadAndBuild(for year: Int, semester: FriendSemester) {
+        // 2 形式をフォールバックで試す
+        let idA = "assignedCourses.\(year)_\(semester.jp)"
+        let idB = "assignedCourses.\(year).\(semester.jp)"
+
+        func handle(_ data: [String: Any]?) {
+            self.spinner.stopAnimating()
+            guard let data else {
+                self.courses = []; self.maxDay = 4; self.maxPeriod = 5
+                self.buildGrid(); return
+            }
+
+            var parsed: [GridCell] = []
+
+            // 1) ネスト形式 { cells: { d0: { p1: {...} } } }
+            if let cells = data["cells"] as? [String: Any] {
+                for (k, v) in cells {
+                    if let dict = v as? [String: Any],
+                       let gc = self.gridCell(fromKey: k, value: dict) {
+                        parsed.append(gc)
+                    } else if let dict = v as? [String: Any],
+                              let day = k.firstMatch(#"d(\d+)"#).flatMap({ Int($0[1]) }) {
+                        for (pk, pv) in dict {
+                            if let pd = pk.firstMatch(#"p(\d+)"#).flatMap({ Int($0[1]) }),
+                               let inner = pv as? [String: Any],
+                               let title = inner["title"] as? String, !title.isEmpty {
+                                parsed.append(
+                                    GridCell(
+                                        day: day,
+                                        period: pd,
+                                        title: title,
+                                        teacher: inner["teacher"] as? String,
+                                        room: inner["room"] as? String,
+                                        docID: (inner["docID"] as? String) ?? (inner["id"] as? String),
+                                        syllabusURL: (inner["syllabusURL"] as? String) ?? (inner["url"] as? String),
+                                        regNumber: inner["id"] as? String,
+                                        colorKey: inner["colorKey"] as? String
+                                    )
+                                )
                             }
                         }
                     }
                 }
+            }
 
-                // 2) フォールバック：トップレベルが "cells.d0p1" 形式の場合も拾う
-                if parsed.isEmpty {
-                    for (rawKey, value) in data {
-                        guard rawKey.hasPrefix("cells."),
-                              let dict = value as? [String: Any] else { continue }
-                        // "cells.d0p1" -> "d0p1" を取り出して通常のキーとして解釈
-                        let subkey = String(rawKey.dropFirst("cells.".count))
-                        if let gc = gridCell(fromKey: subkey, value: dict) {
-                            parsed.append(gc)
-                        }
+            // 2) フラット形式 "cells.d0p1": {..}
+            if parsed.isEmpty {
+                for (rawKey, value) in data {
+                    guard rawKey.hasPrefix("cells."),
+                          let dict = value as? [String: Any] else { continue }
+                    let subkey = String(rawKey.dropFirst("cells.".count))
+                    if let gc = self.gridCell(fromKey: subkey, value: dict) {
+                        parsed.append(gc)
                     }
                 }
-
-                self.courses = parsed
-
-                // 列・行の出し分け（データがある時だけ拡張）
-                if let maxD = self.courses.map(\.day).max() { self.maxDay = max(4, maxD) } else { self.maxDay = 4 }
-                if let maxP = self.courses.map(\.period).max() { self.maxPeriod = max(5, maxP) } else { self.maxPeriod = 5 }
-
-                self.header.text = "\(term.year)年\(term.semesterJP) を表示中"
-                self.buildGrid()
-
             }
+
+            self.courses = parsed
+            if let maxD = self.courses.map(\.day).max() { self.maxDay = max(4, maxD) } else { self.maxDay = 4 }
+            if let maxP = self.courses.map(\.period).max() { self.maxPeriod = max(5, maxP) } else { self.maxPeriod = 5 }
+
+            self.buildGrid()
+        }
+
+        let ref = Firestore.firestore()
+            .collection("users")
+            .document(friendUid)
+            .collection("timetable")
+
+        // まず A、ダメなら B
+        ref.document(idA).getDocument { [weak self] snap, err in
+            guard let self else { return }
+            if err == nil, let d = snap?.data() { handle(d); return }
+            ref.document(idB).getDocument { [weak self] snap2, _ in
+                guard let self else { return }
+                handle(snap2?.data())
+            }
+        }
     }
 
     /// key 文字列や値の day/period を見て GridCell を復元
     private func gridCell(fromKey key: String, value: [String: Any]) -> GridCell? {
-        // ① key に dN / pN が両方ある（d..p / p..d の両方を許容）
+        // d..p / p..d
         if let cap = key.firstMatch(#"d(\d+).*p(\d+)|p(\d+).*d(\d+)"#) {
             let d = Int(cap[1]) ?? Int(cap[4]) ?? 0
             let p = Int(cap[2]) ?? Int(cap[3]) ?? 1
             let title = (value["title"] as? String) ?? ""
             if title.isEmpty { return nil }
-            return GridCell(day: d,
-                            period: p,
-                            title: title,
-                            teacher: value["teacher"] as? String,
-                            room: value["room"] as? String)
+            return GridCell(
+                day: d,
+                period: p,
+                title: title,
+                teacher: value["teacher"] as? String,
+                room: value["room"] as? String,
+                docID: (value["docID"] as? String) ?? (value["id"] as? String),
+                syllabusURL: (value["syllabusURL"] as? String) ?? (value["url"] as? String),
+                regNumber: value["id"] as? String,
+                colorKey: value["colorKey"] as? String
+            )
         }
-        // ② 値の中に day / period がある
-        let possibleDayKeys = ["day","weekday","d","w"]
-        let possiblePeriodKeys = ["period","p"]
-        let day = possibleDayKeys.compactMap { value[$0] as? Int }.first
-        let per = possiblePeriodKeys.compactMap { value[$0] as? Int }.first
+        // 値に day / period がある
+        let day = (value["day"] as? Int) ?? (value["weekday"] as? Int) ?? (value["d"] as? Int) ?? (value["w"] as? Int)
+        let per = (value["period"] as? Int) ?? (value["p"] as? Int)
         if let d = day, let p = per {
             let title = (value["title"] as? String) ?? ""
             if title.isEmpty { return nil }
-            return GridCell(day: d,
-                            period: p,
-                            title: title,
-                            teacher: value["teacher"] as? String,
-                            room: value["room"] as? String)
+            return GridCell(
+                day: d,
+                period: p,
+                title: title,
+                teacher: value["teacher"] as? String,
+                room: value["room"] as? String,
+                docID: (value["docID"] as? String) ?? (value["id"] as? String),
+                syllabusURL: (value["syllabusURL"] as? String) ?? (value["url"] as? String),
+                regNumber: value["id"] as? String,
+                colorKey: value["colorKey"] as? String
+            )
         }
         return nil
+    }
+
+    // MARK: - Helpers
+
+    /// 3月から次年度として扱う学年
+    private static func academicYear(for date: Date) -> Int {
+        let cal = Calendar(identifier: .gregorian)
+        let y = cal.component(.year, from: date)
+        let m = cal.component(.month, from: date)
+        return (m >= 3) ? y : (y - 1)
+    }
+
+    // color(for:)
+    private static func color(for key: String?) -> UIColor {
+        guard let k = key?.lowercased() else {
+           return UIColor.systemGreen.withAlphaComponent(0.70)   // デフォルトも濃く
+        }
+        switch k {
+       case "blue":   return UIColor.systemBlue.withAlphaComponent(0.80)
+       case "green":  return UIColor.systemGreen.withAlphaComponent(0.80)
+       case "teal":   return UIColor.systemTeal.withAlphaComponent(0.80)
+       case "mint":   return UIColor.systemMint.withAlphaComponent(0.80)
+       case "indigo": return UIColor.systemIndigo.withAlphaComponent(0.80)
+       case "orange": return UIColor.systemOrange.withAlphaComponent(0.85)
+       case "red":    return UIColor.systemRed.withAlphaComponent(0.80)
+       case "pink":   return UIColor.systemPink.withAlphaComponent(0.80)
+       case "purple": return UIColor.systemPurple.withAlphaComponent(0.80)
+       case "yellow": return UIColor.systemYellow.withAlphaComponent(0.85)
+       case "brown":  return UIColor.brown.withAlphaComponent(0.80)
+       case "gray", "grey": return UIColor.systemGray.withAlphaComponent(0.80)
+       default:       return UIColor.systemGreen.withAlphaComponent(0.70)
+        }
+    }
+
+
+    /// 学期保存キー（友だち＋年度）
+    private static func prefKey(uid: String, year: Int) -> String {
+        "friendTerm.\(uid).\(year)"
     }
 }
 
 // MARK: - Models / Helpers
 private struct GridCell {
-    let day: Int      // 0:月 …
-    let period: Int   // 1..N
+    let day: Int
+    let period: Int
     let title: String
     let teacher: String?
     let room: String?
-}
+    let docID: String?
+    let syllabusURL: String?
+    let regNumber: String?
+    let colorKey: String?
 
-private struct Term {
-    let year: Int
-    /// "前期" or "後期"
-    let semesterRaw: String
-    var semesterJP: String { semesterRaw }
-
-    /// 10月〜翌3月 = 後期 / それ以外 = 前期
-    static func latest(date: Date = Date()) -> Term {
-        let cal = Calendar(identifier: .gregorian)
-        let y = cal.component(.year, from: date)
-        let m = cal.component(.month, from: date)
-        return (m >= 10) ? Term(year: y, semesterRaw: "後期")
-                         : Term(year: y, semesterRaw: "前期")
+    init(day: Int, period: Int, title: String,
+         teacher: String?, room: String?,
+         docID: String?, syllabusURL: String? = nil,
+         regNumber: String? = nil, colorKey: String? = nil) {
+        self.day = day
+        self.period = period
+        self.title = title
+        self.teacher = teacher
+        self.room = room
+        self.docID = docID
+        self.syllabusURL = syllabusURL
+        self.regNumber = regNumber
+        self.colorKey = colorKey
     }
 }
 
-// 正規表現 1st マッチのキャプチャ配列を返す
+/// 他所の `Semester` と衝突しない固有名
+private enum FriendSemester: String, Equatable {
+    case first, second
+    var jp: String { self == .first ? "前期" : "後期" }
+    static func latest(date: Date = Date()) -> FriendSemester {
+        // 10月〜 は後期、それ以外は前期（表示開始の目安）
+        let m = Calendar(identifier: .gregorian).component(.month, from: date)
+        return (m >= 10) ? .second : .first
+    }
+}
+
+// 正規表現 1st マッチのキャプチャ配列
 private extension String {
     func firstMatch(_ pattern: String) -> [String]? {
         guard let r = try? NSRegularExpression(pattern: pattern) else { return nil }

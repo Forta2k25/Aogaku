@@ -11,6 +11,9 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     var initialTitle: String?
     var initialTeacher: String?
     var initialCredit: String?
+    var initialURLString: String?   // ← 追加: 直接開くURL（友だち時間割から渡す）
+    var initialRegNumber: String?
+
 
     // MARK: - Outlets（Storyboard接続）
     @IBOutlet weak var titleTextView: UITextView?
@@ -44,7 +47,13 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // タイトルは“動かない”設定（上下インセット固定）
+        // 1) 先にUIを作る（ここで webView を必ず作成）
+        setupButtonsAppearance()
+        setupWebView()                 // ← 最初に呼ぶ
+        refreshButtons()
+        reanchorHeaderRow()
+
+        // 2) タイトルなどの初期表示
         titleTextView?.isEditable = false
         titleTextView?.isSelectable = false
         titleTextView?.isScrollEnabled = false
@@ -56,26 +65,42 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         titleTextView?.textContainer.lineFragmentPadding = 0
         titleTextView?.textContainerInset = UIEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
         titleTextView?.text = (initialTitle?.isEmpty == false) ? initialTitle! : "科目名"
-
         teacherLabel?.text = initialTeacher ?? ""
+        
+        // 既存の初期化群の近くに
+        if let code = initialRegNumber, !code.isEmpty {
+            codeLabel?.text = code
+        } else if let id = docID, !id.isEmpty {
+            // 念のため docID をフォールバック
+            codeLabel?.text = id
+        }
+
         if let c = initialCredit, !c.isEmpty { creditLabel?.text = "\(c)単位" }
 
-        setupButtonsAppearance()
-        setupWebView()
-        refreshButtons()
-
-        // タイトル直下にヘッダー（登録番号/ボタン）を揃える
-        reanchorHeaderRow()
-
-        // データ取得
-        if let id = docID, !id.isEmpty {
+        // 3) データ表示（URL 直指定があればそれを即表示、なければ Firestore）
+        if let s = initialURLString?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let url = URL(string: s), !s.isEmpty {
+            webView.isHidden = false
+            webView.load(URLRequest(url: url))
+        } else if let id = docID, !id.isEmpty {
             fetchDetail(docID: id)
         } else {
+            // どちらもない場合は自動で閉じる（既存の挙動を踏襲）
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 self?.dismiss(animated: true)
             }
         }
+
+        // 4) モーダルで開かれたときの閉じるボタン
+        if presentingViewController != nil,
+           navigationController?.viewControllers.first === self {
+            navigationItem.leftBarButtonItem = UIBarButtonItem(
+                systemItem: .close,
+                primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
+            )
+        }
     }
+
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)

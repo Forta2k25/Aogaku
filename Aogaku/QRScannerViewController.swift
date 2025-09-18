@@ -4,6 +4,7 @@ import Photos
 import PhotosUI
 import Vision
 import FirebaseAuth
+import FirebaseFirestore
 
 final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate, PHPickerViewControllerDelegate {
 
@@ -106,7 +107,6 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
 
         NSLayoutConstraint.activate([
             myQRButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            // 下に詰まりすぎないように上げる
             myQRButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -96),
             myQRButton.heightAnchor.constraint(equalToConstant: 44),
             myQRButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
@@ -122,7 +122,7 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
         ])
     }
 
-    // サムネを最新画像で更新（権限不要の PHPicker とは別経路だが、未許可なら黙ってスキップ）
+    // サムネを最新画像で更新
     private func updateLibraryThumbnailIfPossible() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if status == .notDetermined {
@@ -189,13 +189,22 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
         }
     }
 
+    // 自分自身の追加禁止チェックを含むハンドラ
     private func handle(payload: String) {
         guard let id = Self.extractID(from: payload) else {
             presentAlert(title: "QRを解析できません", message: payload)
             session.startRunning()
             return
         }
-        confirmAndSend(toID: id)
+        isSelfID(id) { [weak self] isSelf in
+            guard let self = self else { return }
+            if isSelf {
+                self.presentAlert(title: "追加できません", message: "自分自身を追加することはできません。")
+                self.session.startRunning()
+            } else {
+                self.confirmAndSend(toID: id)
+            }
+        }
     }
 
     // 「@id」または「scheme://...?id=xxx」または生の id を受け付ける
@@ -207,6 +216,16 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
                 .queryItems?.first(where: {$0.name == "id"})?.value { return id }
         let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "._-"))
         return trimmed.rangeOfCharacter(from: allowed.inverted) == nil ? trimmed : nil
+    }
+
+    // 自分自身かどうか（uid または users/{uid}.id と一致なら true）
+    private func isSelfID(_ id: String, completion: @escaping (Bool) -> Void) {
+        guard let uid = Auth.auth().currentUser?.uid else { completion(false); return }
+        if id == uid { completion(true); return }
+        Firestore.firestore().collection("users").document(uid).getDocument { snap, _ in
+            let myIdString = (snap?.data()?["id"] as? String) ?? ""
+            completion(!myIdString.isEmpty && id == myIdString)
+        }
     }
 
     private func confirmAndSend(toID id: String) {
@@ -224,6 +243,12 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
                 case .success(let users):
                     guard let target = users.first else {
                         self.presentAlert(title: "ユーザーが見つかりません", message: "@\(id)")
+                        self.session.startRunning()
+                        return
+                    }
+                    // 念のためここでも自己チェック
+                    if let uid = Auth.auth().currentUser?.uid, target.uid == uid {
+                        self.presentAlert(title: "追加できません", message: "自分自身を追加することはできません。")
                         self.session.startRunning()
                         return
                     }

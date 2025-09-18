@@ -3,21 +3,137 @@ import FirebaseAuth
 import FirebaseFirestore
 import GoogleMobileAds
 
+// ===== AdMob helper =====
 @inline(__always)
 private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
 }
 
-// MARK: - Avatar付きセル
+// ===== 「開いた順」ローカル保存 =====
+private final class FriendOpenOrderStore {
+    static let shared = FriendOpenOrderStore()
+    private let mapKey = "friend_open_order_map"          // [uid: seq]
+    private let counterKey = "friend_open_order_counter"  // Int
+    private let ud = UserDefaults.standard
+    private var map: [String: Int]
+    private var counter: Int
+    private init() {
+        map = ud.dictionary(forKey: mapKey) as? [String: Int] ?? [:]
+        counter = ud.integer(forKey: counterKey)
+    }
+    func seq(for uid: String) -> Int? { map[uid] }
+    func bump(uid: String) {
+        counter &+= 1
+        map[uid] = counter
+        ud.set(map, forKey: mapKey)
+        ud.set(counter, forKey: counterKey)
+    }
+}
+
+// ===== ピン留めローカル保存 =====
+private final class FriendPinStore {
+    static let shared = FriendPinStore()
+    private let key = "friend_pinned_set"
+    private let ud = UserDefaults.standard
+    private var set: Set<String>
+    private init() {
+        let arr = ud.array(forKey: key) as? [String] ?? []
+        set = Set(arr)
+    }
+    func isPinned(_ uid: String) -> Bool { set.contains(uid) }
+    func pin(_ uid: String) { set.insert(uid); save() }
+    func unpin(_ uid: String) { set.remove(uid); save() }
+    private func save() { ud.set(Array(set), forKey: key) }
+}
+
+// ===== アイコンキャッシュ（メモリ＋ディスク、バージョン差し替え） =====
+private final class AvatarCache {
+    static let shared = AvatarCache()
+    private let mem = NSCache<NSString, UIImage>()
+    private let fm = FileManager.default
+    private let dir: URL
+    private init() {
+        let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        dir = base.appendingPathComponent("avatar-cache", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    // ファイル名: uid_v{version}.jpg （version が nil の場合は 0）
+    private func fileURL(uid: String, version: Int?) -> URL {
+        let v = version ?? 0
+        return dir.appendingPathComponent("\(uid)_v\(v).jpg")
+    }
+
+    func image(uid: String, version: Int?) -> UIImage? {
+        let key = "\(uid)#\(version ?? 0)" as NSString
+        if let img = mem.object(forKey: key) { return img }
+        let url = fileURL(uid: uid, version: version)
+        guard let data = try? Data(contentsOf: url),
+              let img = UIImage(data: data) else { return nil }
+        mem.setObject(img, forKey: key)
+        return img
+    }
+
+    func store(_ image: UIImage, uid: String, version: Int?) {
+        let key = "\(uid)#\(version ?? 0)" as NSString
+        mem.setObject(image, forKey: key)
+        let url = fileURL(uid: uid, version: version)
+        if let data = image.jpegData(compressionQuality: 0.9) {
+            // 原子的に書き込み
+            let tmp = url.appendingPathExtension("tmp")
+            try? data.write(to: tmp, options: .atomic)
+            try? fm.removeItem(at: url)
+            try? fm.moveItem(at: tmp, to: url)
+        }
+        purgeOldVersions(of: uid, keep: version ?? 0)
+    }
+
+    // その uid の古い版を削除
+    private func purgeOldVersions(of uid: String, keep version: Int) {
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for f in files {
+            let name = f.lastPathComponent
+            guard name.hasPrefix("\(uid)_v"),
+                  name.hasSuffix(".jpg") else { continue }
+            if !name.contains("_v\(version).jpg") {
+                try? fm.removeItem(at: f)
+            }
+        }
+    }
+
+    // photoURL のクエリ（例: token=xxxx）から簡易バージョンを推定（なければ nil）
+    func versionFrom(urlString: String?) -> Int? {
+        guard let s = urlString,
+              let u = URL(string: s) else { return nil }
+        // クエリの token/alt/generation などからハッシュっぽい整数を作る
+        if let q = u.query, !q.isEmpty {
+            return abs(q.hashValue)
+        }
+        // 最終パス要素に見えるハッシュがあれば
+        return abs(u.lastPathComponent.hashValue)
+    }
+}
+
+// ===== ネットワーク画像取得（URLSession） =====
+private enum ImageFetcher {
+    static func fetch(urlString: String, completion: @escaping (UIImage?) -> Void) {
+        guard let url = URL(string: urlString) else { completion(nil); return }
+        let task = URLSession.shared.dataTask(with: url) { data, _, _ in
+            guard let d = data, let img = UIImage(data: d) else { completion(nil); return }
+            completion(img)
+        }
+        task.resume()
+    }
+}
+
+// ===== Avatar付きセル（右下にピンバッジ） =====
 final class FriendListCell: UITableViewCell {
     static let reuseID = "FriendListCell"
 
     private let avatarView = UIImageView()
     private let nameLabel = UILabel()
     private let idLabel = UILabel()
-    
-
-    
+    private let pinBadge = UIImageView(image: UIImage(systemName: "pin.fill"))
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -44,8 +160,13 @@ final class FriendListCell: UITableViewCell {
         vStack.spacing = 2
         vStack.translatesAutoresizingMaskIntoConstraints = false
 
+        pinBadge.translatesAutoresizingMaskIntoConstraints = false
+        pinBadge.tintColor = .systemYellow
+        pinBadge.isHidden = true
+
         contentView.addSubview(avatarView)
         contentView.addSubview(vStack)
+        contentView.addSubview(pinBadge)
 
         NSLayoutConstraint.activate([
             avatarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
@@ -55,43 +176,55 @@ final class FriendListCell: UITableViewCell {
 
             vStack.leadingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 12),
             vStack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            vStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16)
+            vStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
+
+            // ピンはアバター右下
+            pinBadge.widthAnchor.constraint(equalToConstant: 16),
+            pinBadge.heightAnchor.constraint(equalToConstant: 16),
+            pinBadge.trailingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 4),
+            pinBadge.bottomAnchor.constraint(equalTo: avatarView.bottomAnchor, constant: 4)
         ])
     }
 
-    func configure(name: String, id: String, photoURL: String?) {
+    func configure(name: String, id: String, image: UIImage?, pinned: Bool) {
         nameLabel.text = name
         idLabel.text = "@\(id)"
-        let placeholder = UIImage(systemName: "person.crop.circle.fill")
-        if let url = photoURL, !url.isEmpty {
-            ImageLoader.shared.load(urlString: url, into: avatarView, placeholder: placeholder)
+        pinBadge.isHidden = !pinned
+        if let image = image {
+            avatarView.image = image
         } else {
-            avatarView.image = placeholder
+            avatarView.image = UIImage(systemName: "person.crop.circle.fill")
         }
     }
 }
 
-// MARK: - FriendList
-final class FriendListViewController: UITableViewController, UISearchBarDelegate, BannerViewDelegate{
+// ===== FriendList VC =====
+final class FriendListViewController: UITableViewController, UISearchBarDelegate, BannerViewDelegate {
 
     private let db = Firestore.firestore()
 
+    private struct Profile {
+        var name: String
+        var id: String
+        var photoURL: String?
+        var avatarVersion: Int?
+    }
+
     private var allFriends: [Friend] = []
     private var friends: [Friend] = []
-    private var profileCache: [String: (name: String, id: String, photoURL: String?)] = [:]
+    private var profileCache: [String: Profile] = [:] // key: friendUid
 
     private var badgeListener: ListenerRegistration?
     private var listenerIsActive = false
 
     private let bellButton = BadgeButton(type: .system)
-    
-    // ===== AdMob: ここを追加 =====
-    private let adContainer = UIView()                           // [ADD]
-    private var bannerView: BannerView?                          // [ADD]
-    private var adContainerHeight: NSLayoutConstraint?           // [ADD]
-    private var lastBannerWidth: CGFloat = 0                     // [ADD]
-    private var didLoadBannerOnce = false                        // [ADD]
 
+    // AdMob
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
 
     // 左：QR + 追加
     private lazy var qrItem: UIBarButtonItem = {
@@ -107,7 +240,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
                         action: #selector(openFind))
     }()
 
-    // 検索バー（既存フレンドのローカル検索）
+    // 検索バー
     private let searchBar = UISearchBar(frame: .zero)
 
     // 未ログインガード
@@ -138,27 +271,32 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         header.addSubview(searchBar)
         tableView.tableHeaderView = header
 
-        // 下部「友だちを探す」ボタン（暗めの緑）
+        // 下部「友だちを探す」
         tableView.tableFooterView = makeFindFriendsFooter()
 
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(handleFriendsDidChange),
                                                name: .friendsDidChange,
                                                object: nil)
-        
-        setupAdBanner()            // [ADDED]
+
+        setupAdBanner()
     }
-    
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        loadBannerIfNeeded()       // [ADDED]
+        loadBannerIfNeeded()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         guard ensureLoggedInOrRedirect() else { return }
         startListenersIfNeeded()
-        reload()
+
+        if allFriends.isEmpty {
+            reload()
+        } else {
+            applyFilter(text: searchBar.text) // 並び替え更新
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -170,7 +308,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
     deinit { badgeListener?.remove() }
 
-    // MARK: - Login Gate
+    // ===== Login Gate =====
     @discardableResult
     private func ensureLoggedInOrRedirect() -> Bool {
         guard Auth.auth().currentUser != nil else {
@@ -207,9 +345,8 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         }
         listenerIsActive = true
     }
-    
-    //Admob
-    // [ADDED]
+
+    // ===== Admob =====
     private func setupAdBanner() {
         adContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(adContainer)
@@ -224,10 +361,10 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
         let bv = BannerView()
         bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID [ADDED]
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID
         bv.rootViewController = self
         bv.adSize = AdSizeBanner
-        bv.delegate = self   // ← delegate に準拠させる（下の extension を追加）
+        bv.delegate = self
 
         adContainer.addSubview(bv)
         NSLayoutConstraint.activate([
@@ -240,33 +377,25 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         bannerView = bv
     }
 
-    
     private func loadBannerIfNeeded() {
         guard let bv = bannerView else { return }
         let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
         if safeWidth <= 0 { return }
 
         let useWidth = max(320, floor(safeWidth))
-        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 連続ロード抑止
+        if abs(useWidth - lastBannerWidth) < 0.5 { return }
         lastBannerWidth = useWidth
 
-        // 1) 幅からサイズ算出
         let size = makeAdaptiveAdSize(width: useWidth)
-
-        // 2) 先にコンテナの高さを確保（0 回避）
         adContainerHeight?.constant = size.size.height
-        updateInsetsForBanner(height: size.size.height)  // テーブル下に余白
+        updateInsetsForBanner(height: size.size.height)
         view.layoutIfNeeded()
 
-        // 3) 高さ 0 は不正 → ロードしない
         guard size.size.height > 0 else { return }
 
-        // 4) サイズ反映（同一ならスキップ）
         if !CGSizeEqualToSize(bv.adSize.size, size.size) {
             bv.adSize = size
         }
-
-        // 5) 初回だけロード
         if !didLoadBannerOnce {
             didLoadBannerOnce = true
             bv.load(Request())
@@ -278,18 +407,13 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         tableView.contentInset = inset
         tableView.verticalScrollIndicatorInsets.bottom = height
     }
-    
-    // MARK: - BannerViewDelegate                        // [ADD]
-    func bannerViewDidReceiveAd(_ banner: BannerView) {
-            // 表示済みなので特別なことは不要（必要ならフェードイン等）
-    }
+    // BannerViewDelegate
+    func bannerViewDidReceiveAd(_ banner: BannerView) { /* no-op */ }
     func bannerView(_ banner: BannerView, didFailToReceiveAdWithError error: Error) {
-            // 失敗時は高さを 0 に
         adContainerHeight?.constant = 0
     }
 
-
-    // MARK: - Data
+    // ===== Data =====
     private func reload() {
         guard ensureLoggedInOrRedirect() else { return }
         FriendService.shared.fetchFriends { [weak self] result in
@@ -305,7 +429,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         }
     }
 
-    // MARK: - Builders
+    // ===== Builders =====
     private func makeFindFriendsFooter() -> UIView {
         let container = UIView(frame: CGRect(x: 0, y: 0, width: view.bounds.width, height: 100))
         let button = UIButton(type: .system)
@@ -328,17 +452,15 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         return container
     }
 
-    // MARK: - Navigation
+    // ===== Navigation =====
     @objc private func openFind() {
         guard ensureLoggedInOrRedirect() else { return }
         navigationController?.pushViewController(FindFriendsViewController(), animated: true)
     }
-
     @objc private func openRequests() {
         guard ensureLoggedInOrRedirect() else { return }
         navigationController?.pushViewController(FriendRequestsViewController(), animated: true)
     }
-
     @objc private func openQR() {
         guard ensureLoggedInOrRedirect() else { return }
         let nav = UINavigationController(rootViewController: QRScannerViewController())
@@ -347,10 +469,9 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         }
         present(nav, animated: true)
     }
-
     @objc private func handleFriendsDidChange() { reload() }
 
-    // MARK: - Search（ローカル）
+    // ===== Search（ローカル） =====
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
         applyFilter(text: searchText)
     }
@@ -359,71 +480,176 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         view.endEditing(true)
         applyFilter(text: nil)
     }
+
+    /// テキストでフィルタ → ピン優先 → それぞれを「開いた順（seq降順）」で安定ソート
     private func applyFilter(text: String?) {
         let q = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        friends = q.isEmpty
+        var filtered = q.isEmpty
             ? allFriends
             : allFriends.filter { f in
                 f.friendName.lowercased().contains(q) || f.friendId.lowercased().contains(q)
             }
+
+        let baseIndex: [String: Int] = Dictionary(uniqueKeysWithValues:
+            allFriends.enumerated().map { ($0.element.friendUid, $0.offset) }
+        )
+
+        filtered.sort { a, b in
+            let aPinned = FriendPinStore.shared.isPinned(a.friendUid)
+            let bPinned = FriendPinStore.shared.isPinned(b.friendUid)
+            if aPinned != bPinned { return aPinned && !bPinned } // ピンは先頭
+            let sa = FriendOpenOrderStore.shared.seq(for: a.friendUid) ?? Int.min
+            let sb = FriendOpenOrderStore.shared.seq(for: b.friendUid) ?? Int.min
+            if sa != sb { return sa > sb } // 開いた順（新しいほど上）
+            // 最後に元の順序で安定化
+            let ia = baseIndex[a.friendUid] ?? .max
+            let ib = baseIndex[b.friendUid] ?? .max
+            return ia < ib
+        }
+
+        friends = filtered
         tableView.reloadData()
     }
 
-    // MARK: - TableView
+    // ===== TableView =====
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { friends.count }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let f = friends[indexPath.row]
         let cell = tableView.dequeueReusableCell(withIdentifier: FriendListCell.reuseID, for: indexPath) as! FriendListCell
 
-        // まずは friends コレクションの内容で描画
-        cell.configure(name: f.friendName, id: f.friendId, photoURL: nil)
-
-        // キャッシュがあれば即反映
+        // 1) まずプロフィール（名前/ID/URL/バージョン）をローカルキャッシュ or Firestore から
         if let p = profileCache[f.friendUid] {
+            let cachedImage = AvatarCache.shared.image(uid: f.friendUid, version: p.avatarVersion)
             cell.configure(name: p.name.isEmpty ? f.friendName : p.name,
                            id: p.id.isEmpty ? f.friendId : p.id,
-                           photoURL: p.photoURL)
-            return cell
-        }
+                           image: cachedImage,
+                           pinned: FriendPinStore.shared.isPinned(f.friendUid))
+            // 画像が未取得で URL がある場合のみ取得（保存）
+            if cachedImage == nil, let url = p.photoURL {
+                ImageFetcher.fetch(urlString: url) { img in
+                    guard let img = img else { return }
+                    AvatarCache.shared.store(img, uid: f.friendUid, version: p.avatarVersion)
+                    DispatchQueue.main.async {
+                        if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
+                            visible.configure(name: p.name.isEmpty ? f.friendName : p.name,
+                                              id: p.id.isEmpty ? f.friendId : p.id,
+                                              image: img,
+                                              pinned: FriendPinStore.shared.isPinned(f.friendUid))
+                        }
+                    }
+                }
+            }
+        } else {
+            // 一旦は friend の基本情報で描画（ローカルキャッシュ画像があればそれも使う）
+            let cachedImage = AvatarCache.shared.image(uid: f.friendUid, version: nil)
+            cell.configure(name: f.friendName,
+                           id: f.friendId,
+                           image: cachedImage,
+                           pinned: FriendPinStore.shared.isPinned(f.friendUid))
 
-        // users/{uid} を単発取得して可視セルだけ更新
-        db.collection("users").document(f.friendUid).getDocument { [weak self, weak tableView] snap, _ in
-            guard let self = self, let tableView = tableView else { return }
-            let data = snap?.data()
-            let name = (data?["name"] as? String) ?? f.friendName
-            let id   = (data?["id"] as? String) ?? f.friendId
-            let url  = data?["photoURL"] as? String
-            self.profileCache[f.friendUid] = (name, id, url)
+            // users/{uid} を単発取得し、バージョンに応じて画像取得・保存
+            db.collection("users").document(f.friendUid).getDocument { [weak self, weak tableView] snap, _ in
+                guard let self = self, let tableView = tableView else { return }
+                let data = snap?.data() ?? [:]
+                let name = (data["name"] as? String) ?? f.friendName
+                let id   = (data["id"] as? String) ?? f.friendId
+                let url  = data["photoURL"] as? String
+                let verRaw = (data["avatarVersion"] as? Int) ?? (data["photoVersion"] as? Int)
+                let ver = verRaw ?? AvatarCache.shared.versionFrom(urlString: url)
 
-            if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
-                visible.configure(name: name, id: id, photoURL: url)
+                let profile = Profile(name: name, id: id, photoURL: url, avatarVersion: ver)
+                self.profileCache[f.friendUid] = profile
+
+                // まずはキャッシュ画像（該当バージョン）を適用
+                let cached = AvatarCache.shared.image(uid: f.friendUid, version: ver)
+                DispatchQueue.main.async {
+                    if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
+                        visible.configure(name: name, id: id, image: cached,
+                                          pinned: FriendPinStore.shared.isPinned(f.friendUid))
+                    }
+                }
+
+                // キャッシュが無く、URL があればダウンロード → 保存 → 反映
+                if cached == nil, let url = url {
+                    ImageFetcher.fetch(urlString: url) { img in
+                        guard let img = img else { return }
+                        AvatarCache.shared.store(img, uid: f.friendUid, version: ver)
+                        DispatchQueue.main.async {
+                            if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
+                                visible.configure(name: name, id: id, image: img,
+                                                  pinned: FriendPinStore.shared.isPinned(f.friendUid))
+                            }
+                        }
+                    }
+                }
             }
         }
 
         return cell
     }
 
+    // ===== 右スワイプ：ピン留め / 解除 =====
+    override func tableView(_ tableView: UITableView,
+                            leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
+    -> UISwipeActionsConfiguration? {
+        let f = friends[indexPath.row]
+        let pinned = FriendPinStore.shared.isPinned(f.friendUid)
+
+        let title = pinned ? "ピン解除" : "ピン留め"
+        let imageName = pinned ? "pin.slash" : "pin"
+        let action = UIContextualAction(style: .normal, title: title) { [weak self] _,_,done in
+            guard let self = self else { done(false); return }
+            if pinned {
+                FriendPinStore.shared.unpin(f.friendUid)
+            } else {
+                FriendPinStore.shared.pin(f.friendUid)
+            }
+            self.applyFilter(text: self.searchBar.text)
+            done(true)
+        }
+        action.image = UIImage(systemName: imageName)
+        action.backgroundColor = pinned ? .systemGray : .systemYellow
+
+        return UISwipeActionsConfiguration(actions: [action]) // フルスワイプ挙動はデフォルトのまま
+    }
+
+    // ===== 左スワイプ：削除（フルスワイプ可、確認アラート付き） =====
     override func tableView(_ tableView: UITableView,
                             trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
     -> UISwipeActionsConfiguration? {
-        let act = UIContextualAction(style: .destructive, title: "削除") { [weak self] _,_,done in
+        let f = friends[indexPath.row]
+        let delete = UIContextualAction(style: .destructive, title: "削除") { [weak self] _,_,done in
             guard let self = self else { done(false); return }
-            guard self.ensureLoggedInOrRedirect() else { done(false); return }
-            let uid = self.friends[indexPath.row].friendUid
-            FriendService.shared.removeFriend(uid) { _ in
-                self.reload(); done(true)
-            }
+            let alert = UIAlertController(title: "削除しますか？",
+                                          message: "この友だちをリストから削除します。",
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel, handler: { _ in
+                done(false)
+            }))
+            alert.addAction(UIAlertAction(title: "削除", style: .destructive, handler: { _ in
+                // ピンも開いた順も一応クリーンアップ
+                FriendPinStore.shared.unpin(f.friendUid)
+                FriendService.shared.removeFriend(f.friendUid) { _ in
+                    self.reload()
+                    done(true)
+                }
+            }))
+            self.present(alert, animated: true)
         }
-        return UISwipeActionsConfiguration(actions: [act])
+        delete.image = UIImage(systemName: "trash")
+        return UISwipeActionsConfiguration(actions: [delete])
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let friend = friends[indexPath.row]
+
+        // 開いた順更新
+        FriendOpenOrderStore.shared.bump(uid: friend.friendUid)
+
         let vc = FriendTimetableViewController(friendUid: friend.friendUid,
                                                friendName: friend.friendName)
         navigationController?.pushViewController(vc, animated: true)
     }
 }
-

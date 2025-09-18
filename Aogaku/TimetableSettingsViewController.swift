@@ -1,11 +1,25 @@
 import UIKit
+import GoogleMobileAds
 
-final class TimetableSettingsViewController: UIViewController {
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
+
+final class TimetableSettingsViewController: UIViewController, BannerViewDelegate {
 
     private var settings = TimetableSettings.load()
 
     private let periodsSeg = UISegmentedControl(items: ["5", "6", "7"])
     private let daysSeg = UISegmentedControl(items: ["平日のみ", "平日＋土"])
+    
+    // [ADD] AdMob バナー用
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
+    private let bannerTopPadding: CGFloat = 60   // ← ここで「ちょっと下げる」量を調整
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -36,7 +50,104 @@ final class TimetableSettingsViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
         ])
+        
+        setupAdBanner()        // [ADD]
     }
+    // [ADD]
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()
+    }
+    
+    // [ADD]
+    private func setupAdBanner() {
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner
+        bv.delegate = self
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor, constant: bannerTopPadding)  // ← 少し下げる
+        ])
+
+        // ▼▼ ここが [FIX]：useWidth をこのスコープで作る
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        let useWidth = max(320, floor(safeWidth))
+        let size = makeAdaptiveAdSize(width: useWidth)
+        adContainerHeight?.constant = size.size.height + bannerTopPadding // ← 余白ぶんも確保
+        // ▲▲
+        bannerView = bv
+    }
+
+
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        guard safeWidth > 0 else { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return }  // 同幅連続ロード防止
+        lastBannerWidth = useWidth
+
+        let size = makeAdaptiveAdSize(width: useWidth)
+        adContainerHeight?.constant = size.size.height + bannerTopPadding   // [FIX]
+
+        view.layoutIfNeeded()
+
+        guard size.size.height > 0 else { return }
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+
+    // 表示/非表示時に下インセットを調整（TableView or ScrollView）
+    private func updateBottomInset(_ h: CGFloat) {
+        if let tv = (self as? UITableViewController)?.tableView
+            ?? view.subviews.compactMap({ $0 as? UITableView }).first {
+            tv.contentInset.bottom = h
+            tv.scrollIndicatorInsets.bottom = h
+        } else if let sv = view.subviews.compactMap({ $0 as? UIScrollView }).first {
+            sv.contentInset.bottom = h
+            sv.scrollIndicatorInsets.bottom = h
+        }
+    }
+
+    // MARK: - BannerViewDelegate
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        let h = bannerView.adSize.size.height
+        adContainerHeight?.constant = h + bannerTopPadding                  // [FIX]
+        updateBottomInset(h + bannerTopPadding)                             // [FIX]
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+    }
+
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainerHeight?.constant = 0
+        updateBottomInset(0)
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        print("Ad failed:", error.localizedDescription)
+    }
+
 
     private func labeled(_ title: String, _ control: UIView) -> UIStackView {
         let l = UILabel()

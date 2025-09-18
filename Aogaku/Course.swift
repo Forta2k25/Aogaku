@@ -12,7 +12,7 @@ import FirebaseFirestore
 struct Course: Codable, Equatable {
     let id: String            // Firestore: code
     let title: String         // Firestore: class_name
-    let room: String          // Firestore: room
+    var room: String          // Firestore: room
     let teacher: String       // Firestore: teacher_name
     var credits: Int?         // Firestore: credit
     var campus: String?       // Firestore: campus

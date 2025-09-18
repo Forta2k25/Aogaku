@@ -25,6 +25,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = root
         window.makeKeyAndVisible()
         self.window = window
+        
+    }
+    
+    func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
+        guard let url = contexts.first?.url else { return }
+        _ = DeepLinkRouter.handle(url, window: window)
     }
 
 

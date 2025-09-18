@@ -1271,7 +1271,7 @@ final class TermPickerViewController: UIViewController, UIPickerViewDataSource, 
 
 // MARK: - Adapter to your project's delegate signatures
 extension timetable {
-
+    
     // 例：色変更
     func courseDetailViewController(_ vc: CourseDetailViewController,
                                     didChangeColor key: SlotColorKey,
@@ -1279,32 +1279,60 @@ extension timetable {
         // 私の実装へ橋渡し
         courseDetail(vc, didChangeColor: key, at: location)
     }
-
+    
     // 例：編集完了（コマ内容更新）
     func courseDetailViewController(_ vc: CourseDetailViewController,
                                     didEdit course: Course,
                                     at location: SlotLocation) {
         courseDetail(vc, didEdit: course, at: location)
     }
-
+    
     // 例：このコマの削除
     func courseDetailViewController(_ vc: CourseDetailViewController,
                                     didDeleteAt location: SlotLocation) {
         courseDetail(vc, didDeleteAt: location)
     }
-
+    
     // 例：編集画面に遷移したい（コース選択し直し）
     func courseDetailViewController(_ vc: CourseDetailViewController,
                                     requestEditFor course: Course,
                                     at location: SlotLocation) {
         courseDetail(vc, requestEditFor: course, at: location)
     }
-
+    
     // 例：削除のリクエスト（確認からの削除）
     func courseDetailViewController(_ vc: CourseDetailViewController,
                                     requestDelete course: Course,
                                     at location: SlotLocation) {
         courseDetail(vc, requestDelete: course, at: location)
     }
+    
+    /// あなたの内部構造に合わせて coursesByDay を用意できるなら、それを使ってスナップショットを生成
+    func exportTodayToWidget(coursesByDay: [[Course]]) {
+        let cal = Calendar.current
+        let weekday = cal.component(.weekday, from: Date()) // 1=Sun ... 7=Sat
+        // 0=Mon.. なら変換（Mon=2→0, Tue=3→1, ...）
+        let dayIndex = (weekday + 5) % 7
+        guard (0..<coursesByDay.count).contains(dayIndex) else { return }
+
+        let today = coursesByDay[dayIndex]
+        var periods: [WidgetPeriod] = []
+
+        for i in 0..<min(5, today.count) {
+            let c = today[i]
+            let slot = PeriodTime.slots[i]
+            periods.append(.init(index: i+1, title: c.title, room: c.room,
+                                 start: slot.start, end: slot.end))
+        }
+
+        let labels = ["日曜日","月曜日","火曜日","水曜日","木曜日","金曜日","土曜日"]
+        let snap = WidgetSnapshot(date: Date(), weekday: weekday,
+                                  dayLabel: labels[(weekday-1+7)%7],
+                                  periods: periods)
+        WidgetBridge.save(snap)
+    }
+    
+    
+    
 }
 

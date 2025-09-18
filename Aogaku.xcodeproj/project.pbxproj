@@ -8,6 +8,14 @@
 
 /* Begin PBXBuildFile section */
 		A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = A40AACB82E7556BC009104D2 /* GoogleMobileAds */; };
+		A49A40622E7BDFCC0036636C /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A49A40612E7BDFCC0036636C /* WidgetKit.framework */; };
+		A49A40642E7BDFCC0036636C /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A49A40632E7BDFCC0036636C /* SwiftUI.framework */; };
+		A49A406F2E7BDFCE0036636C /* AogakuWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A49A40602E7BDFCC0036636C /* AogakuWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A49A407A2E7BE3DB0036636C /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49A40782E7BE38E0036636C /* WidgetShared.swift */; };
+		A49A407B2E7BE3DB0036636C /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49A40782E7BE38E0036636C /* WidgetShared.swift */; };
+		A49A407C2E7BE3EC0036636C /* PeriodTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49A40792E7BE3B50036636C /* PeriodTime.swift */; };
+		A49A407D2E7BE3EC0036636C /* PeriodTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49A40792E7BE3B50036636C /* PeriodTime.swift */; };
+		A49A407F2E7BE7DB0036636C /* DeepLinkRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49A407E2E7BE7DB0036636C /* DeepLinkRouter.swift */; };
 		A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F02E62D45500947976 /* FirebaseCore */; };
 		A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F22E62D45500947976 /* FirebaseFirestore */; };
 		B3F9F0962E79546D00BFB330 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = B3F9F0952E79546D00BFB330 /* FirebaseAuth */; };
@@ -15,6 +23,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		A49A406D2E7BDFCE0036636C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B3A17B172E40A19700ACCA3A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A49A405F2E7BDFCC0036636C;
+			remoteInfo = AogakuWidgetsExtension;
+		};
 		B3A17B362E40A19A00ACCA3A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = B3A17B172E40A19700ACCA3A /* Project object */;
@@ -31,13 +46,41 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		A49A40742E7BDFCE0036636C /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A49A406F2E7BDFCE0036636C /* AogakuWidgetsExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		A49A40602E7BDFCC0036636C /* AogakuWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AogakuWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A49A40612E7BDFCC0036636C /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		A49A40632E7BDFCC0036636C /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		A49A40762E7BE0B30036636C /* AogakuWidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AogakuWidgetsExtension.entitlements; sourceTree = "<group>"; };
+		A49A40782E7BE38E0036636C /* WidgetShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetShared.swift; sourceTree = "<group>"; };
+		A49A40792E7BE3B50036636C /* PeriodTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeriodTime.swift; sourceTree = "<group>"; };
+		A49A407E2E7BE7DB0036636C /* DeepLinkRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkRouter.swift; sourceTree = "<group>"; };
 		B3A17B1F2E40A19700ACCA3A /* Aogaku.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Aogaku.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B3A17B352E40A19A00ACCA3A /* AogakuTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AogakuTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B3A17B3F2E40A19A00ACCA3A /* AogakuUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AogakuUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A49A40732E7BDFCE0036636C /* Exceptions for "AogakuWidgets" folder in "AogakuWidgetsExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A49A405F2E7BDFCC0036636C /* AogakuWidgetsExtension */;
+		};
 		B3A17B472E40A19A00ACCA3A /* Exceptions for "Aogaku" folder in "Aogaku" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -48,6 +91,14 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		A49A40652E7BDFCC0036636C /* AogakuWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A49A40732E7BDFCE0036636C /* Exceptions for "AogakuWidgets" folder in "AogakuWidgetsExtension" target */,
+			);
+			path = AogakuWidgets;
+			sourceTree = "<group>";
+		};
 		B3A17B212E40A19700ACCA3A /* Aogaku */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -69,6 +120,15 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		A49A405D2E7BDFCC0036636C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A49A40642E7BDFCC0036636C /* SwiftUI.framework in Frameworks */,
+				A49A40622E7BDFCC0036636C /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B3A17B1C2E40A19700ACCA3A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -98,9 +158,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		A49A40772E7BE3650036636C /* shared */ = {
+			isa = PBXGroup;
+			children = (
+				A49A40792E7BE3B50036636C /* PeriodTime.swift */,
+				A49A40782E7BE38E0036636C /* WidgetShared.swift */,
+			);
+			path = shared;
+			sourceTree = "<group>";
+		};
 		A4EA88EF2E62D45500947976 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				A49A40612E7BDFCC0036636C /* WidgetKit.framework */,
+				A49A40632E7BDFCC0036636C /* SwiftUI.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -108,9 +179,13 @@
 		B3A17B162E40A19700ACCA3A = {
 			isa = PBXGroup;
 			children = (
+				A49A407E2E7BE7DB0036636C /* DeepLinkRouter.swift */,
+				A49A40772E7BE3650036636C /* shared */,
+				A49A40762E7BE0B30036636C /* AogakuWidgetsExtension.entitlements */,
 				B3A17B212E40A19700ACCA3A /* Aogaku */,
 				B3A17B382E40A19A00ACCA3A /* AogakuTests */,
 				B3A17B422E40A19A00ACCA3A /* AogakuUITests */,
+				A49A40652E7BDFCC0036636C /* AogakuWidgets */,
 				A4EA88EF2E62D45500947976 /* Frameworks */,
 				B3A17B202E40A19700ACCA3A /* Products */,
 			);
@@ -122,6 +197,7 @@
 				B3A17B1F2E40A19700ACCA3A /* Aogaku.app */,
 				B3A17B352E40A19A00ACCA3A /* AogakuTests.xctest */,
 				B3A17B3F2E40A19A00ACCA3A /* AogakuUITests.xctest */,
+				A49A40602E7BDFCC0036636C /* AogakuWidgetsExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -129,6 +205,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		A49A405F2E7BDFCC0036636C /* AogakuWidgetsExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A49A40702E7BDFCE0036636C /* Build configuration list for PBXNativeTarget "AogakuWidgetsExtension" */;
+			buildPhases = (
+				A49A405C2E7BDFCC0036636C /* Sources */,
+				A49A405D2E7BDFCC0036636C /* Frameworks */,
+				A49A405E2E7BDFCC0036636C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A49A40652E7BDFCC0036636C /* AogakuWidgets */,
+			);
+			name = AogakuWidgetsExtension;
+			packageProductDependencies = (
+			);
+			productName = AogakuWidgetsExtension;
+			productReference = A49A40602E7BDFCC0036636C /* AogakuWidgetsExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		B3A17B1E2E40A19700ACCA3A /* Aogaku */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = B3A17B482E40A19A00ACCA3A /* Build configuration list for PBXNativeTarget "Aogaku" */;
@@ -136,10 +234,12 @@
 				B3A17B1B2E40A19700ACCA3A /* Sources */,
 				B3A17B1C2E40A19700ACCA3A /* Frameworks */,
 				B3A17B1D2E40A19700ACCA3A /* Resources */,
+				A49A40742E7BDFCE0036636C /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A49A406E2E7BDFCE0036636C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				B3A17B212E40A19700ACCA3A /* Aogaku */,
@@ -212,6 +312,9 @@
 				LastSwiftUpdateCheck = 1640;
 				LastUpgradeCheck = 1640;
 				TargetAttributes = {
+					A49A405F2E7BDFCC0036636C = {
+						CreatedOnToolsVersion = 16.4;
+					};
 					B3A17B1E2E40A19700ACCA3A = {
 						CreatedOnToolsVersion = 16.4;
 					};
@@ -246,11 +349,19 @@
 				B3A17B1E2E40A19700ACCA3A /* Aogaku */,
 				B3A17B342E40A19A00ACCA3A /* AogakuTests */,
 				B3A17B3E2E40A19A00ACCA3A /* AogakuUITests */,
+				A49A405F2E7BDFCC0036636C /* AogakuWidgetsExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A49A405E2E7BDFCC0036636C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B3A17B1D2E40A19700ACCA3A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -275,10 +386,22 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		A49A405C2E7BDFCC0036636C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A49A407B2E7BE3DB0036636C /* WidgetShared.swift in Sources */,
+				A49A407D2E7BE3EC0036636C /* PeriodTime.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B3A17B1B2E40A19700ACCA3A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A49A407F2E7BE7DB0036636C /* DeepLinkRouter.swift in Sources */,
+				A49A407A2E7BE3DB0036636C /* WidgetShared.swift in Sources */,
+				A49A407C2E7BE3EC0036636C /* PeriodTime.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -299,6 +422,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		A49A406E2E7BDFCE0036636C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A49A405F2E7BDFCC0036636C /* AogakuWidgetsExtension */;
+			targetProxy = A49A406D2E7BDFCE0036636C /* PBXContainerItemProxy */;
+		};
 		B3A17B372E40A19A00ACCA3A /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = B3A17B1E2E40A19700ACCA3A /* Aogaku */;
@@ -312,11 +440,68 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		A49A40712E7BDFCE0036636C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = AogakuWidgetsExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2T5WKPN92Z;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AogakuWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AogakuWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.AogakuWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A49A40722E7BDFCE0036636C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = AogakuWidgetsExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2T5WKPN92Z;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AogakuWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AogakuWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.AogakuWidgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		B3A17B492E40A19A00ACCA3A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Aogaku/Aogaku.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
@@ -348,6 +533,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Aogaku/Aogaku.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
@@ -564,6 +750,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A49A40702E7BDFCE0036636C /* Build configuration list for PBXNativeTarget "AogakuWidgetsExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A49A40712E7BDFCE0036636C /* Debug */,
+				A49A40722E7BDFCE0036636C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		B3A17B1A2E40A19700ACCA3A /* Build configuration list for PBXProject "Aogaku" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -60,6 +60,11 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
                   credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
 }
 
+private let cellPastelRatio: CGFloat = 0.25 // 0.15〜0.35あたりでお好み調整
+//こまのセルの濃さ調整↑
+private let headerHighlightAlpha: CGFloat = 0.25  // 0.20〜0.28で好みに調整
+//時限と曜日の濃さ調整↑
+
 // MARK: - Firestore Remote Store（users/{uid}/timetable/{term} に cells マップで保存）
 private struct TimetableRemoteStore {
     let uid: String
@@ -352,10 +357,13 @@ final class timetable: UIViewController,
             let title = assigned.indices.contains(idx) ? (assigned[idx]?.title ?? "") : ""
             let room  = assigned.indices.contains(idx) ? (assigned[idx]?.room  ?? "") : ""
             let teacher = assigned.indices.contains(idx) ? (assigned[idx]?.teacher  ?? "") : ""
+            let loc = SlotLocation(day: dayIndex, period: period)
+            let colorKey = SlotColorStore.color(for: loc)?.rawValue
+            
             ps.append(WidgetPeriod(index: period,
                                    title: title.isEmpty ? " " : title,
                                    room:  room,
-                                   start: tp.start, end: tp.end, teacher: teacher))
+                                   start: tp.start, end: tp.end, teacher: teacher, colorKey: colorKey))
         }
 
         let snap = WidgetSnapshot(date: now, weekday: wk, dayLabel: dayLabel, periods: ps)
@@ -868,7 +876,7 @@ final class timetable: UIViewController,
             v.clipsToBounds = false
         }
 
-        let hiBG = UIColor.systemBlue.withAlphaComponent(0.15)
+        let hiBG = UIColor.systemBlue.withAlphaComponent(headerHighlightAlpha)
 
         let nowPos = currentDayAndPeriod()
         if let d = nowPos.day, dayHeaderViews.indices.contains(d) {
@@ -971,8 +979,10 @@ final class timetable: UIViewController,
         let col  = idx % cols
         let loc  = SlotLocation(day: col, period: row + 1)
         let colorKey = SlotColorStore.color(for: loc) ?? .teal
+        
+        let pastel = colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
+        var cfg = baseCellConfig(bg: pastel, fg: .white)
 
-        var cfg = baseCellConfig(bg: colorKey.uiColor, fg: .white)
         cfg.title = nil; cfg.subtitle = nil
         b.configuration = cfg
 
@@ -1181,6 +1191,8 @@ final class timetable: UIViewController,
         }
         return out
     }
+    
+    
     
     
     
@@ -1441,6 +1453,21 @@ final class TermPickerViewController: UIViewController, UIPickerViewDataSource, 
 
 }
 
+private extension UIColor {
+    /// self と other を ratio(0.0〜1.0) で混ぜる。ratio=0.25 で白を25%混ぜるイメージ
+    func mixed(with other: UIColor, ratio: CGFloat) -> UIColor {
+        let r = max(0, min(1, ratio))
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+        guard self.getRed(&r1, green: &g1, blue: &b1, alpha: &a1),
+              other.getRed(&r2, green: &g2, blue: &b2, alpha: &a2) else { return self }
+        return UIColor(red: r1*(1-r)+r2*r,
+                       green: g1*(1-r)+g2*r,
+                       blue: b1*(1-r)+b2*r,
+                       alpha: a1)
+    }
+}
+
 // MARK: - Adapter to your project's delegate signatures
 extension timetable {
     
@@ -1450,6 +1477,7 @@ extension timetable {
                                     at location: SlotLocation) {
         // 私の実装へ橋渡し
         courseDetail(vc, didChangeColor: key, at: location)
+        publishWidgetSnapshot()
     }
     
     // 例：編集完了（コマ内容更新）
@@ -1489,12 +1517,15 @@ extension timetable {
 
         let today = coursesByDay[dayIndex]
         var periods: [WidgetPeriod] = []
+        
 
         for i in 0..<min(5, today.count) {
             let c = today[i]
             let slot = PeriodTime.slots[i]
+            let loc = SlotLocation(day: dayIndex, period: i+1)
+            let key = SlotColorStore.color(for: loc)?.rawValue
             periods.append(.init(index: i+1, title: c.title, room: c.room,
-                                 start: slot.start, end: slot.end, teacher: c.teacher))
+                                 start: slot.start, end: slot.end, teacher: c.teacher, colorKey: key))
         }
 
         let labels = ["日曜日","月曜日","火曜日","水曜日","木曜日","金曜日","土曜日"]

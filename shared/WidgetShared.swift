@@ -12,7 +12,8 @@ public struct WidgetPeriod: Codable, Hashable {
     public let room: String
     public let start: String
     public let end: String
-    let teacher: String?    // ⬅︎ 追加（Optional 推奨）
+    public let teacher: String?    // ⬅︎ 追加（Optional 推奨）
+    public let colorKey: String?
 }
 
 public struct WidgetSnapshot: Codable {

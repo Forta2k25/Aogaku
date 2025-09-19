@@ -43,18 +43,51 @@ struct TodayProvider: TimelineProvider {
     static let mock: WidgetSnapshot = {
         // テスト用の教員名
         let teachers = ["T1", "T2", "T3", "T4", "T5"]
+        let colors   = ["blue", "green", "yellow", "red", "teal", "gray"] // ここは好きな並びで
         let ps = (0..<5).map { i in
             WidgetPeriod(index: i+1, title: "Course \(i+1)", room: "R\(i+1)",
-                         start: PeriodTime.slots[i].start, end: PeriodTime.slots[i].end, teacher: teachers[i] )
+                         start: PeriodTime.slots[i].start, end: PeriodTime.slots[i].end, teacher: teachers[i], colorKey: colors[i] )
         }
         return WidgetSnapshot(date: Date(), weekday: 5, dayLabel: "木曜日", periods: [
-            .init(index: 1, title: "Course 1", room: "R1", start: "09:00", end: "10:30", teacher: "T1"),
-            .init(index: 2, title: "Course 2", room: "R2", start: "10:45", end: "12:15", teacher: "T2"),
-            .init(index: 3, title: "Course 3", room: "R3", start: "13:20", end: "14:50", teacher: "T3"),
-            .init(index: 4, title: "Course 4", room: "R4", start: "15:05", end: "16:35", teacher: "T4"),
-            .init(index: 5, title: "Course 5", room: "R5", start: "16:50", end: "18:20", teacher: "T5"),
+            .init(index: 1, title: "Course 1", room: "R1", start: "09:00", end: "10:30", teacher: "T1", colorKey: "colors"),
+            .init(index: 2, title: "Course 2", room: "R2", start: "10:45", end: "12:15", teacher: "T2", colorKey: "colors"),
+            .init(index: 3, title: "Course 3", room: "R3", start: "13:20", end: "14:50", teacher: "T3", colorKey: "colors"),
+            .init(index: 4, title: "Course 4", room: "R4", start: "15:05", end: "16:35", teacher: "T4", colorKey: "colors"),
+            .init(index: 5, title: "Course 5", room: "R5", start: "16:50", end: "18:20", teacher: "T5", colorKey: "colors"),
         ])
     }()
+}
+// secondary より少しだけ濃いダイナミックグレー
+private let weekdayTint = Color(UIColor { trait in
+    if trait.userInterfaceStyle == .dark {
+        // ダークでは白系をやや強め（≒濃く）に
+        return UIColor(white: 1.0, alpha: 0.80)
+    } else {
+        // ライトでは黒系をやや強め（≒濃く）に
+        return UIColor(white: 0.0, alpha: 0.60)
+    }
+})
+
+private func uiColor(for key: String?) -> UIColor {
+    switch key {
+    case "blue":   return .systemBlue
+    case "green":  return .systemGreen
+    case "yellow": return .systemYellow
+    case "red":    return .systemRed
+    case "teal":   return .systemTeal
+    case "gray":   return .systemGray
+    default:       return UIColor.systemTeal // 未設定時は既存と同じグレー系
+    }
+}
+// 追加：パステル化（白を混ぜる）
+private func pastel(_ c: UIColor, ratio: CGFloat = 0.6) -> UIColor {
+    let r = max(0, min(1, ratio))
+    var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+    guard c.getRed(&r1, green: &g1, blue: &b1, alpha: &a1) else { return c }
+    return UIColor(red: r1*(1-r) + r,
+                   green: g1*(1-r) + r,
+                   blue: b1*(1-r) + r,
+                   alpha: a1)
 }
 
 // === Font tuning for medium widget ===
@@ -63,7 +96,10 @@ private enum WFont {
     static let timeSize:  CGFloat = 9   // 開始/終了時刻の数字を少し小さく
     static let indexFont: Font = .footnote.weight(.semibold)  // 見出しの 1〜5 も小さく
     static let roomSize:  CGFloat = 10  // ← 教室（例: 1111, B304 など）
-    static let weekdayFont: Font = .system(size: 15, weight: .semibold) // ← 追加：曜日
+    static let weekdayFont: Font = .system(size: 12, weight: .semibold) // ← 追加：曜日
+    // 追加：Large 向けの時限番号フォント
+    static let largeIndexSize: CGFloat = 13
+    static let largeTimeSize: CGFloat = 10 // ← Large 用の開始/終了（既存の .caption2 より少し小さめ）
 }
 
 struct TodayView: View {
@@ -97,46 +133,7 @@ struct TodayView: View {
         case .systemMedium:
             mediumStrip()                      // ← 新しい中サイズ
                 .widgetURL(URL(string: "aogaku://timetable?day=today"))
-     /*
-        case .systemMedium:
-            GeometryReader { geo in
-                // 表示するコマ数（5〜7を自動）
-                let columns = lastActivePeriod()
-
-                // 👉 余白と間隔をタイトに
-                let outerX: CGFloat = 2                       // 左右の外側余白（小さく）
-                
-                // ← セル同士のすき間。この値を下げる
-                let spacing: CGFloat = (columns >= 7) ? 2 //// 7限ならさらに詰める
-                                        : (columns == 6 ? 2 : 4)// 6限/5限
-                //let spacing: CGFloat = (columns >= 7) ? 4
-                          //           : (columns == 6 ? 6 : 8)
-
-                // 幅計算は “表示領域 − 左右余白 − すき間合計”
-                let usable = geo.size.width - outerX*2 - CGFloat(columns - 1) * spacing
-                let cellW  = usable / CGFloat(columns)
-                let cellH  = geo.size.height * 0.82           // 少し背を高く
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("今日の時間割")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .multilineTextAlignment(.center)
-
-                    HStack(spacing: spacing) {
-                        ForEach(entry.snapshot.periods.prefix(columns), id: \.self) { p in
-                            slotCard(p, highlight: isNow(in: p))
-                                .frame(width: cellW, height: cellH)
-                                .clipped()
-                        }
-                    }
-                }
-                .padding(.top, 5)
-                .padding(.horizontal, outerX)                 // ← 計算と同じ値を使う
-                .padding(.bottom, 4)
-                .widgetURL(URL(string: "aogaku://timetable?day=today"))
-            }
-*/
+     
             
         case .systemLarge:
             largeDetail()// ⬅︎ これを追加
@@ -163,10 +160,11 @@ struct TodayView: View {
             // 小ウィジェットには見出しは入れず、本文を最大化
             ForEach(1...5, id: \.self) { i in
                 let title = entry.snapshot.periods.first(where: { $0.index == i })?.title ?? "−"
+                let nowHere = isNowSlot(i)            // ← 追加：今この時限かどうか
                 HStack(spacing: 10) {
                     Text("\(i)")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(nowHere ? Color.blue : .gray) // ← 今の時限だけ青
                         .frame(width: 14, alignment: .trailing)
                     Text(title)
                         .font(.system(size: 15, weight: .semibold))
@@ -210,6 +208,8 @@ struct TodayView: View {
                 // 上：曜日を中央に
                 Text(entry.snapshot.dayLabel)
                     .font(WFont.weekdayFont)     // ← ここだけでサイズ調整できる
+                    .foregroundStyle(weekdayTint)
+                    .padding(.top, 4)   // 曜日だけ少し下げる
                     .frame(maxWidth: .infinity, alignment: .center)
 
                 // 列
@@ -274,27 +274,46 @@ struct TodayView: View {
         let title = period?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let room  = period?.room.trimmingCharacters(in: .whitespacesAndNewlines)  ?? ""
         let hasContent = !(title.isEmpty && room.isEmpty)
+        // ★ ここで色を決定
+        let baseUI = uiColor(for: period?.colorKey)
+        let fillUI = highlight ? baseUI : pastel(baseUI)   // 現在コマは“そのままの色”、それ以外は淡く
+        let fill = Color(uiColor: fillUI)
 
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(hasContent ? (highlight ? Color.accentColor : Color(.systemFill))
-                                 : Color(.tertiarySystemFill))
+                .fill(hasContent ? fill : Color(.tertiarySystemFill))
 
             if hasContent {
-                VStack(spacing: 8) {
-                    Text(title)
-                        .font(.system(size: WFont.titleSize, weight: .semibold))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.82)  // ほんの少しだけ縮小も許容
+                let bottomInset: CGFloat = 8       // 教室ラベルの下端余白
+                let roomReserve: CGFloat = 18      // 教室ラベル分の“下の空き”を確保（被り防止）
+
+                ZStack(alignment: .bottom) {
+                    // ▼ 下端固定：教室名
                     Text(room.isEmpty ? " " : room)
                         .font(.system(size: WFont.roomSize, weight: .medium).monospacedDigit())
                         .lineLimit(1)
+                        .padding(.bottom, bottomInset)
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    // ▼ 中央固定：授業名（下にroomReserve分の作業領域を確保して中央寄せ）
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        Text(title)
+                            .font(.system(size: WFont.titleSize, weight: .semibold))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(5)
+                            .minimumScaleFactor(0.82)
+                            .padding(.horizontal, 10)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.bottom, roomReserve + bottomInset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
-                .foregroundStyle(highlight ? .white : .primary)
-                .padding(.horizontal, 10)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .foregroundStyle(.black)
             }
+
+            
+            
         }
     }
 
@@ -324,7 +343,7 @@ struct TodayView: View {
             let topInset: CGFloat = 6                  // 上マージン
             let headerHeight: CGFloat = 20             // 「木曜日」ラベルの想定高さ
             let gapHeaderToList: CGFloat = 4           // 見出しとリストの間
-            let rowSpacing: CGFloat = (rows >= 7 ? 3 : 5)
+            let rowSpacing: CGFloat = (rows >= 7 ? 2 : 4)
 
             // 利用可能な高さから、行間と見出し分を引いて行高を割り出す
             let usable = geo.size.height
@@ -340,7 +359,8 @@ struct TodayView: View {
             VStack(alignment: .leading, spacing: gapHeaderToList) {
                 // 見出しは曜日だけ
                 Text(entry.snapshot.dayLabel)
-                    .font(.headline)
+                    .font(WFont.weekdayFont)
+                    .foregroundStyle(weekdayTint)
 
                 VStack(spacing: rowSpacing) {
                     ForEach(1...rows, id: \.self) { i in
@@ -356,6 +376,20 @@ struct TodayView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, bottomInset)
         }
+    }
+
+    // Large/共通：左側の時間・時限表示（09:00 / 1 / 10:30 の縦3段）
+    @ViewBuilder
+    private func timeTriad(start: String, period: Int, end: String) -> some View {
+        VStack(spacing: 1) { // ← 2 → 1（キュッと詰める）
+            Text(start)
+                .font(.system(size: WFont.largeTimeSize, weight: .regular).monospacedDigit())
+            Text("\(period)")
+                .font(.system(size: WFont.largeIndexSize, weight: .semibold).monospacedDigit()) // ← 20pt → 16pt
+            Text(end).font(.system(size: WFont.largeTimeSize, weight: .regular).monospacedDigit())
+        }
+        .frame(minWidth: 40)        // ← 48 → 40（左コラムを少し細く）
+        .foregroundStyle(.primary)
     }
 
     // 余り用のピル（任意）
@@ -451,50 +485,55 @@ struct TodayView: View {
         // 未登録時の安全値
         let start = period?.start ?? PeriodTime.slots[index-1].start
         let end   = period?.end   ?? PeriodTime.slots[index-1].end
-        let title = period?.title ?? "−"
-        let room  = period?.room  ?? "−"
+        let title = period?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let room  = period?.room.trimmingCharacters(in: .whitespacesAndNewlines)  ?? ""
         let teacherName = teacher(of: period)
+        let hasContent = !(title.isEmpty && room.isEmpty && teacherName.isEmpty)
+
+        // miniCard と同じ色決定ロジック（現在コマは元色・それ以外は淡色）
+        let baseUI = uiColor(for: period?.colorKey)
+        let bgUI: UIColor = hasContent ? (highlight ? baseUI : pastel(baseUI)) : .tertiarySystemFill
+        let fill = Color(uiColor: bgUI)
 
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(highlight ? Color.accentColor.opacity(0.10)
-                                : Color(.secondarySystemBackground))
+            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill)
 
-            HStack(spacing: 10) {
-                // 左：時限と時間（幅細め）
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(index)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tint)
-                    Text(start).font(.caption2.monospacedDigit())
-                    Text(end).font(.caption2.monospacedDigit())
-                }
-                .frame(width: 58, alignment: .leading)
+            HStack(spacing: 12) {
+                // 左：統一フォーマット（09:00 / 1 / 10:30）
+                timeTriad(start: start, period: index, end: end)
+                    .frame(width: 48)
 
-                // 中央：授業名 + サブ情報（1行で揃える）
+                // 中央：授業名 + サブ情報
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(title.isEmpty ? " " : title)
                         .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
 
-                    HStack(spacing: 10) {
-                        Text(room)
+                    HStack(spacing: 8) {
+                        if !room.isEmpty { Text(room) }
                         if !teacherName.isEmpty { Text(teacherName) }
                     }
-                    .font(.caption)                 // ← 少し小さめ
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
                 }
 
-                Spacer()
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
-            //.padding(.vertical, 6)
-            .frame(height: height)                  // ← 行高を固定
+            .frame(height: height)
+        }
+        // ★ 追加：カード内の左側に小さな丸を重ねる（今のコマだけ表示）
+        .overlay(alignment: .leading) {
+            Circle()
+                .fill(highlight ? Color.secondary : .clear)
+                .frame(width: 10, height: 10)   // 必要なら 8〜12 で微調整
+                .padding(.leading, 6)           // 左端からのオフセット
         }
     }
+
 
 
     /// WidgetPeriod に teacher プロパティが無い環境でもビルドを通すためのフォールバック

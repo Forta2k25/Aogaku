@@ -34,6 +34,7 @@ final class CourseDetailViewController: UIViewController {
     weak var delegate: CourseDetailViewControllerDelegate?
     private let course: Course
     private let location: SlotLocation
+    private let titleHeader = UIView()   // 緑の帯コンテナ
 
     // MARK: - Color Picker
     private let colorKeys: [SlotColorKey] = [.blue, .green, .yellow, .red, .teal, .gray]
@@ -51,6 +52,11 @@ final class CourseDetailViewController: UIViewController {
         image: UIImage(systemName: "pencil")
     )
     private let roomUnderline = UIView()          // [ADD] 下線
+    
+    private let periodRow = UIView()
+    private let periodUnderline = UIView()
+    private let idRow = UIView()
+    private let idUnderline = UIView()
 
     private let summaryRow = UIStackView()
     private let metaCard   = UIView()
@@ -61,6 +67,7 @@ final class CourseDetailViewController: UIViewController {
     private let attendBtn = UIButton(type: .system)
     private let lateBtn   = UIButton(type: .system)
     private let absentBtn = UIButton(type: .system)
+    private let counterNumberYOffset: CGFloat = -6  // 上に寄せる量（-4〜-10でお好み）
 
     private let webView = WKWebView()
     private let webContainer = UIView()          // ← プロパティのコンテナを使う（ローカルで再定義しない）
@@ -69,7 +76,16 @@ final class CourseDetailViewController: UIViewController {
     private let bottomBar = UIView()
     private let editButton = UIButton(type: .system)
     private let deleteButton = UIButton(type: .system)
-    private let bottomBarHeight: CGFloat = 76
+    private let bottomBarHeight: CGFloat = 50
+    
+    //色変更
+    private let colorToggle = UIButton(type: .system)
+    private let colorRow = UIStackView()
+    private var isColorRowOpen = false
+    private let actionsRow = UIStackView()
+    
+    //下端のバー
+    private var bottomBarHeightConstraint: NSLayoutConstraint!
 
     // MARK: - Attendance
     private var counts = AttendanceCounts(attended: 0, late: 0, absent: 0)
@@ -117,10 +133,11 @@ final class CourseDetailViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // 下固定バー分のインセット
-        scroll.contentInset.bottom = bottomBarHeight + 16
-        scroll.verticalScrollIndicatorInsets.bottom = bottomBarHeight
+        let safe = view.safeAreaInsets.bottom
+        bottomBarHeightConstraint?.constant = bottomBarHeight + safe
+        scroll.contentInset.bottom = bottomBarHeight + safe + 16
+        scroll.verticalScrollIndicatorInsets.bottom = bottomBarHeight + safe
         
-
     }
 
     // MARK: - Layout
@@ -133,31 +150,70 @@ final class CourseDetailViewController: UIViewController {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scroll)
         scroll.addSubview(stack)
+        
+        let headerContainer = UIView()
+        headerContainer.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(headerContainer)
 
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 0),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            stack.topAnchor.constraint(equalTo: headerContainer.bottomAnchor, constant: 12),
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -16),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor)
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            headerContainer.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            headerContainer.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor),
+            headerContainer.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor)
         ])
 
-        // タイトル
-        titleLabel.text = course.title
-        titleLabel.font = .systemFont(ofSize: 28, weight: .bold)
-        titleLabel.numberOfLines = 0
-        stack.addArrangedSubview(titleLabel)
-
-        // 概要（曜日・限・教室・担当）
-        infoLabel.text = "\(location.dayName) \(location.period)限\n担当: \(course.teacher)"
-        infoLabel.font = .systemFont(ofSize: 18, weight: .medium)
-        infoLabel.numberOfLines = 0
-        stack.addArrangedSubview(infoLabel)
+        // ===== 緑のタイトル帯 =====
+        titleHeader.backgroundColor = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
         
+        titleHeader.layer.cornerRadius = 0
+        titleHeader.layer.masksToBounds = true
+        titleHeader.translatesAutoresizingMaskIntoConstraints = false
+        headerContainer.addSubview(titleHeader)
+
+        titleLabel.text = course.title
+        titleLabel.textColor = .white
+        titleLabel.textAlignment = .center
+        titleLabel.font = .systemFont(ofSize: 28, weight: .bold)
+        titleLabel.numberOfLines = 2
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleHeader.addSubview(titleLabel)
+
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: titleHeader.topAnchor, constant: 16),
+            titleLabel.leadingAnchor.constraint(equalTo: titleHeader.leadingAnchor, constant: 16),
+            titleLabel.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -16),
+            titleLabel.bottomAnchor.constraint(equalTo: titleHeader.bottomAnchor, constant: -16),
+            titleHeader.heightAnchor.constraint(greaterThanOrEqualToConstant: 72),
+            titleHeader.topAnchor.constraint(equalTo: headerContainer.topAnchor),
+            titleHeader.leadingAnchor.constraint(equalTo: headerContainer.leadingAnchor),
+            titleHeader.trailingAnchor.constraint(equalTo: headerContainer.trailingAnchor),
+            titleHeader.bottomAnchor.constraint(equalTo: headerContainer.bottomAnchor)
+        ])
+        
+        // 追加：セーフエリア上部の白い帯を緑で覆う
+        let topCap = UIView()
+        topCap.backgroundColor = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+        topCap.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(topCap)
+        NSLayoutConstraint.activate([
+            topCap.topAnchor.constraint(equalTo: view.topAnchor),
+            topCap.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topCap.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            topCap.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor)
+        ])
+
+
+        // ◆ 担当教員や科目名の重複表示は出さない
+        infoLabel.isHidden = true
+
         // ーー 教室（編集できる表示） ーー
         roomRow.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(roomRow)
@@ -207,52 +263,79 @@ final class CourseDetailViewController: UIViewController {
         ])
 
 
-        // 右側の小カードを入れる横並び行（将来の拡張に備え左側を空けておく）
-        summaryRow.axis = .horizontal
-        summaryRow.alignment = .top
-        summaryRow.spacing = 16
-        summaryRow.distribution = .fill
-        stack.addArrangedSubview(summaryRow)
+        // ===== 時限（教室と同じスタイル） =====
+        periodRow.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(periodRow)
 
-        // メタ情報カード
-        metaCard.backgroundColor = .secondarySystemBackground
-        metaCard.layer.cornerRadius = 12
-        metaCard.layer.borderWidth = 0.5
-        metaCard.layer.borderColor = UIColor.separator.cgColor
-        metaCard.translatesAutoresizingMaskIntoConstraints = false
-        metaCard.setContentHuggingPriority(.required, for: .horizontal)
-        metaCard.setContentCompressionResistancePriority(.required, for: .horizontal)
-        summaryRow.addArrangedSubview(metaCard)
+        creditsLabel.text = "\(location.dayName) \(location.period)限"
+        creditsLabel.font = .systemFont(ofSize: 18, weight: .medium)
+        creditsLabel.numberOfLines = 1
+        creditsLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let metaStack = UIStackView()
-        metaStack.axis = .vertical
-        metaStack.alignment = .leading
-        metaStack.spacing = 6
-        metaStack.translatesAutoresizingMaskIntoConstraints = false
-        metaCard.addSubview(metaStack)
+        periodUnderline.backgroundColor = UIColor.label.withAlphaComponent(0.15)
+        periodUnderline.translatesAutoresizingMaskIntoConstraints = false
 
-        creditsLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        idLabel.font      = .systemFont(ofSize: 13, weight: .regular)
-        creditsLabel.text = "単位: \(courseCreditsText() ?? "–")"
-        idLabel.text      = "登録番号: \(course.id)"
-
-        metaStack.addArrangedSubview(creditsLabel)
-        metaStack.addArrangedSubview(idLabel)
+        periodRow.addSubview(creditsLabel)
+        periodRow.addSubview(periodUnderline)
 
         NSLayoutConstraint.activate([
-            metaStack.topAnchor.constraint(equalTo: metaCard.topAnchor, constant: 12),
-            metaStack.leadingAnchor.constraint(equalTo: metaCard.leadingAnchor, constant: 12),
-            metaStack.trailingAnchor.constraint(equalTo: metaCard.trailingAnchor, constant: -12),
-            metaStack.bottomAnchor.constraint(equalTo: metaCard.bottomAnchor, constant: -12),
-            metaCard.widthAnchor.constraint(greaterThanOrEqualToConstant: 140)
+            creditsLabel.topAnchor.constraint(equalTo: periodRow.topAnchor),
+            creditsLabel.leadingAnchor.constraint(equalTo: periodRow.leadingAnchor),
+
+            periodUnderline.leadingAnchor.constraint(equalTo: creditsLabel.leadingAnchor),
+            periodUnderline.topAnchor.constraint(equalTo: creditsLabel.bottomAnchor, constant: 3),
+            periodUnderline.heightAnchor.constraint(equalToConstant: 1),
+            periodUnderline.trailingAnchor.constraint(equalTo: creditsLabel.trailingAnchor),
+
+            periodRow.trailingAnchor.constraint(equalTo: periodUnderline.trailingAnchor),
+            periodRow.bottomAnchor.constraint(equalTo: periodUnderline.bottomAnchor)
         ])
 
+        // ===== 登録番号（教室と同じスタイル） =====
+        idRow.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(idRow)
+
+        idLabel.text = "登録番号: \(course.id)"
+        idLabel.font = .systemFont(ofSize: 18, weight: .medium)
+        idLabel.numberOfLines = 1
+        idLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        idUnderline.backgroundColor = UIColor.label.withAlphaComponent(0.15)
+        idUnderline.translatesAutoresizingMaskIntoConstraints = false
+
+        idRow.addSubview(idLabel)
+        idRow.addSubview(idUnderline)
+
+        NSLayoutConstraint.activate([
+            idLabel.topAnchor.constraint(equalTo: idRow.topAnchor),
+            idLabel.leadingAnchor.constraint(equalTo: idRow.leadingAnchor),
+
+            idUnderline.leadingAnchor.constraint(equalTo: idLabel.leadingAnchor),
+            idUnderline.topAnchor.constraint(equalTo: idLabel.bottomAnchor, constant: 3),
+            idUnderline.heightAnchor.constraint(equalToConstant: 1),
+            idUnderline.trailingAnchor.constraint(equalTo: idLabel.trailingAnchor),
+
+            idRow.trailingAnchor.constraint(equalTo: idUnderline.trailingAnchor),
+            idRow.bottomAnchor.constraint(equalTo: idUnderline.bottomAnchor)
+        ])
+
+
         // 出欠カウンター
+        let countersWrap = UIStackView()
+        
         countersRow.axis = .horizontal
         countersRow.alignment = .center
-        countersRow.distribution = .equalSpacing
+        countersRow.distribution = .equalCentering
         countersRow.spacing = 16
-        stack.addArrangedSubview(countersRow)
+        countersRow.translatesAutoresizingMaskIntoConstraints = false
+        countersRow.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
+        
+        
+        countersWrap.axis = .horizontal
+        countersWrap.alignment = .center
+        countersWrap.distribution = .fill
+        stack.addArrangedSubview(countersWrap)
+        countersWrap.addArrangedSubview(countersRow)
 
         setupCounterButton(attendBtn, tag: 0, label: "出席")
         setupCounterButton(lateBtn,   tag: 1, label: "遅刻")
@@ -281,46 +364,96 @@ final class CourseDetailViewController: UIViewController {
     }
     
 
-    // MARK: - Color Picker Row（タイトル直下に挿入）
+    // MARK: - Color Picker Row（「コマの色を変更」ボタン → 折りたたみ展開）
     private func buildColorPickerRow() {
-        let row = UIStackView()
-        row.axis = .horizontal
-        row.alignment = .center
-        row.distribution = .equalSpacing  // ← 伸ばさない
-        row.spacing = 12
-        row.isLayoutMarginsRelativeArrangement = true
-        row.layoutMargins = .init(top: 4, left: 8, bottom: 8, right: 8)
+        // === トグルボタン（小さめ） ===
+        var cfg = UIButton.Configuration.plain()
+        cfg.title = "コマの色を変更"
+        cfg.image = UIImage(systemName: "chevron.down")
+        cfg.imagePlacement = .trailing
+        cfg.imagePadding = 4
+        cfg.contentInsets = .init(top: 4, leading: 10, bottom: 4, trailing: 10)
+        colorToggle.configuration = cfg
+        colorToggle.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        colorToggle.backgroundColor = .secondarySystemBackground
+        colorToggle.layer.cornerRadius = 12
+        colorToggle.layer.masksToBounds = true
+        colorToggle.setContentHuggingPriority(.required, for: .horizontal)
+        colorToggle.setContentCompressionResistancePriority(.required, for: .horizontal)
+        colorToggle.addTarget(self, action: #selector(toggleColorPicker), for: .touchUpInside)
 
+        // === 右上に寄せる行（[spacer][button]） ===
+        actionsRow.axis = .horizontal
+        actionsRow.alignment = .center
+        actionsRow.distribution = .fill
+        actionsRow.isLayoutMarginsRelativeArrangement = true
+        actionsRow.layoutMargins = .init(top: 0, left: 0, bottom: 0, right: 0)
+
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        actionsRow.addArrangedSubview(spacer)
+        actionsRow.addArrangedSubview(colorToggle)
+
+        // stack のいちばん上に差し込む（緑ヘッダーの直下）
+        stack.insertArrangedSubview(actionsRow, at: 0)
+
+        // === 色ボタンの行（最初は閉じておく） ===
+        colorRow.axis = .horizontal
+        colorRow.alignment = .center
+        colorRow.distribution = .equalSpacing
+        colorRow.spacing = 12
+        colorRow.isLayoutMarginsRelativeArrangement = true
+        colorRow.layoutMargins = .init(top: 4, left: 8, bottom: 8, right: 8)
+        colorRow.isHidden = true
+        colorRow.alpha  = 0
+        stack.insertArrangedSubview(colorRow, at: 1)
+
+        // 色ボタンを並べる
         colorButtons = colorKeys.enumerated().map { (i, key) in
             let b = UIButton(type: .system)
             b.tag = i
             b.backgroundColor = key.uiColor
-            b.setTitle("", for: .normal)
             b.layer.cornerRadius = 18
             b.layer.borderWidth = 1
             b.layer.borderColor = UIColor.separator.cgColor
             b.translatesAutoresizingMaskIntoConstraints = false
             b.widthAnchor.constraint(equalToConstant: 36).isActive = true
             b.heightAnchor.constraint(equalToConstant: 36).isActive = true
-            
-            b.setContentHuggingPriority(.required, for: .horizontal)
-            b.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-            
             b.addTarget(self, action: #selector(colorTapped(_:)), for: .touchUpInside)
-            row.addArrangedSubview(b)
+            colorRow.addArrangedSubview(b)
             return b
         }
 
-        if let idx = stack.arrangedSubviews.firstIndex(of: titleLabel) {
-            stack.insertArrangedSubview(row, at: idx + 1)
-        } else {
-            stack.addArrangedSubview(row)
-        }
+        // 現在色の選択状態を反映
         if let current = SlotColorStore.color(for: location) {
             updateSelectedColorUI(selected: current)
         }
     }
+
+
+    @objc private func toggleColorPicker() {
+        isColorRowOpen.toggle()
+
+        // 閉じている→開く ときは先に表示してからフェード
+        if isColorRowOpen { colorRow.isHidden = false }
+
+        // タイトルと矢印を差し替え
+        var cfg = colorToggle.configuration ?? .plain()
+        cfg.title = isColorRowOpen ? "閉じる" : "コマの色を変更"
+        cfg.image = UIImage(systemName: isColorRowOpen ? "chevron.up" : "chevron.down")
+        colorToggle.configuration = cfg
+
+        UIView.animate(withDuration: 0.25, animations: {
+            self.colorRow.alpha = self.isColorRowOpen ? 1 : 0
+            self.view.layoutIfNeeded()
+        }, completion: { _ in
+            // 開いていた→閉じる ときはアニメ後に非表示
+            if !self.isColorRowOpen { self.colorRow.isHidden = true }
+        })
+    }
+
     
     @objc private func editRoomTapped() { // [ADDED]
         let ac = UIAlertController(title: "教室を編集",
@@ -422,31 +555,50 @@ final class CourseDetailViewController: UIViewController {
         hStack.translatesAutoresizingMaskIntoConstraints = false
         bottomBar.addSubview(hStack)
 
+        // --- ボタン設定（先に全部盛ってから適用） ---
         var editCfg = UIButton.Configuration.filled()
         editCfg.title = "編集"
         editCfg.baseBackgroundColor = .systemBlue.withAlphaComponent(0.15)
         editCfg.baseForegroundColor = .systemBlue
         editCfg.cornerStyle = .large
-        editButton.configuration = editCfg
-        editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
+        editCfg.contentInsets = .init(top: 10, leading: 26, bottom: 10, trailing: 26)
 
         var delCfg = UIButton.Configuration.filled()
         delCfg.title = "削除"
         delCfg.baseBackgroundColor = .systemRed.withAlphaComponent(0.15)
         delCfg.baseForegroundColor = .systemRed
         delCfg.cornerStyle = .large
+        delCfg.contentInsets  = .init(top: 10, leading: 26, bottom: 10, trailing: 26)
+
+        let fontTF = UIConfigurationTextAttributesTransformer { incoming in
+            var out = incoming
+            out.font = .systemFont(ofSize: 18, weight: .semibold)
+            return out
+        }
+        editCfg.titleTextAttributesTransformer = fontTF
+        delCfg.titleTextAttributesTransformer  = fontTF
+
+        editButton.configuration = editCfg
         deleteButton.configuration = delCfg
+        editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
         deleteButton.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
 
         hStack.addArrangedSubview(editButton)
         hStack.addArrangedSubview(deleteButton)
 
+        // --- 下端に張り付け & 高さは Home インジケータぶん加算 ---
         NSLayoutConstraint.activate([
             bottomBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bottomBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            bottomBar.heightAnchor.constraint(equalToConstant: bottomBarHeight),
+            bottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        bottomBarHeightConstraint = bottomBar.heightAnchor.constraint(
+            equalToConstant: bottomBarHeight + view.safeAreaInsets.bottom
+        )
+        bottomBarHeightConstraint.isActive = true   // ← ここに「,」は付けない
 
+        // --- 仕切り線 & ボタン行の制約 ---
+        NSLayoutConstraint.activate([
             hair.topAnchor.constraint(equalTo: bottomBar.topAnchor),
             hair.leadingAnchor.constraint(equalTo: bottomBar.leadingAnchor),
             hair.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor),
@@ -455,9 +607,10 @@ final class CourseDetailViewController: UIViewController {
             hStack.leadingAnchor.constraint(equalTo: bottomBar.leadingAnchor, constant: 16),
             hStack.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor, constant: -16),
             hStack.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
-            hStack.heightAnchor.constraint(equalToConstant: 44)
+            hStack.heightAnchor.constraint(equalToConstant: 60) // ← 大きめに
         ])
     }
+
 
     // MARK: - Counters
     private func setupCounterButton(_ b: UIButton, tag: Int, label: String) {
@@ -471,6 +624,7 @@ final class CourseDetailViewController: UIViewController {
         b.heightAnchor.constraint(equalToConstant: 88).isActive = true
 
         b.addTarget(self, action: #selector(counterTapped(_:)), for: .touchUpInside)
+        b.configuration = nil    // ← 改行タイトルは使わず、ラベルを自前配置に
 
         let lp = UILongPressGestureRecognizer(target: self, action: #selector(counterLongPressed(_:)))
         lp.minimumPressDuration = 0.5
@@ -480,21 +634,43 @@ final class CourseDetailViewController: UIViewController {
     }
 
     private func setCounterButtonTitle(_ b: UIButton, count: Int, label: String) {
-        let num = NSAttributedString(
-            string: "\(count)\n",
-            attributes: [.font: UIFont.systemFont(ofSize: 32, weight: .semibold)]
-        )
-        let cap = NSAttributedString(
-            string: label,
-            attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .regular)]
-        )
-        let s = NSMutableAttributedString(attributedString: num)
-        s.append(cap)
-        var cfg = UIButton.Configuration.plain()
-        cfg.attributedTitle = AttributedString(s)
-        cfg.titleAlignment = .center
-        cfg.contentInsets = .init(top: 8, leading: 8, bottom: 8, trailing: 8)
-        b.configuration = cfg
+        // ボタン内に 2 ラベル（数値・キャプション）を敷く
+        let numTag = 9001
+        let capTag = 9002
+
+        let numL: UILabel = (b.viewWithTag(numTag) as? UILabel) ?? {
+            let l = UILabel()
+            l.tag = numTag
+            l.translatesAutoresizingMaskIntoConstraints = false
+            l.font = .systemFont(ofSize: 32, weight: .semibold)
+            l.textColor = b.tintColor
+            l.textAlignment = .center
+            b.addSubview(l)
+            NSLayoutConstraint.activate([
+                l.centerXAnchor.constraint(equalTo: b.centerXAnchor),
+                l.centerYAnchor.constraint(equalTo: b.centerYAnchor,
+                                           constant: counterNumberYOffset) // 少し上へ
+            ])
+            return l
+        }()
+
+        let capL: UILabel = (b.viewWithTag(capTag) as? UILabel) ?? {
+            let l = UILabel()
+            l.tag = capTag
+            l.translatesAutoresizingMaskIntoConstraints = false
+            l.font = .systemFont(ofSize: 14, weight: .regular)
+            l.textColor = b.tintColor
+            l.textAlignment = .center
+            b.addSubview(l)
+            NSLayoutConstraint.activate([
+                l.centerXAnchor.constraint(equalTo: b.centerXAnchor),
+                l.bottomAnchor.constraint(equalTo: b.bottomAnchor, constant: -8) // ★下寄せ
+            ])
+            return l
+        }()
+
+        numL.text = "\(count)"
+        capL.text = label
     }
 
     private func updateCounterButtons() {

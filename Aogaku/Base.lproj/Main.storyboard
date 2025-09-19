@@ -1104,10 +1104,10 @@
             </objects>
             <point key="canvasLocation" x="792" y="949"/>
         </scene>
-        <!--User Settings View Controller-->
+        <!--Image Crop View Controller-->
         <scene sceneID="aGj-vD-MMh">
             <objects>
-                <viewController id="dAH-YK-igf" customClass="UserSettingsViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                <viewController id="dAH-YK-igf" customClass="ImageCropViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="PRo-OR-1lK">
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>

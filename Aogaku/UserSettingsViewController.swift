@@ -625,49 +625,144 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     }
 
     private func performDeleteAccount() {
-        guard let user = Auth.auth().currentUser else {
-            tabBarController?.selectedIndex = settingsTabIndex
-            return
-        }
+        guard let user = Auth.auth().currentUser else { return }
         let uid = user.uid
-        let idLower = (user.displayName ?? "").lowercased()
-        let storageRef = Storage.storage().reference(withPath: "avatars/\(uid).jpg")
+        setLoading(true)
 
-        Task {
-            // Firestore クリーンアップ
+        Task { @MainActor in
             do {
-                let batch = db.batch()
-                if !idLower.isEmpty {
-                    batch.deleteDocument(db.collection("usernames").document(idLower))
-                }
-                batch.deleteDocument(db.collection("users").document(uid))
-                try await batch.commit()
-            } catch {
-                print("⚠️ Firestore cleanup failed:", error.localizedDescription)
-            }
-
-            // 画像も削除
-            storageRef.delete(completion: { _ in })
-
-            // Auth 削除
-            do {
+                // 1) 相手側リンク掃除
+                try await clientSideCrossCleanup(uid: uid)
+                // 2) 自分ツリー & usernames
+                try await deleteSelfUserTree(uid: uid)
+                try await deleteUsernameMapping(uid: uid)
+                // 3) Storage のアバター
+                await deleteAvatarFiles(uid: uid)
+                // 4) Auth 本体（recent login 必須）
                 try await user.delete()
-                await MainActor.run { self.tabBarController?.selectedIndex = self.settingsTabIndex }
-            } catch {
-                let ns = error as NSError
-                if ns.domain == AuthErrorDomain,
-                   ns.code == AuthErrorCode.requiresRecentLogin.rawValue {
-                    await MainActor.run {
-                        self.showAlert(
-                            title: "再ログインが必要です",
-                            message: "安全のため、アカウント削除には再ログインが必要です。もう一度ログイン後に削除をお試しください。"
-                        )
-                        self.performSignOut()
-                    }
+
+                self.showAlert(title: "アカウント削除", message: "削除が完了しました。")
+                try? Auth.auth().signOut()
+            } catch let err as NSError {
+                if err.code == AuthErrorCode.requiresRecentLogin.rawValue {
+                    self.showAlert(title: "再ログインが必要", message: "再ログイン後にもう一度お試しください。")
+                    try? Auth.auth().signOut()
                 } else {
-                    await MainActor.run {
-                        self.showAlert(title: "アカウント削除に失敗", message: error.localizedDescription)
-                    }
+                    self.showAlert(title: "アカウント削除に失敗", message: err.localizedDescription)
+                }
+            }
+            self.setLoading(false)
+        }
+    }
+    
+    private func deleteSelfUserTree(uid: String) async throws {
+        let db = Firestore.firestore()
+        // 代表的な自分配下のサブコレ
+        let mySubs = ["timetable","Friends","friends","requestsIncoming","requestIncoming","incomingRequests","requestsOutgoing","requestOutgoing","outgoingRequests"]
+        for s in mySubs {
+            let snap = try await db.collection("users").document(uid).collection(s).getDocuments()
+            try await withThrowingTaskGroup(of: Void.self) { tg in
+                for d in snap.documents { tg.addTask { try await d.reference.delete() } }
+                try await tg.waitForAll()
+            }
+        }
+        try await db.collection("users").document(uid).delete()
+    }
+
+    private func deleteUsernameMapping(uid: String) async throws {
+        let db = Firestore.firestore()
+        let uref = db.collection("users").document(uid)
+        let snap = try await uref.getDocument()
+        if let key = (snap.get("idLower") as? String)
+            ?? (snap.get("usernameLower") as? String)
+            ?? ((snap.get("id") as? String)?.lowercased()) {
+            try? await db.collection("usernames").document(key).delete()
+        }
+    }
+
+    private func deleteAvatarFiles(uid: String) async {
+        let storage = Storage.storage()
+        // 単発ファイル
+        try? await storage.reference(withPath: "avatars/\(uid).jpg").delete()
+        // フォルダ配下（あれば）
+        let folder = storage.reference(withPath: "avatars/\(uid)")
+        if let list = try? await folder.listAll() {
+            for item in list.items { try? await item.delete() }
+            // さらに階層がある場合（prefixes）
+            for prefix in list.prefixes {
+                if let list2 = try? await prefix.listAll() {
+                    for item in list2.items { try? await item.delete() }
+                }
+            }
+        }
+    }
+
+    // MARK: - Loading HUD（クラス内）
+    private var loadingCover: UIView?
+
+    private func setLoading(_ loading: Bool) {
+        if loading {
+            guard loadingCover == nil else { return }
+            let cover = UIView()
+            cover.backgroundColor = UIColor.black.withAlphaComponent(0.2)
+            cover.translatesAutoresizingMaskIntoConstraints = false
+
+            let spinner = UIActivityIndicatorView(style: .large)
+            spinner.translatesAutoresizingMaskIntoConstraints = false
+            spinner.startAnimating()
+            cover.addSubview(spinner)
+
+            view.addSubview(cover)
+            NSLayoutConstraint.activate([
+                cover.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                cover.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                cover.topAnchor.constraint(equalTo: view.topAnchor),
+                cover.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                spinner.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
+                spinner.centerYAnchor.constraint(equalTo: cover.centerYAnchor)
+            ])
+
+            view.isUserInteractionEnabled = false
+            loadingCover = cover
+        } else {
+            view.isUserInteractionEnabled = true
+            loadingCover?.removeFromSuperview()
+            loadingCover = nil
+        }
+    }
+
+    // タブ切替（クラス内）
+    private func switchToTab(index: Int) {
+        navigationController?.popToRootViewController(animated: true)
+        tabBarController?.selectedIndex = index
+    }
+
+    // 相手側 Friends / requests* の「自分に関する行」を削除（クラス内）
+    private func clientSideCrossCleanup(uid: String) async throws {
+        let db = Firestore.firestore()
+        let groups = [
+            "Friends","friends",
+            "requestsIncoming","requestIncoming","incomingRequests",
+            "requestsOutgoing","requestOutgoing","outgoingRequests"
+        ]
+        // docID == uid 型
+        for g in groups {
+            let q = db.collectionGroup(g).whereField(FieldPath.documentID(), isEqualTo: uid)
+            let snap = try await q.getDocuments()
+            try await withThrowingTaskGroup(of: Void.self) { tg in
+                for d in snap.documents { tg.addTask { try await d.reference.delete() } }
+                try await tg.waitForAll()
+            }
+        }
+        // フィールド参照型
+        let fields = ["uid","friendUid","fromUid","toUid","ownerUid","targetUid"]
+        for g in groups {
+            for f in fields {
+                let q = db.collectionGroup(g).whereField(f, isEqualTo: uid)
+                let snap = try await q.getDocuments()
+                try await withThrowingTaskGroup(of: Void.self) { tg in
+                    for d in snap.documents { tg.addTask { try await d.reference.delete() } }
+                    try await tg.waitForAll()
                 }
             }
         }

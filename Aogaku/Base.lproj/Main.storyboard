@@ -1139,7 +1139,7 @@
         <scene sceneID="Uq4-DX-hdD">
             <objects>
                 <navigationController id="47C-D0-pTL" sceneMemberID="viewController">
-                    <tabBarItem key="tabBarItem" title="友だち" selectedImage="person.2" catalog="system" id="Xdb-0I-oLg"/>
+                    <tabBarItem key="tabBarItem" title="友だち" image="person.2" selectedImage="person.2" catalog="system" id="Xdb-0I-oLg"/>
                     <navigationBar key="navigationBar" contentMode="scaleToFill" id="OeP-6L-blo">
                         <rect key="frame" x="0.0" y="118" width="393" height="44"/>
                         <autoresizingMask key="autoresizingMask"/>
@@ -1279,6 +1279,7 @@
         <image name="line.horizontal.3" catalog="system" width="128" height="65"/>
         <image name="list.bullet" catalog="system" width="128" height="87"/>
         <image name="magnifyingglass" catalog="system" width="128" height="117"/>
+        <image name="person.2" width="128" height="128"/>
         <image name="person.2" catalog="system" width="128" height="87"/>
         <image name="plus.app" catalog="system" width="128" height="114"/>
         <image name="slider.horizontal.3" catalog="system" width="128" height="99"/>

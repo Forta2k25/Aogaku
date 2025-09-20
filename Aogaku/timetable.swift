@@ -7,6 +7,8 @@ import FirebaseAuth
 import FirebaseFirestore
 import WidgetKit   // ← 追加
 
+private let APP_GROUP_ID = "group.jp.forta.Aogaku"
+
 @inline(__always) private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
 }
@@ -198,6 +200,8 @@ private struct TimetableRemoteStore {
 
 }
 
+
+
 // MARK: - timetable
 
 final class timetable: UIViewController,
@@ -293,6 +297,71 @@ final class timetable: UIViewController,
 
     // 現在学期
     private var currentTerm: TermKey = TermStore.loadSelected()
+    
+    // === 背景テーマ ===
+    private enum TTBackground: String { case system, lightGray, white }
+
+    // 選択中テーマに応じた背景色（ダークは薄グレー）
+    private func appBGColor() -> UIColor {
+        let raw = UserDefaults.standard.string(forKey: "timetable.bg") ?? TTBackground.system.rawValue
+        let mode = TTBackground(rawValue: raw) ?? .system
+        switch mode {
+        case .system:
+            return .systemBackground
+        case .lightGray:
+            // ダーク: 薄いグレー / ライト: ほぼ白グレー
+            return UIColor { trait in
+                if trait.userInterfaceStyle == .dark { return UIColor(white: 0.2, alpha: 1.0) } // #1F1F1F 付近
+                else { return UIColor(white: 0.96, alpha: 1.0) }
+            }
+        case .white:
+            return .white
+        }
+    }
+
+    // まとめて反映
+    private func applyTheme() {
+        let bg = appBGColor()
+        view.backgroundColor = bg
+        scrollView.backgroundColor = bg
+        contentView.backgroundColor = bg
+        gridContainerView.backgroundColor = bg
+        adContainer.backgroundColor = bg
+    }
+
+    
+    /// ウィジェットが読む共有データを書き出す（1か所に集約）
+    private func mirrorForWidget() {
+        guard let g = UserDefaults(suiteName: APP_GROUP_ID) else { return }
+
+        // 割当（全セル）を JSON で保存
+        if let data = try? JSONEncoder().encode(assigned) {
+            g.set(data, forKey: "tt.assigned.\(currentTerm.storageKey)")
+        }
+
+        // 行列数と選択ターム
+        g.set(dayLabels.count,            forKey: "tt.days")          // 5 or 6
+        g.set(periodLabels.count,         forKey: "tt.periods")
+        g.set(currentTerm.storageKey,     forKey: "tt.term")
+
+        // ★ 土曜を使うか（TimetableSettings から）
+        g.set(settings.includeSaturday,   forKey: "tt.includeSaturday")
+
+        // 色（使っているなら）
+        var colorMap: [String:String] = [:]
+        for d in 0..<dayLabels.count {
+            for p in 1...periodLabels.count {
+                if let key = SlotColorStore.color(for: SlotLocation(day: d, period: p))?.rawValue {
+                    colorMap["cells.d\(d)p\(p)"] = key
+                }
+            }
+        }
+        g.set(colorMap, forKey: "tt.colors")
+
+        // タイムライン更新
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
 
     // ===== リモートストア（自分 or 友だち） =====
     private var remoteStore: TimetableRemoteStore? {
@@ -311,7 +380,30 @@ final class timetable: UIViewController,
             UserDefaults.standard.set(data, forKey: currentTerm.storageKey)
             TermStore.saveSelected(currentTerm)
         } catch { print("Save error:", error) }
+        
+        // === 共有（App Group）へミラー ===
+        if let g = UserDefaults(suiteName: "group.jp.forta.Aogaku"),
+           let data = try? JSONEncoder().encode(assigned) {
+            g.set(data, forKey: "tt.assigned.\(currentTerm.storageKey)")
+            g.set(dayLabels.count,     forKey: "tt.days")
+            g.set(periodLabels.count,  forKey: "tt.periods")
+            g.set(currentTerm.storageKey, forKey: "tt.term")
+            g.set(settings.includeSaturday, forKey: "tt.includeSaturday")
+
+            // 色（ある場合のみ）もミラー
+            var colorMap: [String:String] = [:]
+            for d in 0..<dayLabels.count {
+                for p in 1...periodLabels.count {
+                    if let key = SlotColorStore.color(for: SlotLocation(day: d, period: p))?.rawValue {
+                        colorMap["cells.d\(d)p\(p)"] = key
+                    }
+                }
+            }
+            g.set(colorMap, forKey: "tt.colors")
+        }
+        
         publishWidgetSnapshot()   // ← 追加（ここが肝）
+        mirrorForWidget()    // ← これを最後に追加
     }
     private func loadAssigned(for term: TermKey) {
         let key = term.storageKey
@@ -466,13 +558,18 @@ final class timetable: UIViewController,
 
         normalizeAssigned()
         loadAssigned(for: currentTerm)
-
+        saveAssigned()
+        
+        
         startTermSync()
         authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, _ in
             self?.startTermSync()
         }
 
-        view.backgroundColor = .systemBackground
+        if UserDefaults.standard.string(forKey: "timetable.bg") == nil {
+            UserDefaults.standard.set("lightGray", forKey: "timetable.bg")
+        }
+        applyTheme()
         buildHeader()
         layoutGridContainer()
         buildGridGuides()
@@ -492,6 +589,7 @@ final class timetable: UIViewController,
 
         setupAdBanner()
         applyViewOnlyUI() // ← 最後に反映
+        mirrorForWidget()
     }
 
     deinit {
@@ -519,6 +617,11 @@ final class timetable: UIViewController,
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         nowTimer?.invalidate()               // 追加
+    }
+    
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        applyTheme()
     }
 
     private func startNowTicker() {
@@ -579,6 +682,8 @@ final class timetable: UIViewController,
         rebuildGrid()
         lastDaysCount = dayLabels.count
         lastPeriodsCount = periodLabels.count
+        saveAssigned()   // ★ 追加
+        mirrorForWidget() 
     }
     private func remapAssigned(old: [Course?], oldDays: Int, oldPeriods: Int,
                                newDays: Int, newPeriods: Int) -> [Course?] {

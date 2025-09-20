@@ -7,10 +7,69 @@
 import WidgetKit
 import SwiftUI
 
+private let APP_GROUP_ID = "group.jp.forta.Aogaku"
+
 struct TodayEntry: TimelineEntry {
     let date: Date
     let snapshot: WidgetSnapshot
 }
+
+/// App Group から“今日の列”を組み立てる（丸めない・設定を尊重）
+private func buildTodayFromShared() -> WidgetSnapshot? {
+    guard let g = UserDefaults(suiteName: APP_GROUP_ID),
+          let term = g.string(forKey: "tt.term"),
+          let data = g.data(forKey: "tt.assigned.\(term)") else { return nil }
+
+    struct ACourse: Codable { let id: String?; let title: String; let room: String; let teacher: String? }
+    guard let arr = try? JSONDecoder().decode([ACourse?].self, from: data) else { return nil }
+
+    let days    = max(1, g.integer(forKey: "tt.days"))            // 5 or 6
+    let periods = max(1, g.integer(forKey: "tt.periods"))
+    let colors  = (g.dictionary(forKey: "tt.colors") as? [String:String]) ?? [:]
+    let includeSaturday = (g.object(forKey: "tt.includeSaturday") as? Bool) ?? (days >= 6)
+
+    let now = Date()
+    let cal = Calendar.current
+    let wk  = cal.component(.weekday, from: now)   // 1=Sun ... 7=Sat
+    let dayIdx = (wk + 5) % 7                      // 0=Mon ... 5=Sat
+
+    // 日付ラベル
+    let df = DateFormatter(); df.locale = Locale(identifier: "ja_JP")
+    df.setLocalizedDateFormatFromTemplate("EEEE")
+    let dayLabel = df.string(from: now)
+
+    // 授業なし（空）スナップショットを作る
+    func emptySnapshot() -> WidgetSnapshot {
+        var ps: [WidgetPeriod] = []
+        for p in 1...min(periods, PeriodTime.slots.count) {
+            let slot = PeriodTime.slots[p-1]
+            ps.append(.init(index: p, title: " ", room: "", start: slot.start, end: slot.end, teacher: "", colorKey: nil))
+        }
+        return .init(date: now, weekday: wk, dayLabel: dayLabel, periods: ps)
+    }
+
+    // ★ 分岐：日曜は常に、土曜＋平日のみ設定の時は「授業なし」
+    if wk == 1 { return emptySnapshot() }                  // Sunday
+    if dayIdx == 5 && !includeSaturday { return emptySnapshot() }  // Saturday but 5日設定
+
+    // それ以外は“丸めず”にその日の列をそのまま使う
+    var ps: [WidgetPeriod] = []
+    for p in 1...min(periods, PeriodTime.slots.count) {
+        let idx = (p - 1) * days + dayIdx        // ← 丸めない
+        let c   = (arr.indices.contains(idx) ? arr[idx] : nil)
+        let slot = PeriodTime.slots[p-1]
+        let colorKey = colors["cells.d\(dayIdx)p\(p)"]
+        ps.append(.init(index: p,
+                        title: c?.title ?? " ",
+                        room:  c?.room ?? "",
+                        start: slot.start, end: slot.end,
+                        teacher: c?.teacher ?? "",
+                        colorKey: colorKey))
+    }
+    return .init(date: now, weekday: wk, dayLabel: dayLabel, periods: ps)
+}
+
+
 
 struct TodayProvider: TimelineProvider {
     func placeholder(in context: Context) -> TodayEntry { TodayEntry(date: Date(), snapshot: Self.mock) }
@@ -20,9 +79,23 @@ struct TodayProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TodayEntry>) -> ()) {
-        let snap = WidgetBridge.load() ?? Self.mock
-        let now = Date()
-        let next = nextRefreshDate(basedOn: snap, from: now)
+        // まず共有から“今日”を生成。無ければ従来の保存スナップショットにフォールバック
+        let snap = buildTodayFromShared() ?? (WidgetBridge.load() ?? Self.mock)
+
+        let now  = Date()
+        let cal  = Calendar.current
+
+        // 次回更新は「各コマ開始の1分後」か「翌日0:05」の早い方
+        func time(_ hhmm: String) -> Date? {
+            var c = cal.dateComponents([.year,.month,.day], from: now)
+            let p = hhmm.split(separator: ":").map { Int($0) ?? 0 }
+            c.hour = p[0]; c.minute = p[1]
+            return cal.date(from: c)
+        }
+        let nextClass = snap.periods.compactMap { time($0.start) }.first { $0 > now }?.addingTimeInterval(60)
+        let nextDay   = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))!.addingTimeInterval(5*60)
+        let next = min(nextClass ?? nextDay, nextDay)
+
         completion(Timeline(entries: [TodayEntry(date: now, snapshot: snap)], policy: .after(next)))
     }
 
@@ -57,6 +130,30 @@ struct TodayProvider: TimelineProvider {
         ])
     }()
 }
+
+
+
+
+// Widgetの背景色（system / lightGray / white に対応）
+private func widgetBGColor() -> Color {
+    // App Group 未設定でも動くよう、とりあえず "lightGray" を既定に
+    let pref = (UserDefaults(suiteName: "group.jp.forta.Aogaku")?
+                .string(forKey: "timetable.bg")) ?? "lightGray"
+    switch pref {
+    case "white":
+        return .white
+    case "system":
+        return Color(.systemBackground)
+    default:
+        // ダーク= #1F1F1F 付近 / ライト= ほぼ白グレー
+        return Color(UIColor { t in
+            t.userInterfaceStyle == .dark
+            ? UIColor(white: 0.20, alpha: 1.0)
+            : UIColor(white: 0.96, alpha: 1.0)
+        })
+    }
+}
+
 // secondary より少しだけ濃いダイナミックグレー
 private let weekdayTint = Color(UIColor { trait in
     if trait.userInterfaceStyle == .dark {
@@ -123,26 +220,50 @@ struct TodayView: View {
 
         return min(max(last, 5), limit)   // 最低5、最大7
     }
-    
-    var body: some View {
-        switch family {
-        case .systemSmall:
-            smallList()                      // ← 小サイズは“時限＋授業名”のみ
-                .widgetURL(URL(string: "aogaku://timetable?day=today"))
-        // 既存の TodayView.body 内
-        case .systemMedium:
-            mediumStrip()                      // ← 新しい中サイズ
-                .widgetURL(URL(string: "aogaku://timetable?day=today"))
-     
-            
-        case .systemLarge:
-            largeDetail()// ⬅︎ これを追加
-                .widgetURL(URL(string: "aogaku://timetable?day=today"))
-        default:
-            // その他のサイズは medium と同等にしておく
-            medium
+    // TodayView の中に追加
+    private func isNoClassDay() -> Bool {
+        let cal = Calendar.current
+        let wk = cal.component(.weekday, from: entry.date) // 1=Sun...7=Sat
+        if wk == 1 { return true }                         // 日曜は常に「授業なし」
+
+        // すべて空（空白のみ含む）なら授業なし判定
+        return entry.snapshot.periods.allSatisfy {
+            $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            $0.room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            teacher(of: $0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
+
+    @ViewBuilder
+    private func noClassView() -> some View {
+        VStack(spacing: 4) {
+            Text(entry.snapshot.dayLabel)
+                .font(.caption2).opacity(0.6)
+            Text("今日の授業はありません")
+                .font(family == .systemSmall ? .caption2 : .headline)
+                .multilineTextAlignment(.center)
+                .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    var body: some View {
+        if isNoClassDay() {
+            noClassView()
+        } else {
+            switch family {
+            case .systemSmall:
+                smallList().widgetURL(URL(string: "aogaku://timetable?day=today"))
+            case .systemMedium:
+                mediumStrip().widgetURL(URL(string: "aogaku://timetable?day=today"))
+            case .systemLarge:
+                largeDetail().widgetURL(URL(string: "aogaku://timetable?day=today"))
+            default:
+                mediumStrip()
+            }
+        }
+    }
+
     // large 用：曜日だけ表示するヘッダー
     private var largeWeekdayHeader: some View {
         Text(entry.snapshot.dayLabel)
@@ -316,6 +437,7 @@ struct TodayView: View {
             
         }
     }
+    
 
     private func isNowSlot(_ index: Int) -> Bool {
         let slot = PeriodTime.slots[index - 1]
@@ -573,9 +695,9 @@ struct AogakuWidgets: Widget {
                                        provider: TodayProvider()) { entry in
             let view = TodayView(entry: entry)
             if #available(iOSApplicationExtension 17.0, *) {
-                view.containerBackground(for: .widget) { Color.clear }
+                view.containerBackground(for: .widget) { widgetBGColor() }
             } else {
-                view
+                view.background(widgetBGColor())
             }
         }
         .configurationDisplayName("今日の時間割")

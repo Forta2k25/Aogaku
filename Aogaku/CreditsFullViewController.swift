@@ -9,6 +9,25 @@
 
 import UIKit
 
+// ---- Darkでも薄いグレーにする自前カラー ----
+extension UIColor {
+    /// 画面全体の背景
+    static var appBG: UIColor {
+        UIColor { t in
+            t.userInterfaceStyle == .dark ? UIColor(white: 0.14, alpha: 1.0)
+                                          : UIColor(white: 0.98, alpha: 1.0)
+        }
+    }
+    /// カード/セル/ボタンの地
+    static var cardBG: UIColor {
+        UIColor { t in
+            t.userInterfaceStyle == .dark ? UIColor(white: 0.20, alpha: 1.0)
+                                          : UIColor.secondarySystemBackground
+        }
+    }
+}
+
+
 // ======================== 4区分 要件モデル ========================
 private struct Requirement4 {
     let aoyama: Int
@@ -492,7 +511,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     // MARK: - Life
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = UIColor.appBG
+        tableView.backgroundColor = UIColor.appBG
         title = "単位"
         if presentingViewController != nil && navigationController?.viewControllers.first == self {
             navigationItem.leftBarButtonItem = UIBarButtonItem(
@@ -840,6 +860,9 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         
+        tableView.backgroundColor = .appBG
+        tableView.separatorInset = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16) // お好み
+
         // 長押しで編集
         let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPressOnRow(_:)))
         tableView.addGestureRecognizer(lp)
@@ -1070,7 +1093,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
     private func styleFilterButton(_ button: UIButton, placeholder: String, enabled: Bool = true) {
         var config = UIButton.Configuration.filled()
-        config.baseBackgroundColor = .secondarySystemBackground
+        config.baseBackgroundColor = UIColor.cardBG
         config.baseForegroundColor = .label
         config.image = UIImage(systemName: "chevron.down")
         config.imagePadding = 6
@@ -1219,6 +1242,16 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         }
         cfg.secondaryText = subtitle
         cell.contentConfiguration = cfg
+        
+        if #available(iOS 14.0, *) {
+            var bg = UIBackgroundConfiguration.clear()   // ← listInsetGroupedCell() は使わない
+            bg.backgroundColor = UIColor.cardBG          // ← 型を明示
+            cell.backgroundConfiguration = bg
+        } else {
+            cell.backgroundColor = UIColor.cardBG
+            cell.contentView.backgroundColor = UIColor.cardBG
+        }
+
         return cell
     }
     

@@ -35,6 +35,14 @@ final class FriendRequestsViewController: UITableViewController, BannerViewDeleg
         loadBannerIfNeeded()       // [ADDED]
     }
     
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        UIApplication.shared.applicationIconBadgeNumber = 0
+        if #available(iOS 16.0, *) {
+            UNUserNotificationCenter.current().setBadgeCount(0)
+        }
+    }
+
     private func setupAdBanner() {
         // 画面下に広告コンテナを固定
         adContainer.translatesAutoresizingMaskIntoConstraints = false

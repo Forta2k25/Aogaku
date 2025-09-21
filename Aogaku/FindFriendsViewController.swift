@@ -31,6 +31,19 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     private var lastBannerWidth: CGFloat = 0
     private var didLoadBannerOnce = false
 
+    
+    // ★ 追加
+    private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.2, alpha: 1.0) : .systemBackground
+    }
+    private func applyBackgroundStyle() {
+        let bg = appBackgroundColor(for: traitCollection)
+        view.backgroundColor = bg
+        tableView.backgroundColor = bg
+        adContainer.backgroundColor = bg
+        tableView.separatorColor = .separator
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "友だちを探す"
@@ -48,6 +61,14 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
         reloadAll()
         setupAdBanner()        // [ADDED]
+        applyBackgroundStyle()
+    }
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyBackgroundStyle()
+        }
     }
     
     override func viewDidLayoutSubviews() {

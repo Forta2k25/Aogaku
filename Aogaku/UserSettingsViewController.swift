@@ -4,6 +4,7 @@ import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
 import GoogleMobileAds
+import FirebaseFunctions
 
 // ===== AdMob helper =====
 @inline(__always)
@@ -156,6 +157,7 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     private let db = Firestore.firestore()
     private var uid: String? { Auth.auth().currentUser?.uid }
     private var currentAvatarVersion: Int?
+    private lazy var functions = Functions.functions(region: "asia-northeast1")
 
     // MARK: - Menu
     @objc @IBAction func didTapMenuButton(_ sender: Any) {
@@ -625,77 +627,77 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     }
 
     private func performDeleteAccount() {
-        guard let user = Auth.auth().currentUser else { return }
-        let uid = user.uid
+        guard Auth.auth().currentUser != nil else { return }
         setLoading(true)
 
         Task { @MainActor in
             do {
-                // 1) 相手側リンク掃除
-                try await clientSideCrossCleanup(uid: uid)
-                // 2) 自分ツリー & usernames
-                try await deleteSelfUserTree(uid: uid)
-                try await deleteUsernameMapping(uid: uid)
-                // 3) Storage のアバター
-                await deleteAvatarFiles(uid: uid)
-                // 4) Auth 本体（recent login 必須）
-                try await user.delete()
+                // サーバ側で全部削除（Auth含む）
+                _ = try await functions.httpsCallable("deleteAccountServerSide").call([:])
 
-                self.showAlert(title: "アカウント削除", message: "削除が完了しました。")
+                // ログアウト状態へ
                 try? Auth.auth().signOut()
-            } catch let err as NSError {
-                if err.code == AuthErrorCode.requiresRecentLogin.rawValue {
-                    self.showAlert(title: "再ログインが必要", message: "再ログイン後にもう一度お試しください。")
-                    try? Auth.auth().signOut()
+                self.switchToTab(index: self.settingsTabIndex)
+                self.showAlert(title: "アカウント削除", message: "削除が完了しました。")
+            } catch {
+                let ns = error as NSError
+                let detailsAny = ns.userInfo[FunctionsErrorDetailsKey]
+                let details: String
+                if let d = detailsAny as? [String: Any] {
+                    details = d.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
                 } else {
-                    self.showAlert(title: "アカウント削除に失敗", message: err.localizedDescription)
+                    details = String(describing: detailsAny ?? "")
                 }
+                let msg = "domain=\(ns.domain), code=\(ns.code), \(details)"
+                print("CALLABLE ERROR:", msg)
+                self.showAlert(title: "アカウント削除に失敗", message: msg)
             }
+
+
             self.setLoading(false)
         }
     }
+
+
     
     private func deleteSelfUserTree(uid: String) async throws {
         let db = Firestore.firestore()
-        // 代表的な自分配下のサブコレ
-        let mySubs = ["timetable","Friends","friends","requestsIncoming","requestIncoming","incomingRequests","requestsOutgoing","requestOutgoing","outgoingRequests"]
+        let mySubs = ["timetable","Friends","friends",
+                      "requestsIncoming","requestIncoming","incomingRequests",
+                      "requestsOutgoing","requestOutgoing","outgoingRequests"]
         for s in mySubs {
             let snap = try await db.collection("users").document(uid).collection(s).getDocuments()
-            try await withThrowingTaskGroup(of: Void.self) { tg in
-                for d in snap.documents { tg.addTask { try await d.reference.delete() } }
-                try await tg.waitForAll()
+            for d in snap.documents {
+                try await awaitDelete(d.reference)
             }
         }
-        try await db.collection("users").document(uid).delete()
+        try await awaitDelete(db.collection("users").document(uid))
     }
 
     private func deleteUsernameMapping(uid: String) async throws {
         let db = Firestore.firestore()
-        let uref = db.collection("users").document(uid)
-        let snap = try await uref.getDocument()
+        let snap = try await db.collection("users").document(uid).getDocument()
         if let key = (snap.get("idLower") as? String)
             ?? (snap.get("usernameLower") as? String)
             ?? ((snap.get("id") as? String)?.lowercased()) {
-            try? await db.collection("usernames").document(key).delete()
+            try? await awaitDelete(db.collection("usernames").document(key))
         }
     }
 
     private func deleteAvatarFiles(uid: String) async {
         let storage = Storage.storage()
-        // 単発ファイル
-        try? await storage.reference(withPath: "avatars/\(uid).jpg").delete()
-        // フォルダ配下（あれば）
+        await awaitDelete(storage.reference(withPath: "avatars/\(uid).jpg"))
         let folder = storage.reference(withPath: "avatars/\(uid)")
         if let list = try? await folder.listAll() {
-            for item in list.items { try? await item.delete() }
-            // さらに階層がある場合（prefixes）
+            for item in list.items { await awaitDelete(item) }
             for prefix in list.prefixes {
                 if let list2 = try? await prefix.listAll() {
-                    for item in list2.items { try? await item.delete() }
+                    for item in list2.items { await awaitDelete(item) }
                 }
             }
         }
     }
+
 
     // MARK: - Loading HUD（クラス内）
     private var loadingCover: UIView?
@@ -745,28 +747,27 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             "requestsIncoming","requestIncoming","incomingRequests",
             "requestsOutgoing","requestOutgoing","outgoingRequests"
         ]
-        // docID == uid 型
+        // 1) ドキュメントID = uid 型
         for g in groups {
             let q = db.collectionGroup(g).whereField(FieldPath.documentID(), isEqualTo: uid)
             let snap = try await q.getDocuments()
-            try await withThrowingTaskGroup(of: Void.self) { tg in
-                for d in snap.documents { tg.addTask { try await d.reference.delete() } }
-                try await tg.waitForAll()
+            for d in snap.documents {
+                try await awaitDelete(d.reference)
             }
         }
-        // フィールド参照型
+        // 2) フィールド参照型
         let fields = ["uid","friendUid","fromUid","toUid","ownerUid","targetUid"]
         for g in groups {
             for f in fields {
                 let q = db.collectionGroup(g).whereField(f, isEqualTo: uid)
                 let snap = try await q.getDocuments()
-                try await withThrowingTaskGroup(of: Void.self) { tg in
-                    for d in snap.documents { tg.addTask { try await d.reference.delete() } }
-                    try await tg.waitForAll()
+                for d in snap.documents {
+                    try await awaitDelete(d.reference)
                 }
             }
         }
     }
+
 
     // MARK: - Utils
     private func setupDismissKeyboardGesture() {
@@ -780,6 +781,30 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         ac.addAction(UIAlertAction(title: "OK", style: .default))
         present(ac, animated: true)
     }
+    
+    // Firestore: delete を await でラップ（Void を明示して返す）
+    private func awaitDelete(_ ref: DocumentReference) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            ref.delete { error in
+                if let error {
+                    cont.resume(throwing: error)
+                } else {
+                    cont.resume(returning: ())   // ← Void を返す
+                }
+            }
+        }
+    }
+
+    // Storage: delete を await でラップ（非throwing、Void を返す）
+    private func awaitDelete(_ ref: StorageReference) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            ref.delete { _ in
+                cont.resume(returning: ())      // ← Void を返す
+            }
+        }
+    }
+
+
 }
 
 // MARK: - PHPicker Delegate

@@ -5,9 +5,10 @@ import GoogleMobileAds
 private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
 }
+
 final class syllabus_search: UIViewController, BannerViewDelegate {
 
-    // 入出力
+    // ===== 入出力 =====
     var initialCategory: String?
     var initialDepartment: String?
     var initialCampus: String?
@@ -16,8 +17,10 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     var initialDay: String?
     var initialPeriods: [Int]?
     var initialTimeSlots: [(String, Int)]?   // ★ 複数コマの復元用
+    var initialTerm: String?                 // ★ 追加: "前期" / "後期" / nil
     var onApply: ((SyllabusSearchCriteria) -> Void)?
-    
+    var term: String?
+
     // ===== AdMob (Banner) =====
     private let adContainer = UIView()
     private var bannerView: BannerView?
@@ -26,21 +29,23 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     private var didLoadBannerOnce = false
     private let bannerBottomOffset: CGFloat = 45   // ← 下へ 8pt ずらす（好みで調整）
 
-    // Outlets
+    // ===== Outlets =====
     @IBOutlet weak var keywordTextField: UITextField!
     @IBOutlet weak var facultyButton: UIButton!
     @IBOutlet weak var departmentButton: UIButton!
     @IBOutlet weak var campusSegmentedControl: UISegmentedControl!
     @IBOutlet weak var placeSegmentedControl: UISegmentedControl!
+    @IBOutlet weak var termSegmentedControl: UISegmentedControl!    // ★ 追加: 前期/後期
     @IBOutlet var slotButtons: [UIButton]!
     @IBOutlet weak var gridContainerView: UIView!
 
-    // 内部状態
+    // ===== 内部状態 =====
     private var selectedCategory: String?
     private var selectedDepartment: String?
     private var selectedCampus: String?
     private var selectedPlace: String?
     private var selectedGrade: String?
+    private var selectedTerm: String?    // ★ "前期" / "後期" / nil
 
     private var selectedStates = Array(repeating: false, count: 25)
     private let days = ["月","火","水","木","金"]
@@ -75,6 +80,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     private var didApplyInitialSelection = false
     private var didBuildGridConstraints = false
 
+    // ===== ライフサイクル =====
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -83,6 +89,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         selectedCampus     = initialCampus
         selectedPlace      = initialPlace
         selectedGrade      = initialGrade
+        selectedTerm       = initialTerm   // ★ 追加
 
         setupFacultyMenu()
         setupDepartmentMenu(initial: selectedCategory ?? "指定なし")
@@ -119,12 +126,19 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
         placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
 
+        // ★ 学期（前期/後期）
+        let terms = ["指定なし","前期","後期"]
+        termSegmentedControl.removeAllSegments()
+        for (i, t) in terms.enumerated() { termSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
+        termSegmentedControl.selectedSegmentIndex = indexFor(value: selectedTerm, in: terms)
+        termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
+        termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+
         configureSlotButtons()
         // グリッド制約/タグ採番/初期選択は viewDidLayoutSubviews で
-        
+
         setupAdBanner()
     }
-    
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -133,6 +147,8 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         applyInitialSelectionIfNeeded()
         loadBannerIfNeeded()
     }
+
+    // ===== Ad =====
     private func setupAdBanner() {
         adContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(adContainer)
@@ -201,7 +217,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         print("Ad failed:", error.localizedDescription)
     }
 
-    // Actions
+    // ===== Actions =====
     @IBAction func campusChanged(_ sender: UISegmentedControl) {
         let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
         selectedCampus = (title == "指定なし") ? nil : title
@@ -209,6 +225,10 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     @IBAction func placeChanged(_ sender: UISegmentedControl) {
         let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
         selectedPlace = (title == "指定なし") ? nil : title
+    }
+    @IBAction func termChanged(_ sender: UISegmentedControl) {   // ★ 追加
+        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
+        selectedTerm = (title == "指定なし") ? nil : title       // "前期" / "後期" / nil
     }
     @IBAction func slotTapped(_ sender: UIButton) {
         sender.isSelected.toggle()
@@ -227,9 +247,12 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         if let t = placeSegmentedControl.titleForSegment(at: placeSegmentedControl.selectedSegmentIndex),
            t != "指定なし" { placeValue = t }
 
+        let termValue = selectedTerm   // ★ "前期" / "後期" / nil
+
         let slots = deriveTimeSlots()
         let (day, ps) = deriveSingleDayAndPeriods()
 
+        // ★ 学期を criteria に渡す（SyllabusSearchCriteria に semester: がある想定）
         let criteria = SyllabusSearchCriteria(
             keyword: keywordTextField?.text,
             category: selectedCategory,
@@ -239,12 +262,14 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
             grade: selectedGrade,
             day: day,
             periods: ps,
-            timeSlots: slots
+            timeSlots: slots,
+            term: termValue           // ← ここが今回の要。フィールド名が `term` の場合は置換してください
         )
+
         let handler = self.onApply
         dismiss(animated: true) { handler?(criteria) }
     }
-    
+
     @IBAction func didTapFavorites(_ sender: Any) {
         let vc = FavoritesListViewController()
         let nav = UINavigationController(rootViewController: vc)
@@ -252,8 +277,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         // または navigationController?.pushViewController(vc, animated: true)
     }
 
-
-    // メニュー
+    // ===== メニュー =====
     private func setupFacultyMenu() {
         let actions = faculties.map { name in
             UIAction(title: name) { [weak self] act in
@@ -297,7 +321,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         departmentButton.showsMenuAsPrimaryAction = true
     }
 
-    // --- グリッド関連 ---
+    // ===== グリッド関連 =====
     private func assignTagsIfNeeded() {
         guard !didAssignTags, let slotButtons else { return }
         // AutoLayout後の座標で上→下、左→右に並べ替え
@@ -364,7 +388,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         }
     }
 
-    // 見た目更新
+    // ===== 見た目更新 =====
     private func configureSlotButtons() {
         guard let slotButtons else { return }
         for b in slotButtons {
@@ -386,7 +410,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         }
     }
 
-    // ヘルパ
+    // ===== ヘルパ =====
     private func setButtonTitleColor(_ button: UIButton, _ color: UIColor) {
         if var cfg = button.configuration { cfg.baseForegroundColor = color; button.configuration = cfg }
         else { button.setTitleColor(color, for: .normal) }

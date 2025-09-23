@@ -329,7 +329,7 @@
                                 <nil key="highlightedColor"/>
                             </label>
                             <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" selectedSegmentIndex="0" translatesAutoresizingMaskIntoConstraints="NO" id="qQj-md-bUh">
-                                <rect key="frame" x="20" y="292" width="353" height="41"/>
+                                <rect key="frame" x="20" y="347" width="353" height="41"/>
                                 <constraints>
                                     <constraint firstAttribute="height" constant="40" id="3Iw-6b-uKt"/>
                                 </constraints>
@@ -342,7 +342,7 @@
                                 </connections>
                             </segmentedControl>
                             <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="UaY-RP-5cg">
-                                <rect key="frame" x="20" y="352" width="353" height="264"/>
+                                <rect key="frame" x="20" y="407" width="353" height="239"/>
                                 <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                             </view>
                             <button opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="3jh-Od-Uzi">
@@ -770,23 +770,38 @@
                                     <action selector="slotTapped:" destination="XWM-mO-tUM" eventType="touchUpInside" id="Eda-in-Ep1"/>
                                 </connections>
                             </button>
+                            <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" selectedSegmentIndex="0" translatesAutoresizingMaskIntoConstraints="NO" id="ouz-PE-xVV">
+                                <rect key="frame" x="20" y="292" width="353" height="41"/>
+                                <constraints>
+                                    <constraint firstAttribute="height" constant="40" id="vxt-Pr-k3D"/>
+                                </constraints>
+                                <segments>
+                                    <segment title="First"/>
+                                    <segment title="Second"/>
+                                </segments>
+                                <connections>
+                                    <action selector="termChanged:" destination="XWM-mO-tUM" eventType="valueChanged" id="5mg-j5-c4D"/>
+                                </connections>
+                            </segmentedControl>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="kPl-wp-qWl"/>
                         <color key="backgroundColor" red="0.92143100499999997" green="0.92145264149999995" blue="0.92144101860000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
                             <constraint firstItem="TA5-hm-Avx" firstAttribute="top" secondItem="uIl-fM-EPP" secondAttribute="bottom" constant="15" id="4BZ-7h-cra"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="Qp9-AC-aMn" secondAttribute="trailing" constant="20" id="4Qw-jv-KTX"/>
+                            <constraint firstItem="qQj-md-bUh" firstAttribute="top" secondItem="ouz-PE-xVV" secondAttribute="bottom" constant="15" id="4qz-q1-edl"/>
                             <constraint firstItem="NXc-9E-DZh" firstAttribute="top" secondItem="DUR-O8-WTg" secondAttribute="bottom" constant="41" id="6oT-5l-6ch"/>
                             <constraint firstItem="IfJ-t3-LP1" firstAttribute="leading" secondItem="kdK-Gy-r6a" secondAttribute="trailing" constant="20" id="7Rm-TR-NTM"/>
                             <constraint firstItem="TA5-hm-Avx" firstAttribute="leading" secondItem="zdu-kz-RvL" secondAttribute="trailing" constant="5" id="7W0-Pz-eFp"/>
                             <constraint firstItem="uIl-fM-EPP" firstAttribute="top" secondItem="mSM-6H-dKb" secondAttribute="bottom" constant="23" id="7l3-pw-Evt"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="qQj-md-bUh" secondAttribute="trailing" constant="20" id="BTV-m5-yde"/>
                             <constraint firstItem="qMx-1H-XJW" firstAttribute="top" secondItem="uIl-fM-EPP" secondAttribute="bottom" constant="15" id="Cl1-h5-XfB"/>
-                            <constraint firstItem="kPl-wp-qWl" firstAttribute="bottom" secondItem="UaY-RP-5cg" secondAttribute="bottom" constant="70" id="FkZ-7j-b8j"/>
+                            <constraint firstItem="kPl-wp-qWl" firstAttribute="bottom" secondItem="UaY-RP-5cg" secondAttribute="bottom" constant="40" id="FkZ-7j-b8j"/>
                             <constraint firstItem="IfJ-t3-LP1" firstAttribute="top" secondItem="gyg-2q-gZy" secondAttribute="bottom" constant="23" id="GA8-fT-BTe"/>
                             <constraint firstItem="kdK-Gy-r6a" firstAttribute="top" secondItem="mSM-6H-dKb" secondAttribute="bottom" constant="32" id="Iqp-El-BCC"/>
                             <constraint firstItem="zdu-kz-RvL" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="K5s-uk-0fb"/>
                             <constraint firstItem="gyg-2q-gZy" firstAttribute="top" secondItem="Nae-Qf-sP9" secondAttribute="top" constant="46" id="Lb3-yR-aPm"/>
+                            <constraint firstItem="ouz-PE-xVV" firstAttribute="centerX" secondItem="Nae-Qf-sP9" secondAttribute="centerX" id="MX4-aH-4vS"/>
                             <constraint firstItem="IfJ-t3-LP1" firstAttribute="leading" secondItem="uIl-fM-EPP" secondAttribute="trailing" constant="20" id="MuQ-4v-3Ir"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="gyg-2q-gZy" secondAttribute="trailing" constant="35" id="OCu-Q0-tXm"/>
                             <constraint firstItem="NXc-9E-DZh" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="36" id="QXe-LD-dcJ"/>
@@ -794,13 +809,14 @@
                             <constraint firstItem="Qp9-AC-aMn" firstAttribute="top" secondItem="zdu-kz-RvL" secondAttribute="bottom" constant="15" id="R3J-wH-kxb"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="qMx-1H-XJW" secondAttribute="trailing" constant="20" id="Sl1-x6-Vqp"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="UaY-RP-5cg" secondAttribute="trailing" constant="20" id="TeE-cd-I3q"/>
-                            <constraint firstItem="qQj-md-bUh" firstAttribute="top" secondItem="Qp9-AC-aMn" secondAttribute="bottom" constant="15" id="UQQ-fk-geU"/>
                             <constraint firstItem="zdu-kz-RvL" firstAttribute="top" secondItem="uIl-fM-EPP" secondAttribute="bottom" constant="15" id="XD4-aR-6dN"/>
+                            <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="ouz-PE-xVV" secondAttribute="trailing" constant="20" id="Xcy-f1-zIi"/>
                             <constraint firstItem="DUR-O8-WTg" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="30" id="Xqz-ub-Q18"/>
                             <constraint firstItem="uIl-fM-EPP" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="dFG-ls-vgR"/>
                             <constraint firstItem="qQj-md-bUh" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="dLu-nG-fIP"/>
                             <constraint firstItem="mSM-6H-dKb" firstAttribute="top" secondItem="Nae-Qf-sP9" secondAttribute="top" constant="46" id="eZp-wl-2xk"/>
                             <constraint firstItem="TA5-hm-Avx" firstAttribute="centerX" secondItem="Nae-Qf-sP9" secondAttribute="centerX" id="f5k-Nu-6N4"/>
+                            <constraint firstItem="ouz-PE-xVV" firstAttribute="top" secondItem="Qp9-AC-aMn" secondAttribute="bottom" constant="15" id="fwB-UZ-hpv"/>
                             <constraint firstItem="gyg-2q-gZy" firstAttribute="leading" secondItem="mSM-6H-dKb" secondAttribute="trailing" constant="20" id="g0E-WJ-bxm"/>
                             <constraint firstItem="Qp9-AC-aMn" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="gYV-7N-O3g"/>
                             <constraint firstItem="UaY-RP-5cg" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="h88-Xj-kRf"/>
@@ -808,6 +824,7 @@
                             <constraint firstItem="UaY-RP-5cg" firstAttribute="top" secondItem="qQj-md-bUh" secondAttribute="bottom" constant="20" id="jxU-Rt-OUc"/>
                             <constraint firstItem="kdK-Gy-r6a" firstAttribute="leading" secondItem="NXc-9E-DZh" secondAttribute="trailing" constant="12" id="ofT-03-TSO"/>
                             <constraint firstItem="DUR-O8-WTg" firstAttribute="top" secondItem="Nae-Qf-sP9" secondAttribute="top" constant="50" id="vyP-fY-VLx"/>
+                            <constraint firstItem="ouz-PE-xVV" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="yEO-cP-ExX"/>
                         </constraints>
                     </view>
                     <toolbarItems/>
@@ -820,6 +837,7 @@
                         <outlet property="gridContainerView" destination="UaY-RP-5cg" id="3it-r1-Pip"/>
                         <outlet property="keywordTextField" destination="kdK-Gy-r6a" id="vGE-67-Vrs"/>
                         <outlet property="placeSegmentedControl" destination="qQj-md-bUh" id="Jhv-Jg-3IC"/>
+                        <outlet property="termSegmentedControl" destination="ouz-PE-xVV" id="AXC-o5-fw6"/>
                         <outletCollection property="slotButtons" destination="3jh-Od-Uzi" collectionClass="NSMutableArray" id="4yh-go-wBp"/>
                         <outletCollection property="slotButtons" destination="u79-H2-eDJ" collectionClass="NSMutableArray" id="wFo-Lb-IVU"/>
                         <outletCollection property="slotButtons" destination="H1s-NV-1rY" collectionClass="NSMutableArray" id="NBY-Dc-sdb"/>
@@ -1139,7 +1157,7 @@
         <scene sceneID="Uq4-DX-hdD">
             <objects>
                 <navigationController id="47C-D0-pTL" sceneMemberID="viewController">
-                    <tabBarItem key="tabBarItem" title="友だち" image="person.2" selectedImage="person.2" catalog="system" id="Xdb-0I-oLg"/>
+                    <tabBarItem key="tabBarItem" title="友だち" image="person.2" catalog="system" selectedImage="person.2" id="Xdb-0I-oLg"/>
                     <navigationBar key="navigationBar" contentMode="scaleToFill" id="OeP-6L-blo">
                         <rect key="frame" x="0.0" y="118" width="393" height="44"/>
                         <autoresizingMask key="autoresizingMask"/>
@@ -1279,7 +1297,6 @@
         <image name="line.horizontal.3" catalog="system" width="128" height="65"/>
         <image name="list.bullet" catalog="system" width="128" height="87"/>
         <image name="magnifyingglass" catalog="system" width="128" height="117"/>
-        <image name="person.2" width="128" height="128"/>
         <image name="person.2" catalog="system" width="128" height="87"/>
         <image name="plus.app" catalog="system" width="128" height="114"/>
         <image name="slider.horizontal.3" catalog="system" width="128" height="99"/>

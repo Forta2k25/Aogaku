@@ -19,6 +19,7 @@ struct SyllabusSearchCriteria {
     var day: String? = nil           // 単一曜日のときだけ入る最適化用
     var periods: [Int]? = nil
     var timeSlots: [(String, Int)]? = nil // 複数セル選択: (day, period)
+    var term: String? = nil
 }
 
 final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelegate, BannerViewDelegate, UISearchResultsUpdating {
@@ -61,6 +62,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
     private var filterDay: String? = nil
     private var filterPeriods: [Int]? = nil
     private var filterTimeSlots: [(day: String, period: Int)]? = nil
+    private var filterTerm: String? = nil
 
     // データ（← docID を持たせる）
     struct SyllabusData {
@@ -136,6 +138,7 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         searchVC.initialDay        = filterDay
         searchVC.initialPeriods    = filterPeriods
         searchVC.initialTimeSlots  = filterTimeSlots   // ★ 複数コマの復元用
+        searchVC.initialTerm     = filterTerm   // ★ 追加
 
         searchVC.onApply = { [weak self] criteria in
             self?.apply(criteria: criteria)
@@ -270,6 +273,8 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
         filterDay        = criteria.day
         filterPeriods    = criteria.periods
         filterTimeSlots  = criteria.timeSlots
+        filterTerm       = criteria.term
+        filterTerm       = criteria.term        // ★ 追加
 
         DispatchQueue.main.async { [weak self] in
             self?.resetAndReload(keyword: criteria.keyword)
@@ -342,6 +347,14 @@ final class syllabus: UIViewController, UITableViewDataSource, UITableViewDelega
                 }
             }
         }
+        
+        // ★ 学期フィルタ（前期/後期）を追加
+        if let wantTerm = filterTerm, !wantTerm.isEmpty {
+            let termRaw = (x["term"] as? String) ?? ""
+            let normalized = normalizeTerm(termRaw)  // 既存の正規化関数を利用
+            if normalized != wantTerm { return false }
+        }
+
         return true
     }
 

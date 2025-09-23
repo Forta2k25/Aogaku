@@ -731,6 +731,7 @@ final class timetable: UIViewController,
 
     // MARK: - Header
     private func buildHeader() {
+        // Header container
         headerBar.axis = .horizontal
         headerBar.alignment = .center
         headerBar.distribution = .fill
@@ -738,54 +739,80 @@ final class timetable: UIViewController,
         headerBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(headerBar)
 
-        leftButton.setTitle(currentTerm.displayTitle, for: .normal)
+        // 左上：年度・学期ボタン（グレーのピル＋上下矢印）
+        var termCfg = UIButton.Configuration.filled()
+        termCfg.baseBackgroundColor = .secondarySystemBackground   // 薄いグレー
+        termCfg.baseForegroundColor = .label
+        termCfg.cornerStyle = .capsule
+        termCfg.contentInsets = .init(top: 6, leading: 12, bottom: 6, trailing: 10)
+        termCfg.title = currentTerm.displayTitle
+        termCfg.image = UIImage(systemName: "chevron.up.chevron.down") // 上下矢印
+        termCfg.imagePlacement = .trailing
+        termCfg.imagePadding = 6
+        termCfg.background.strokeColor = UIColor.separator
+        termCfg.background.strokeWidth = 1
+        leftButton.configuration = termCfg
+        leftButton.setTitle(nil, for: .normal)                       // configurationで管理
+        leftButton.setContentHuggingPriority(.required, for: .horizontal)
         leftButton.addTarget(self, action: #selector(tapLeft), for: .touchUpInside)
 
+        // タイトル
         titleLabel.text = "時間割"
-        titleLabel.font = .systemFont(ofSize: 28, weight: .bold)
+        titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
         titleLabel.textAlignment = .center
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
+        // 右側スタック
         rightStack.axis = .horizontal
         rightStack.alignment = .center
         rightStack.spacing = 8
         rightStack.translatesAutoresizingMaskIntoConstraints = false
         rightStack.setContentHuggingPriority(.required, for: .horizontal)
 
-        func styleIcon(_ b: UIButton, _ systemName: String? = nil, title: String? = nil) {
-            if let systemName {
-                var cfg = UIButton.Configuration.plain()
-                cfg.image = UIImage(systemName: systemName)
+        // === ここから置換 ===
+        // 置換版：背景は透明のまま、必要なら横だけ広げられる
+        func configureRightButton(_ b: UIButton,
+                                  image systemName: String? = nil,
+                                  title: String? = nil,
+                                  titleFontSize: CGFloat = 14,
+                                  horizontalPadding: CGFloat = 12) {
+            var cfg = UIButton.Configuration.plain()
+            cfg.baseForegroundColor = UIColor(red: 129/255.0, green: 129/255.0, blue: 129/255.0, alpha: 1.0)
+            cfg.contentInsets = .init(top: 6, leading: horizontalPadding, bottom: 6, trailing: horizontalPadding)
+            cfg.cornerStyle = .capsule // 見た目はフラットだけど当たり判定を少し厚めに
+
+            if let t = title {
+                cfg.attributedTitle = AttributedString(t, attributes: AttributeContainer([
+                    .font : UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
+                ]))
+            }
+            if let name = systemName {
+                cfg.image = UIImage(systemName: name)
                 cfg.preferredSymbolConfigurationForImage =
                     UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
-                cfg.baseForegroundColor = .label
-                cfg.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8)
-                b.configuration = cfg
-            } else if let title {
-                b.setTitle(title, for: .normal)
-                b.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
-                b.contentEdgeInsets = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
+                cfg.imagePlacement = .leading
+                cfg.imagePadding = 0
             }
-            b.backgroundColor = .secondarySystemBackground
-            b.layer.cornerRadius = 8
-            b.layer.borderWidth = 1
-            b.layer.borderColor = UIColor.separator.cgColor
+            b.configuration = cfg
         }
 
-        styleIcon(rightA, title: "単")
-        let multiIcon = (UIDevice.current.systemVersion as NSString).floatValue >= 16.0
-            ? "point.3.connected.trianglepath.dotted" : "ellipsis.circle"
-        styleIcon(rightB, multiIcon)
-        styleIcon(rightC, "gearshape.fill")
-
+        // 「単」だけフォント大きめ＋横パディング広め（→ 左の見切れ解消）
+        configureRightButton(rightA, title: "単", titleFontSize: 19, horizontalPadding: 40)
+        // 他2つは従来どおり
+        configureRightButton(rightB, image: "square.and.arrow.up", horizontalPadding: 12)
+        configureRightButton(rightC, image: "gearshape", horizontalPadding: 12)
+        
+        // 動作
         rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
         rightB.addTarget(self, action: #selector(tapRightB), for: .touchUpInside)
         rightC.addTarget(self, action: #selector(tapRightC), for: .touchUpInside)
 
+        // 右側スタックに追加
         rightStack.addArrangedSubview(rightA)
         rightStack.addArrangedSubview(rightB)
         rightStack.addArrangedSubview(rightC)
 
+        // ヘッダーに配置
         let spacerL = UIView(); spacerL.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let spacerR = UIView(); spacerR.setContentHuggingPriority(.defaultLow, for: .horizontal)
         headerBar.addArrangedSubview(leftButton)
@@ -809,6 +836,18 @@ final class timetable: UIViewController,
         titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         titleLabel.centerXAnchor.constraint(equalTo: headerBar.centerXAnchor).isActive = true
 
+        // 右上3ボタンのサイズをそろえる
+        let buttonHeight: CGFloat = 32
+        [rightA, rightB, rightC].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            $0.heightAnchor.constraint(equalToConstant: buttonHeight).isActive = true
+        }
+        NSLayoutConstraint.activate([
+            rightA.widthAnchor.constraint(equalTo: rightB.widthAnchor),
+            rightC.widthAnchor.constraint(equalTo: rightB.widthAnchor)
+        ])
+
+        // 位置制約
         let g = view.safeAreaLayoutGuide
         headerTopConstraint = headerBar.topAnchor.constraint(equalTo: g.topAnchor, constant: 0)
         NSLayoutConstraint.activate([
@@ -1369,14 +1408,25 @@ final class timetable: UIViewController,
         }
         present(vc, animated: true)
     }
+    
     private func changeTerm(to newTerm: TermKey) {
         guard newTerm != currentTerm else { return }
         currentTerm = newTerm
-        leftButton.setTitle(newTerm.displayTitle, for: .normal)
+
+        // ← ここだけ上のブロックに置換
+        if var cfg = leftButton.configuration {
+            cfg.title = newTerm.displayTitle
+            leftButton.configuration = cfg
+        } else {
+            leftButton.setTitle(newTerm.displayTitle, for: .normal)
+        }
+        // → ここまで
+
         loadAssigned(for: newTerm)
         startTermSync()
         saveAssigned()
     }
+
     @objc private func tapRightA() {
         let term = TermStore.loadSelected()
         let vc = CreditsFullViewController(currentTerm: term)

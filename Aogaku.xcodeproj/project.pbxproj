@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = A40AACB82E7556BC009104D2 /* GoogleMobileAds */; };
+		A49491AE2E7E7EB60027AA8F /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = A49491AD2E7E7EB60027AA8F /* FirebaseMessaging */; };
+		A49491B02E7E7EDC0027AA8F /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49491AF2E7E7EDC0027AA8F /* PushManager.swift */; };
 		A49A40622E7BDFCC0036636C /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A49A40612E7BDFCC0036636C /* WidgetKit.framework */; };
 		A49A40642E7BDFCC0036636C /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A49A40632E7BDFCC0036636C /* SwiftUI.framework */; };
 		A49A406F2E7BDFCE0036636C /* AogakuWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A49A40602E7BDFCC0036636C /* AogakuWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -62,6 +64,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A49491AF2E7E7EDC0027AA8F /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
 		A49A40602E7BDFCC0036636C /* AogakuWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AogakuWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A49A40612E7BDFCC0036636C /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		A49A40632E7BDFCC0036636C /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
@@ -134,6 +137,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A49491AE2E7E7EB60027AA8F /* FirebaseMessaging in Frameworks */,
 				A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */,
 				A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */,
 				A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */,
@@ -181,6 +185,7 @@
 		B3A17B162E40A19700ACCA3A = {
 			isa = PBXGroup;
 			children = (
+				A49491AF2E7E7EDC0027AA8F /* PushManager.swift */,
 				A49A407E2E7BE7DB0036636C /* DeepLinkRouter.swift */,
 				A49A40772E7BE3650036636C /* shared */,
 				A49A40762E7BE0B30036636C /* AogakuWidgetsExtension.entitlements */,
@@ -402,6 +407,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A49491B02E7E7EDC0027AA8F /* PushManager.swift in Sources */,
 				A49A407F2E7BE7DB0036636C /* DeepLinkRouter.swift in Sources */,
 				A49A407A2E7BE3DB0036636C /* WidgetShared.swift in Sources */,
 				A49A407C2E7BE3EC0036636C /* PeriodTime.swift in Sources */,
@@ -824,6 +830,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */;
 			productName = GoogleMobileAds;
+		};
+		A49491AD2E7E7EB60027AA8F /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 		A4EA88F02E62D45500947976 /* FirebaseCore */ = {
 			isa = XCSwiftPackageProductDependency;

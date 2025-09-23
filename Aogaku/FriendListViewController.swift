@@ -144,6 +144,7 @@ final class FriendListCell: UITableViewCell {
     private func setupUI() {
         selectionStyle = .none
         accessoryType = .disclosureIndicator
+        backgroundColor = .clear
 
         avatarView.translatesAutoresizingMaskIntoConstraints = false
         avatarView.contentMode = .scaleAspectFill
@@ -245,6 +246,24 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
     // 未ログインガード
     private var loginAlertShown = false
+    
+    // ★ 追加: ダーク時だけグレー、ライト時は従来通り
+    private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        if traits.userInterfaceStyle == .dark {
+            return UIColor(white: 0.2, alpha: 1.0)   // 好みで 0.10〜0.16 で微調整可
+        } else {
+            return .systemBackground
+        }
+    }
+
+    private func applyBackgroundStyle() {
+        let bg = appBackgroundColor(for: traitCollection)
+        view.backgroundColor = bg
+        tableView.backgroundColor = bg
+        adContainer.backgroundColor = bg        // 広告コンテナも合わせる
+        // 仕切線を少し薄めに（任意）
+        tableView.separatorColor = .separator
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -280,6 +299,15 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
                                                object: nil)
 
         setupAdBanner()
+        applyBackgroundStyle()
+    }
+    
+    // ダーク／ライト切替に追随
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyBackgroundStyle()
+        }
     }
 
     override func viewDidLayoutSubviews() {

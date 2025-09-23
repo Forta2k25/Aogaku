@@ -360,6 +360,7 @@ final class FriendTimetableViewController: UIViewController {
         vc.initialURLString = cell.syllabusURL           // Firestore の URL
         vc.docID = cell.docID
         vc.initialRegNumber = cell.regNumber             // Firestore の id
+        vc.initialRoom = cell.room
 
         let nav = UINavigationController(rootViewController: vc)
         nav.modalPresentationStyle = .pageSheet

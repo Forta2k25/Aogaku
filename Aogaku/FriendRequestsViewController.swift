@@ -22,6 +22,19 @@ final class FriendRequestsViewController: UITableViewController, BannerViewDeleg
     private var lastBannerWidth: CGFloat = 0
     private var didLoadBannerOnce = false
 
+    
+    // ★ 追加
+    private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.2, alpha: 1.0) : .systemBackground
+    }
+    private func applyBackgroundStyle() {
+        let bg = appBackgroundColor(for: traitCollection)
+        view.backgroundColor = bg
+        tableView.backgroundColor = bg
+        adContainer.backgroundColor = bg
+        tableView.separatorColor = .separator
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "友だち申請"
@@ -29,12 +42,29 @@ final class FriendRequestsViewController: UITableViewController, BannerViewDeleg
         tableView.rowHeight = 92
         reload()
         setupAdBanner()            // [ADDED]
+        applyBackgroundStyle()
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         loadBannerIfNeeded()       // [ADDED]
     }
     
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyBackgroundStyle()
+        }
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        UIApplication.shared.applicationIconBadgeNumber = 0
+        if #available(iOS 16.0, *) {
+            UNUserNotificationCenter.current().setBadgeCount(0)
+        }
+    }
+
     private func setupAdBanner() {
         // 画面下に広告コンテナを固定
         adContainer.translatesAutoresizingMaskIntoConstraints = false

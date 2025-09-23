@@ -13,6 +13,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     var initialCredit: String?
     var initialURLString: String?   // ← 追加: 直接開くURL（友だち時間割から渡す）
     var initialRegNumber: String?
+    var initialRoom: String?
 
 
     // MARK: - Outlets（Storyboard接続）
@@ -26,6 +27,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
 
     @IBOutlet weak var infoStack: UIStackView?      // 任意（無くてもOK）
     @IBOutlet weak var webContainer: UIView?        // 任意（無くてもOK）
+    @IBOutlet weak var roomTextField: UITextField?
 
     // MARK: - Store Keys
     private let plannedKey  = "plannedClassIDs"
@@ -66,6 +68,9 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         titleTextView?.textContainerInset = UIEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
         titleTextView?.text = (initialTitle?.isEmpty == false) ? initialTitle! : "科目名"
         teacherLabel?.text = initialTeacher ?? ""
+        // 教室プレフィル（TextFieldを置いていない場合は無視される）
+        roomTextField?.text = initialRoom
+
         
         // 既存の初期化群の近くに
         if let code = initialRegNumber, !code.isEmpty {
@@ -170,6 +175,35 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         // レイアウトを非アニメで確定（視覚揺れ抑制）
         UIView.performWithoutAnimation { self.view.layoutIfNeeded() }
     }
+    
+    @IBAction func tapRegisterButton(_ sender: Any) {
+        // 画面の編集フィールドがあればそれを優先
+        let roomFromUI = (roomTextField?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let course: [String: Any] = [
+            "class_name":   (initialTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            "teacher_name": initialTeacher ?? "",
+            // timetable 側が読むキー名に合わせる
+            "room":         roomFromUI.isEmpty ? (initialRoom ?? "") : roomFromUI,
+            "code":         (initialRegNumber ?? docID) ?? "",        // ← 登録番号は code で渡す
+            "url":          initialURLString ?? ""                     // ← URL は url で渡す
+            // 必要なら "credit" / "campus" / "category" もここで付与
+        ]
+
+        NotificationCenter.default.post(
+            name: .registerCourseToTimetable,
+            object: nil,
+            userInfo: [
+                "day": targetDay,
+                "period": targetPeriod,
+                // docID も一応渡しておく（makeCourse 内で code フォールバックに使う）
+                "docID": docID ?? (initialRegNumber ?? ""),
+                "course": course
+            ]
+        )
+
+        dismiss(animated: true)
+    }
 
     @IBAction func didTapAdd(_ sender: Any) {
         if lastFetched.isEmpty, let id = docID {
@@ -210,6 +244,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             if let d = d { info["day"] = d }
             if let p = p { info["period"] = p }
             NotificationCenter.default.post(name: .registerCourseToTimetable, object: nil, userInfo: info)
+            print("➡️ payload:", payload)
         }))
         present(ac, animated: true)
     }
@@ -304,7 +339,10 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
                 ?? (data["course_code"] as? String)
             self.codeLabel?.text = code ?? "-"
 
-            let urlStr = (data["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // URL 取得（url / syllabusURL のどちらでも）
+            let urlStr = ((data["url"] as? String) ?? (data["syllabusURL"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
             if let url = URL(string: urlStr), !urlStr.isEmpty {
                 self.webView.isHidden = false
                 self.webView.load(URLRequest(url: url))
@@ -317,6 +355,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
                 self.webView.isHidden = false
                 self.webView.loadHTMLString(html, baseURL: nil)
             }
+
         }
     }
 
@@ -367,18 +406,45 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     }
 
     // MARK: - Timetable payload
+    // MARK: - Timetable payload
     private func buildPayload(from data: [String: Any]) -> (course: [String: Any], day: Int?, period: Int?) {
-        let name   = data["class_name"]   as? String ?? (titleTextView?.text ?? "")
-        let code   = (data["code"] as? String) ?? (data["registration_number"] as? String) ?? "-"
-        let teacher = (data["teacher_name"] as? String) ?? (teacherLabel?.text ?? "")
-        let urlStr = (data["url"] as? String) ?? ""
+        // 文字列トリムのヘルパ
+        func trim(_ s: String?) -> String { (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        let name     = trim(data["class_name"] as? String).isEmpty ? (titleTextView?.text ?? "") : trim(data["class_name"] as? String)
+        let teacher  = trim(data["teacher_name"] as? String).isEmpty ? (teacherLabel?.text ?? "") : trim(data["teacher_name"] as? String)
+
+        // code: Firestore → registration_number → initialRegNumber → docID
+        let code = trim(data["code"] as? String).isEmpty
+            ? ( trim(data["registration_number"] as? String).isEmpty
+                ? ( trim(initialRegNumber).isEmpty ? trim(docID) : trim(initialRegNumber) )
+                : trim(data["registration_number"] as? String) )
+            : trim(data["code"] as? String)
+
+        // url: Firestore(url / syllabusURL) → initialURLString
+        let urlStr = {
+            let u1 = trim(data["url"] as? String)
+            if !u1.isEmpty { return u1 }
+            let u2 = trim(data["syllabusURL"] as? String)
+            if !u2.isEmpty { return u2 }
+            return trim(initialURLString)
+        }()
+
+        // room: TextField → initialRoom → Firestore(room)
+        let roomStr = {
+            let fromUI = trim(roomTextField?.text)
+            if !fromUI.isEmpty { return fromUI }
+            if let r = initialRoom, !trim(r).isEmpty { return trim(r) }
+            return trim(data["room"] as? String)
+        }()
 
         let credit: Int = {
             if let n = data["credit"] as? Int { return n }
-            if let s = data["credit"] as? String { return Int(s) ?? 0 }
+            if let s = data["credit"] as? String, let n = Int(s) { return n }
             return 0
         }()
 
+        // day / period は既に targetDay/targetPeriod が来ていればそれを優先
         var d = targetDay
         var p = targetPeriod
         if (d == nil || p == nil), let time = data["time"] as? [String: Any] {
@@ -392,14 +458,18 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             }
         }
 
-        return ([
+        // timetable 側が読むキー名に合わせる（url / code / room）
+        let payload: [String: Any] = [
             "class_name": name,
-            "code": code,
-            "credit": credit,
             "teacher_name": teacher,
-            "url": urlStr
-        ], d, p)
+            "credit": credit,
+            "code": code,
+            "url": urlStr,
+            "room": roomStr
+        ]
+        return (payload, d, p)
     }
+
 
     // 動的再計算は使わない（タイトルが動かないように）
     private func updateTitleVerticalInset() {}

@@ -112,6 +112,57 @@ final class syllabus: UIViewController,
             }
         }
     }
+    
+    // MARK: - Dark Gray theming
+    private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        // 画面のベース色
+        return traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.20, alpha: 1.0)   // #333 くらい
+            : .systemBackground
+    }
+    private func cellBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        // セルのカード色（ベースより少し濃い/明るい）
+        return traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.16, alpha: 1.0)   // #292929 くらい
+            : .secondarySystemBackground
+    }
+    private func separatorColor(for traits: UITraitCollection) -> UIColor {
+        return traits.userInterfaceStyle == .dark
+            ? UIColor(white: 1.0, alpha: 0.12)
+            : .separator
+    }
+    private func searchFieldBackground(for traits: UITraitCollection) -> UIColor {
+        return traits.userInterfaceStyle == .dark
+            ? UIColor(white: 0.18, alpha: 1.0)
+            : .systemGray6
+    }
+    private func applyBackgroundStyle() {
+        let bg = appBackgroundColor(for: traitCollection)
+        view.backgroundColor = bg
+        syllabus_table.backgroundColor = bg
+        adContainer.backgroundColor = bg  // バナーの土台も揃える
+
+        syllabus_table.separatorColor = separatorColor(for: traitCollection)
+
+        // 検索バーのテキストフィールド背景
+        if let tf = searchController.searchBar.value(forKey: "searchField") as? UITextField {
+            tf.backgroundColor = searchFieldBackground(for: traitCollection)
+        }
+
+        // 目に見えているセルの再着色
+        for cell in syllabus_table.visibleCells {
+            let cbg = cellBackgroundColor(for: traitCollection)
+            cell.backgroundColor = cbg
+            cell.contentView.backgroundColor = cbg
+            // 選択時
+            let selected = UIView()
+            selected.backgroundColor = (traitCollection.userInterfaceStyle == .dark)
+                ? UIColor(white: 0.22, alpha: 1.0)
+                : UIColor.systemFill
+            (cell as? UITableViewCell)?.selectedBackgroundView = selected
+        }
+    }
+
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -141,11 +192,19 @@ final class syllabus: UIViewController,
 
         loadNextPage()
         setupAdBanner()
+        applyBackgroundStyle()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         loadBannerIfNeeded()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyBackgroundStyle()
+        }
     }
 
     // ===== 検索画面へ =====
@@ -543,6 +602,17 @@ final class syllabus: UIViewController,
         cell.category.text = subject.category
         cell.credit.text = subject.credit.isEmpty ? "-" : "\(subject.credit)単位"
         cell.termLabel.text = subject.term.isEmpty ? "-" : subject.term
+        
+        // ★ 追加：セル背景＆選択色
+        let cbg = cellBackgroundColor(for: traitCollection)
+        cell.backgroundColor = cbg
+        cell.contentView.backgroundColor = cbg
+        let selected = UIView()
+        selected.backgroundColor = (traitCollection.userInterfaceStyle == .dark)
+            ? UIColor(white: 0.22, alpha: 1.0)
+            : UIColor.systemFill
+        cell.selectedBackgroundView = selected
+        
         return cell
     }
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {

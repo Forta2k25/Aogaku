@@ -38,10 +38,28 @@ private enum DepartmentAbbr {
     }
 }
 
-// セルで出す追加情報
+// 学部 → 学科（UserSettingsと同じ内容でOK）
+private let FACULTY_DATA: [String:[String]] = [
+    "国際政治経済学部": ["国際コミュニケーション学科","国際政治学科","国際経済学科"],
+    "文学部": ["日本文学科","英米文学科","比較芸術学科","フランス文学科","史学科"],
+    "教育人間科学部": ["教育学科","心理学科"],
+    "法学部": ["法学科","ヒューマンライツ学科"],
+    "社会情報学部": ["社会情報学科"],
+    "経済学部": ["経済学科","現代経済デザイン学科"],
+    "経営学部": ["経営学科","マーケティング学科"],
+    "総合文化政策学部": ["総合文化政策学科"],
+    "理工学部": ["物理科学科","数理サイエンス学科","化学・生命科学科","電気電子工学科","機械創造工学科","経営システム工学科","情報テクノロジー学科"],
+    "地球社会共生学部": ["地球社会共生学科"],
+    "コミュニティ人間科学部": ["コミュニティ人間科学科"],
+]
+private let FACULTY_NAMES = FACULTY_DATA.keys.sorted()
+
+// 追加情報（セルのextra表示は deptAbbr/grade から組み立て）
 private struct ProfileInfo {
-    let deptAbbr: String?
+    let faculty: String?
+    let department: String?
     let grade: Int?
+    var deptAbbr: String? { DepartmentAbbr.abbr(for: department) }
     var text: String? {
         var parts: [String] = []
         if let a = deptAbbr, !a.isEmpty { parts.append(a) }
@@ -49,6 +67,7 @@ private struct ProfileInfo {
         return parts.isEmpty ? nil : parts.joined(separator: "・")
     }
 }
+
 
 final class FindFriendsViewController: UITableViewController, UISearchBarDelegate, BannerViewDelegate {
 
@@ -71,6 +90,12 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     private var adContainerHeight: NSLayoutConstraint?
     private var lastBannerWidth: CGFloat = 0
     private var didLoadBannerOnce = false
+    
+    // --- フィルタ状態
+    private var rawResults: [UserPublic] = []     // 検索後の「素データ」
+    private var filterGrade: Int? = nil           // 1..4 / nil=指定なし
+    private var filterFaculty: String? = nil      // "" / nil=指定なし
+    private var filterDepartment: String? = nil   // "" / nil=未指定
 
     private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
         traits.userInterfaceStyle == .dark ? UIColor(white: 0.2, alpha: 1.0) : .systemBackground
@@ -81,6 +106,9 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         tableView.backgroundColor = bg
         adContainer.backgroundColor = bg
         tableView.separatorColor = .separator
+    }
+    private func cellBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.16, alpha: 1.0) : .secondarySystemBackground
     }
 
     override func viewDidLoad() {
@@ -93,6 +121,13 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         searchBar.delegate = self
         navigationItem.titleView = searchBar
 
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "line.3.horizontal.decrease"),
+            style: .plain,
+            target: self,
+            action: #selector(didTapFilter)
+        )
+        
         refreshControl = UIRefreshControl()
         refreshControl?.addTarget(self, action: #selector(reloadAll), for: .valueChanged)
 
@@ -105,8 +140,15 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         super.traitCollectionDidChange(previousTraitCollection)
         if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
             applyBackgroundStyle()
+            // 目に見える行だけ色を更新
+            for cell in tableView.visibleCells {
+                let bg = cellBackgroundColor(for: traitCollection)
+                cell.backgroundColor = bg
+                cell.contentView.backgroundColor = bg
+            }
         }
     }
+
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -145,8 +187,9 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
                     // 追加情報
                     let grade = d["grade"] as? Int
-                    let dept  = d["department"] as? String
-                    newInfo[u.uid] = ProfileInfo(deptAbbr: DepartmentAbbr.abbr(for: dept), grade: grade)
+                    let faculty = d["faculty"] as? String
+                    let dept    = d["department"] as? String
+                    newInfo[u.uid] = ProfileInfo(faculty: faculty, department: dept, grade: grade)
                 }
 
                 self.allUsers = newUsers
@@ -172,6 +215,8 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             self.results = self.allUsers
             self.tableView.reloadData()
             self.refreshControl?.endRefreshing()
+            self.rawResults = self.allUsers
+            self.applyActiveFilter()
         }
     }
 
@@ -184,7 +229,9 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             case .success(let users):
                 self.results = users
                 self.tableView.reloadData()
-                self.enrichProfiles(for: users) // 追加情報を補完
+                self.rawResults = users
+                self.applyActiveFilter()
+                self.enrichProfiles(for: users)
             case .failure:
                 self.results = []
                 self.tableView.reloadData()
@@ -196,9 +243,59 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
         if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             results = allUsers
+            rawResults = allUsers
+            applyActiveFilter()
             tableView.reloadData()
         }
     }
+    
+    private func applyActiveFilter() {
+        // フィルタに必要な追加情報が無い行を補完取得
+        enrichProfiles(for: rawResults)
+
+        results = rawResults.filter { u in
+            guard let info = profileInfo[u.uid] else { return false } // 情報未取得は一旦除外
+            if let g = filterGrade, (info.grade ?? -1) != g { return false }
+            if let fac = filterFaculty {
+                if info.faculty != fac { return false }
+                if let dep = filterDepartment, !dep.isEmpty {
+                    if info.department != dep { return false }
+                }
+            }
+            return true
+        }
+        // フィルタが無ければ素データ
+        if filterGrade == nil && filterFaculty == nil && (filterDepartment == nil || filterDepartment?.isEmpty == true) {
+            results = rawResults
+        }
+        tableView.reloadData()
+    }
+
+    @objc private func didTapFilter() {
+        let vc = FilterSheetController(
+            grade: filterGrade,
+            faculty: filterFaculty,
+            department: filterDepartment
+        )
+        vc.onClear = { [weak self] in
+            self?.filterGrade = nil
+            self?.filterFaculty = nil
+            self?.filterDepartment = nil
+            self?.applyActiveFilter()
+        }
+        vc.onApply = { [weak self] grade, faculty, department in
+            self?.filterGrade = grade
+            self?.filterFaculty = faculty
+            self?.filterDepartment = department
+            self?.applyActiveFilter()
+        }
+        if let sheet = vc.sheetPresentationController {
+            sheet.detents = [.medium()]      // iOS15+
+            sheet.prefersGrabberVisible = true
+        }
+        present(vc, animated: true)
+    }
+
 
     // 検索結果の追加情報を取得（10件ずつ）
     private func enrichProfiles(for users: [UserPublic]) {
@@ -212,8 +309,10 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
                 snap?.documents.forEach { doc in
                     let d = doc.data()
                     let grade = d["grade"] as? Int
-                    let dept  = d["department"] as? String
-                    self.profileInfo[doc.documentID] = ProfileInfo(deptAbbr: DepartmentAbbr.abbr(for: dept), grade: grade)
+                    let faculty = d["faculty"] as? String
+                    let dept    = d["department"] as? String
+                    self.profileInfo[doc.documentID] = ProfileInfo(faculty: faculty, department: dept, grade: grade)
+
                     updatedUIDs.append(doc.documentID)
                 }
                 // 対象行だけ更新
@@ -265,6 +364,15 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         let extra = profileInfo[u.uid]?.text
         cell.configure(user: u, isFriend: isFriend, isOutgoing: isOutgoing, placeholder: placeholder, extraText: extra)
 
+        let bg = cellBackgroundColor(for: traitCollection)
+        cell.backgroundColor = bg
+        cell.contentView.backgroundColor = bg
+        let selected = UIView()
+        selected.backgroundColor = (traitCollection.userInterfaceStyle == .dark)
+            ? UIColor(white: 0.22, alpha: 1.0)
+            : UIColor.systemFill
+        cell.selectedBackgroundView = selected
+        
         // ボタン動作（未申請 & 未フレンドのときのみ）
         if !isFriend && !isOutgoing {
             cell.actionButton.removeTarget(nil, action: nil, for: .allEvents)
@@ -359,6 +467,150 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         print("Ad failed:", error.localizedDescription)
     }
 }
+
+final class FilterSheetController: UIViewController, UIPickerViewDataSource, UIPickerViewDelegate {
+    var onApply: ((Int?, String?, String?) -> Void)?
+    var onClear: (() -> Void)?
+
+    //private let gradeOptions = ["1年","2年","3年","4年","指定なし"]
+    private let gradeOptions = ["指定なし","1年","2年","3年","4年"]
+    private let gradePicker = UIPickerView()
+    private let facultyDeptPicker = UIPickerView()
+
+    private var selectedGrade: Int?
+    private var selectedFacultyIndex: Int? // nil=指定なし
+    private var selectedDepartmentIndex: Int? // nil=未選択
+
+    init(grade: Int?, faculty: String?, department: String?) {
+        self.selectedGrade = grade
+        super.init(nibName: nil, bundle: nil)
+        if let fac = faculty, let idx = FACULTY_NAMES.firstIndex(of: fac) {
+            selectedFacultyIndex = idx
+            if let dep = department, let didx = FACULTY_DATA[fac]?.firstIndex(of: dep) {
+                selectedDepartmentIndex = didx
+            }
+        }
+        modalPresentationStyle = .pageSheet
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = (traitCollection.userInterfaceStyle == .dark)
+            ? UIColor(white: 0.16, alpha: 1.0) : .systemBackground
+
+        // ヘッダー（クリア / 適用）
+        let h = UIStackView()
+        h.axis = .horizontal
+        h.distribution = .equalSpacing
+        let clearBtn = UIButton(type: .system)
+        clearBtn.setTitle("クリア", for: .normal)
+        clearBtn.addAction(UIAction { [weak self] _ in self?.onClear?(); self?.dismiss(animated: true) }, for: .touchUpInside)
+        let applyBtn = UIButton(type: .system)
+        applyBtn.setTitle("適用", for: .normal)
+        applyBtn.addAction(UIAction { [weak self] _ in
+            guard let self = self else { return }
+            let grade = self.selectedGrade
+            let faculty = (self.selectedFacultyIndex != nil) ? FACULTY_NAMES[self.selectedFacultyIndex!] : nil
+            let department: String?
+            if let fi = self.selectedFacultyIndex,
+               let di = self.selectedDepartmentIndex,
+               let list = FACULTY_DATA[FACULTY_NAMES[fi]], di < list.count {
+                department = list[di]
+            } else {
+                department = nil
+            }
+            self.onApply?(grade, faculty, department)
+            self.dismiss(animated: true)
+        }, for: .touchUpInside)
+
+        h.addArrangedSubview(clearBtn)
+        let title = UILabel()
+        title.text = "絞り込み"
+        title.font = .boldSystemFont(ofSize: 17)
+        h.addArrangedSubview(title)
+        h.addArrangedSubview(applyBtn)
+
+        // ピッカー
+        gradePicker.dataSource = self; gradePicker.delegate = self
+        facultyDeptPicker.dataSource = self; facultyDeptPicker.delegate = self
+
+        let v = UIStackView(arrangedSubviews: [h, gradePicker, facultyDeptPicker])
+        v.axis = .vertical
+        v.spacing = 12
+        v.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(v)
+        NSLayoutConstraint.activate([
+            v.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            v.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            v.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
+            v.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -24),
+        ])
+
+        // 初期選択
+        gradePicker.selectRow(selectedGrade ?? 0, inComponent: 0, animated: false)
+        if let fi = selectedFacultyIndex {
+            facultyDeptPicker.selectRow(fi, inComponent: 0, animated: false)
+            facultyDeptPicker.reloadComponent(1)
+        }
+        if let di = selectedDepartmentIndex {
+            facultyDeptPicker.selectRow(di + 1, inComponent: 1, animated: false) // ★ +1（0は指定なし）
+        } else {
+            facultyDeptPicker.selectRow(0, inComponent: 1, animated: false)      // ★ 指定なし
+        }
+
+    }
+
+    // MARK: UIPicker
+    func numberOfComponents(in pickerView: UIPickerView) -> Int {
+        pickerView === gradePicker ? 1 : 2
+    }
+    // 学部・学科ピッカーの行数
+    func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
+        if pickerView === gradePicker { return gradeOptions.count }
+        if component == 0 { return FACULTY_NAMES.count + 1 }         // 学部 + 指定なし
+        let fi = facultyDeptPicker.selectedRow(inComponent: 0)
+        if fi == FACULTY_NAMES.count { return 0 }                    // 学部=指定なし → 学科なし
+        let fac = FACULTY_NAMES[fi]
+        return (FACULTY_DATA[fac]?.count ?? 0) + 1                   // ★ 学科 + 指定なし
+    }
+
+    // 表示タイトル
+    func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
+        if pickerView === gradePicker { return gradeOptions[row] }
+        if component == 0 { return row == FACULTY_NAMES.count ? "指定なし" : FACULTY_NAMES[row] }
+        let fi = facultyDeptPicker.selectedRow(inComponent: 0)
+        guard fi < FACULTY_NAMES.count else { return nil }
+        let fac = FACULTY_NAMES[fi]
+        if row == 0 { return "指定なし" }                            // ★ 学科の0行目
+        return FACULTY_DATA[fac]?[row - 1]
+    }
+
+    // 選択時の状態更新
+    func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
+        if pickerView === gradePicker {
+            selectedGrade = (row == 0) ? nil : row                   // 1..4 / nil
+            return
+        }
+        if component == 0 {
+            if row == FACULTY_NAMES.count {                          // 学部=指定なし
+                selectedFacultyIndex = nil
+                selectedDepartmentIndex = nil
+                facultyDeptPicker.reloadComponent(1)
+                return
+            }
+            selectedFacultyIndex = row
+            selectedDepartmentIndex = nil                            // ★ 学科は未選択に戻す
+            facultyDeptPicker.reloadComponent(1)
+            facultyDeptPicker.selectRow(0, inComponent: 1, animated: true) // 学科=指定なしを指す
+        } else {
+            // ★ 学科の0行目=指定なし → nil、それ以外は配列index(row-1)
+            selectedDepartmentIndex = (row == 0) ? nil : (row - 1)
+        }
+    }
+
+}
+
 
 
 

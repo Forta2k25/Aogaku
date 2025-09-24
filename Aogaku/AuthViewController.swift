@@ -24,7 +24,9 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     // MARK: - Pickers
     private let gradePicker = UIPickerView()
     private let facultyDeptPicker = UIPickerView()
-    private let gradeOptions = ["1年","2年","3年","4年"]
+    private let gradeOptions = ["1年","2年","3年","4年","指定なし"]
+    private let noneLabel = "指定なし"
+
     
     // ===== AdMob (Banner) =====
     private let adContainer = UIView()
@@ -54,6 +56,24 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     private var facultyNames: [String] { FACULTY_DATA.keys.sorted() }
     private var selectedFacultyIndex = 0
     private var selectedDepartmentIndex = 0
+    
+    private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.20, alpha: 1.0) : .systemGroupedBackground
+    }
+    private func cardBackgroundColor(for traits: UITraitCollection) -> UIColor {
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.16, alpha: 1.0) : .secondarySystemBackground
+    }
+    private func applyBackgroundStyle() {
+        let bg = appBackgroundColor(for: traitCollection)
+        view.backgroundColor = bg
+        adContainer.backgroundColor = bg
+
+        let fieldBG = cardBackgroundColor(for: traitCollection)
+        [gradeField, facultyDeptField].forEach {
+            $0.backgroundColor = fieldBG      // ピッカー用の2つのテキスト欄を少し明るいグレーに
+        }
+    }
+
 
     // MARK: - Helpers
     private func makeHamburgerButton(target: Any?, action: Selector) -> UIButton {
@@ -103,11 +123,20 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
             menuButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             menuButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
         ])
+        
+        applyBackgroundStyle()
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // ▼ 追加：幅に合わせて一度だけロード
         loadBannerIfNeeded()
+    }
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyBackgroundStyle()
+        }
     }
 
     // MARK: - UI
@@ -342,10 +371,16 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
             return
         }
 
-        let grade = max(1, min(4, Int(gradeText.replacingOccurrences(of: "年", with: "")) ?? 1))
-        let comps = facultyDeptText.components(separatedBy: "・")
-        let faculty = comps.first ?? ""
-        let department = comps.count > 1 ? comps[1] : ""
+        let grade: Int = (gradeText == "指定なし")
+            ? 0
+            : max(1, min(4, Int(gradeText.replacingOccurrences(of: "年", with: "")) ?? 1))
+        var comps = facultyDeptText.components(separatedBy: "・")
+        var faculty = comps.first ?? ""
+        var department = comps.count > 1 ? comps[1] : ""
+        if facultyDeptText == "指定なし" || faculty.isEmpty {
+            faculty = ""
+            department = ""
+        }
 
         let hud = UIActivityIndicatorView(style: .large)
         hud.startAnimating()
@@ -394,45 +429,72 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     }
 }
 
+
 // MARK: - UIPickerView DataSource/Delegate
 extension AuthViewController: UIPickerViewDataSource, UIPickerViewDelegate {
+
     func numberOfComponents(in pickerView: UIPickerView) -> Int {
         if pickerView === gradePicker { return 1 }
-        return 2 // faculty & department
+        return 2 // 学部・学科
     }
 
     func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
-        if pickerView === gradePicker { return gradeOptions.count }
-        if component == 0 { return facultyNames.count }
-        let faculty = facultyNames[safe: selectedFacultyIndex] ?? facultyNames.first ?? ""
-        return FACULTY_DATA[faculty]?.count ?? 0
+        if pickerView === gradePicker { return gradeOptions.count }          // 学年は「指定なし」あり
+        if component == 0 { return facultyNames.count + 1 }                  // 学部末尾に「指定なし」
+        let fIndex = facultyDeptPicker.selectedRow(inComponent: 0)
+        if fIndex == facultyNames.count { return 0 }                         // 学部=指定なし → 学科行は無し
+        let faculty = facultyNames[fIndex]
+        return FACULTY_DATA[faculty]?.count ?? 0                             // 学科は通常のみ（指定なしナシ）
     }
 
     func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
         if pickerView === gradePicker { return gradeOptions[row] }
-        if component == 0 { return facultyNames[row] }
-        let faculty = facultyNames[safe: selectedFacultyIndex] ?? facultyNames.first ?? ""
+        if component == 0 { return row == facultyNames.count ? "指定なし" : facultyNames[row] }
+        let fIndex = facultyDeptPicker.selectedRow(inComponent: 0)
+        guard fIndex < facultyNames.count else { return nil }
+        let faculty = facultyNames[fIndex]
         return FACULTY_DATA[faculty]?[row] ?? ""
     }
 
     func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
         if pickerView === gradePicker {
-            gradeField.text = gradeOptions[row]
+            gradeField.text = gradeOptions[row]                              // 保存は authFlow 内
             return
         }
+
         if component == 0 {
+            // 学部
+            if row == facultyNames.count {
+                // 学部=指定なし → テキストを「指定なし」、学科は空
+                facultyDeptField.text = "指定なし"
+                selectedFacultyIndex = row
+                selectedDepartmentIndex = 0
+                facultyDeptPicker.reloadComponent(1)
+                return
+            }
             selectedFacultyIndex = row
             selectedDepartmentIndex = 0
-            pickerView.reloadComponent(1)
-            pickerView.selectRow(0, inComponent: 1, animated: true)
+            facultyDeptPicker.reloadComponent(1)
+
+            // 先頭の学科があればプレビュー表示しておく
+            if let first = FACULTY_DATA[facultyNames[row]]?.first {
+                facultyDeptPicker.selectRow(0, inComponent: 1, animated: false)
+                facultyDeptField.text = "\(facultyNames[row])・\(first)"
+            } else {
+                facultyDeptField.text = facultyNames[row]
+            }
         } else {
+            // 学科
+            let fIndex = facultyDeptPicker.selectedRow(inComponent: 0)
+            guard fIndex < facultyNames.count else { return }
             selectedDepartmentIndex = row
+            let faculty = facultyNames[fIndex]
+            let dept = FACULTY_DATA[faculty]?[row] ?? ""
+            facultyDeptField.text = dept.isEmpty ? faculty : "\(faculty)・\(dept)"
         }
-        let faculty = facultyNames[safe: selectedFacultyIndex] ?? facultyNames.first ?? ""
-        let department = FACULTY_DATA[faculty]?[safe: selectedDepartmentIndex] ?? ""
-        facultyDeptField.text = "\(faculty)・\(department)"
     }
 }
+
 
 // 安全添字ヘルパ
 private extension Array {

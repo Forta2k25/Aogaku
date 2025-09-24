@@ -233,6 +233,16 @@ final class FriendListCell: UITableViewCell {
 final class FriendListViewController: UITableViewController, UISearchBarDelegate, BannerViewDelegate {
 
     private let db = Firestore.firestore()
+    
+    // 名前のフォールバック: name → friendName → @id
+    private func displayName(name: String?, friendName: String, id: String, friendId: String) -> String {
+        let n1 = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !n1.isEmpty { return n1 }
+        let n2 = friendName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !n2.isEmpty { return n2 }
+        return "@\(id.isEmpty ? friendId : id)"
+    }
+
 
     private struct Profile {
         var name: String
@@ -242,10 +252,10 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         var grade: Int?          // 追加
         var deptAbbr: String?    // 追加
 
-        var extra: String? {     // 「経マ・2年」などに整形
+        var extra: String? {
             var parts: [String] = []
-            if let d = deptAbbr, !d.isEmpty { parts.append(d) }
-            if let g = grade, g >= 1 { parts.append("\(g)年") }
+            if let d = deptAbbr, !d.isEmpty { parts.append(d) }  // 学科があれば入れる
+            if let g = grade, g >= 1 { parts.append("\(g)年") }  // 学年があれば入れる
             return parts.isEmpty ? nil : parts.joined(separator: "・")
         }
     }
@@ -600,23 +610,27 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         let f = friends[indexPath.row]
         let cell = tableView.dequeueReusableCell(withIdentifier: FriendListCell.reuseID, for: indexPath) as! FriendListCell
 
-        // 1) まずプロフィール（名前/ID/URL/バージョン）をローカルキャッシュ or Firestore から
+        // 1) ローカルキャッシュがあればそれを表示
         if let p = profileCache[f.friendUid] {
+            let idForShow = p.id.isEmpty ? f.friendId : p.id
+            let nameForShow = displayName(name: p.name, friendName: f.friendName, id: idForShow, friendId: f.friendId)
+
             let cachedImage = AvatarCache.shared.image(uid: f.friendUid, version: p.avatarVersion)
-            cell.configure(name: p.name.isEmpty ? f.friendName : p.name,
-                           id: p.id.isEmpty ? f.friendId : p.id,
+            cell.configure(name: nameForShow,
+                           id: idForShow,
                            image: cachedImage,
                            pinned: FriendPinStore.shared.isPinned(f.friendUid),
                            extraText: p.extra)
-            // 画像が未取得で URL がある場合のみ取得（保存）
+
+            // 画像が未取得ならDL → 反映
             if cachedImage == nil, let url = p.photoURL {
                 ImageFetcher.fetch(urlString: url) { img in
                     guard let img = img else { return }
                     AvatarCache.shared.store(img, uid: f.friendUid, version: p.avatarVersion)
                     DispatchQueue.main.async {
                         if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
-                            visible.configure(name: p.name.isEmpty ? f.friendName : p.name,
-                                              id: p.id.isEmpty ? f.friendId : p.id,
+                            visible.configure(name: nameForShow,
+                                              id: idForShow,
                                               image: img,
                                               pinned: FriendPinStore.shared.isPinned(f.friendUid),
                                               extraText: p.extra)
@@ -624,56 +638,63 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
                     }
                 }
             }
-        } else {
-            // 一旦は friend の基本情報で描画（ローカルキャッシュ画像があればそれも使う）
-            let cachedImage = AvatarCache.shared.image(uid: f.friendUid, version: nil)
-            cell.configure(name: f.friendName,
-                           id: f.friendId,
-                           image: cachedImage,
-                           pinned: FriendPinStore.shared.isPinned(f.friendUid),
-                           extraText: nil)
+            return cell
+        }
 
-            // users/{uid} を単発取得し、バージョンに応じて画像取得・保存
-            db.collection("users").document(f.friendUid).getDocument { [weak self, weak tableView] snap, _ in
-                guard let self = self, let tableView = tableView else { return }
-                let data = snap?.data() ?? [:]
-                let name = (data["name"] as? String) ?? f.friendName
-                let id   = (data["id"] as? String) ?? f.friendId
-                let url  = data["photoURL"] as? String
-                let verRaw = (data["avatarVersion"] as? Int) ?? (data["photoVersion"] as? Int)
-                let ver = verRaw ?? AvatarCache.shared.versionFrom(urlString: url)
-                let grade = data["grade"] as? Int
-                let dept  = data["department"] as? String
+        // 2) まだキャッシュがなければ仮描画 → Firestore 取得
+        let fallbackName = f.friendName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "@\(f.friendId)" : f.friendName
+        let cachedImage = AvatarCache.shared.image(uid: f.friendUid, version: nil)
+        cell.configure(name: fallbackName,
+                       id: f.friendId,
+                       image: cachedImage,
+                       pinned: FriendPinStore.shared.isPinned(f.friendUid),
+                       extraText: nil)
 
-                let profile = Profile(name: name,
-                                      id: id,
-                                      photoURL: url,
-                                      avatarVersion: ver,
-                                      grade: grade,
-                                      deptAbbr: DepartmentAbbr.abbr(dept))
-                self.profileCache[f.friendUid] = profile
+        db.collection("users").document(f.friendUid).getDocument { [weak self, weak tableView] snap, _ in
+            guard let self = self, let tableView = tableView else { return }
+            let data = snap?.data() ?? [:]
 
-                // まずはキャッシュ画像（該当バージョン）を適用
-                let cached = AvatarCache.shared.image(uid: f.friendUid, version: ver)
-                DispatchQueue.main.async {
-                    if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
-                        visible.configure(name: name, id: id, image: cached,
-                                          pinned: FriendPinStore.shared.isPinned(f.friendUid),
-                                          extraText: profile.extra)
-                    }
+            let rawName = data["name"] as? String
+            let id = (data["id"] as? String) ?? f.friendId
+            let url = data["photoURL"] as? String
+            let verRaw = (data["avatarVersion"] as? Int) ?? (data["photoVersion"] as? Int)
+            let ver = verRaw ?? AvatarCache.shared.versionFrom(urlString: url)
+            let grade = data["grade"] as? Int
+            let dept  = data["department"] as? String
+
+            let profile = Profile(name: rawName ?? f.friendName,
+                                  id: id,
+                                  photoURL: url,
+                                  avatarVersion: ver,
+                                  grade: grade,
+                                  deptAbbr: DepartmentAbbr.abbr(dept))
+            self.profileCache[f.friendUid] = profile
+
+            let idForShow = id
+            let nameForShow = displayName(name: rawName, friendName: f.friendName, id: idForShow, friendId: f.friendId)
+
+            let cached = AvatarCache.shared.image(uid: f.friendUid, version: ver)
+            DispatchQueue.main.async {
+                if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
+                    visible.configure(name: nameForShow,
+                                      id: idForShow,
+                                      image: cached,
+                                      pinned: FriendPinStore.shared.isPinned(f.friendUid),
+                                      extraText: profile.extra)
                 }
+            }
 
-                // キャッシュが無く、URL があればダウンロード → 保存 → 反映
-                if cached == nil, let url = url {
-                    ImageFetcher.fetch(urlString: url) { img in
-                        guard let img = img else { return }
-                        AvatarCache.shared.store(img, uid: f.friendUid, version: ver)
-                        DispatchQueue.main.async {
-                            if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
-                                visible.configure(name: name, id: id, image: img,
-                                                  pinned: FriendPinStore.shared.isPinned(f.friendUid),
-                                                  extraText: profile.extra)
-                            }
+            if cached == nil, let url = url {
+                ImageFetcher.fetch(urlString: url) { img in
+                    guard let img = img else { return }
+                    AvatarCache.shared.store(img, uid: f.friendUid, version: ver)
+                    DispatchQueue.main.async {
+                        if let visible = tableView.cellForRow(at: indexPath) as? FriendListCell {
+                            visible.configure(name: nameForShow,
+                                              id: idForShow,
+                                              image: img,
+                                              pinned: FriendPinStore.shared.isPinned(f.friendUid),
+                                              extraText: profile.extra)
                         }
                     }
                 }
@@ -682,6 +703,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
         return cell
     }
+
 
     // ===== 右スワイプ：ピン留め / 解除 =====
     override func tableView(_ tableView: UITableView,

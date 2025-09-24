@@ -22,11 +22,18 @@
                                     <constraint firstAttribute="height" constant="519" id="yxL-te-3vR"/>
                                 </constraints>
                             </imageView>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="aogakuapuri" translatesAutoresizingMaskIntoConstraints="NO" id="8tc-rA-vGH">
+                                <rect key="frame" x="50" y="198" width="293" height="87.666666666666686"/>
+                            </imageView>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
                         <color key="backgroundColor" red="0.11372549830000001" green="0.28627452250000002" blue="0.22745099660000001" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                         <constraints>
+                            <constraint firstItem="6Tk-OE-BBY" firstAttribute="trailing" secondItem="8tc-rA-vGH" secondAttribute="trailing" constant="50" id="0vU-0L-Xcq"/>
+                            <constraint firstItem="8tc-rA-vGH" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="K4b-gs-tZH"/>
                             <constraint firstItem="qFe-zN-QvC" firstAttribute="trailing" secondItem="6Tk-OE-BBY" secondAttribute="trailing" id="PGy-Wd-dCG"/>
+                            <constraint firstItem="8tc-rA-vGH" firstAttribute="top" secondItem="6Tk-OE-BBY" secondAttribute="top" constant="80" id="c8F-yg-I9c"/>
+                            <constraint firstItem="8tc-rA-vGH" firstAttribute="leading" secondItem="6Tk-OE-BBY" secondAttribute="leading" constant="50" id="lt2-TP-99n"/>
                             <constraint firstAttribute="bottom" secondItem="qFe-zN-QvC" secondAttribute="bottom" id="pOS-CV-5ab"/>
                         </constraints>
                     </view>
@@ -37,6 +44,7 @@
         </scene>
     </scenes>
     <resources>
+        <image name="aogakuapuri" width="290.33334350585938" height="87.666664123535156"/>
         <image name="loadscreen2" width="341.33334350585938" height="512"/>
     </resources>
 </document>

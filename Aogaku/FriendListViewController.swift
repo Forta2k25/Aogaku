@@ -395,9 +395,23 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
                 ac.addAction(UIAlertAction(title: "閉じる", style: .cancel, handler: { _ in
                     self.loginAlertShown = false
                 }))
-                ac.addAction(UIAlertAction(title: "設定へ", style: .default, handler: { _ in
+                ac.addAction(UIAlertAction(title: "設定へ", style: .default, handler: { [weak self] _ in
+                    guard let self = self else { return }
                     self.loginAlertShown = false
-             //       self.tabBarController?.selectedIndex = 3
+
+                    // 左から4番目（index 3）のタブ＝設定へ遷移
+                    if let tab = self.tabBarController ?? (self.view.window?.rootViewController as? UITabBarController) {
+                        let idx = 3 // 0-based
+                        if let vcs = tab.viewControllers, vcs.indices.contains(idx) {
+                            tab.selectedIndex = idx
+                            // そのタブが UINavigationController ならルートまで戻しておく
+                            if let nav = vcs[idx] as? UINavigationController {
+                                nav.popToRootViewController(animated: false)
+                            }
+                        } else {
+                            tab.selectedIndex = idx
+                        }
+                    }
                 }))
                 present(ac, animated: true)
             }

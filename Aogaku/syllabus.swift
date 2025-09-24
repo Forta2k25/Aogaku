@@ -541,7 +541,7 @@ final class syllabus: UIViewController,
         cell.campus.text = subject.campus
         cell.grade.text = subject.grade
         cell.category.text = subject.category
-        cell.credit.text = subject.credit
+        cell.credit.text = subject.credit.isEmpty ? "-" : "\(subject.credit)単位"
         cell.termLabel.text = subject.term.isEmpty ? "-" : subject.term
         return cell
     }

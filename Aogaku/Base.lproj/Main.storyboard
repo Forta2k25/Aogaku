@@ -33,7 +33,7 @@
                                                         <constraint firstAttribute="width" constant="280" id="y6X-Oi-wV0"/>
                                                     </constraints>
                                                     <fontDescription key="fontDescription" name="HelveticaNeue-Bold" family="Helvetica Neue" pointSize="16"/>
-                                                    <color key="textColor" red="0.26051741839999998" green="0.2605243921" blue="0.260520637" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                    <nil key="textColor"/>
                                                     <nil key="highlightedColor"/>
                                                 </label>
                                                 <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="先生名" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="lGj-fJ-M0O">
@@ -69,15 +69,14 @@
                                                     <color key="textColor" red="0.66422420739999999" green="0.66424006219999998" blue="0.66423153879999997" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                                                     <nil key="highlightedColor"/>
                                                 </label>
-                                                <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="０単位" textAlignment="center" lineBreakMode="tailTruncation" numberOfLines="0" baselineAdjustment="alignBaselines" adjustsFontForContentSizeCategory="YES" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="2uJ-7o-vir">
-                                                    <rect key="frame" x="308" y="11" width="58" height="26"/>
-                                                    <color key="backgroundColor" red="0.92143100499999997" green="0.92145264149999995" blue="0.92144101860000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="０単位" textAlignment="right" lineBreakMode="tailTruncation" numberOfLines="0" baselineAdjustment="alignBaselines" adjustsFontForContentSizeCategory="YES" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="2uJ-7o-vir">
+                                                    <rect key="frame" x="319" y="9" width="58" height="26"/>
+                                                    <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                                     <constraints>
                                                         <constraint firstAttribute="width" constant="58" id="eFu-0c-CAw"/>
                                                         <constraint firstAttribute="height" constant="26" id="vjb-oz-sc2"/>
                                                     </constraints>
-                                                    <fontDescription key="fontDescription" name="HelveticaNeue-Bold" family="Helvetica Neue" pointSize="16"/>
-                                                    <color key="textColor" red="0.26051741839999998" green="0.2605243921" blue="0.260520637" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                                    <fontDescription key="fontDescription" name="HelveticaNeue" family="Helvetica Neue" pointSize="14"/>
                                                     <nil key="highlightedColor"/>
                                                 </label>
                                                 <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="(期間)" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="1Rc-Gv-IYC">
@@ -98,10 +97,9 @@
                                                 <constraint firstItem="lGj-fJ-M0O" firstAttribute="leading" secondItem="1Rc-Gv-IYC" secondAttribute="trailing" constant="5" id="OoB-no-uWm"/>
                                                 <constraint firstItem="1Rc-Gv-IYC" firstAttribute="top" secondItem="toj-hB-0pu" secondAttribute="bottom" constant="8" id="Rh1-xH-Hg8"/>
                                                 <constraint firstItem="ob7-XJ-tvS" firstAttribute="leading" secondItem="i1X-VE-0Fq" secondAttribute="trailing" constant="17" id="VCz-L2-uwF"/>
-                                                <constraint firstItem="2uJ-7o-vir" firstAttribute="top" secondItem="OGi-ld-CGB" secondAttribute="topMargin" id="Wun-ZE-kTZ"/>
-                                                <constraint firstAttribute="trailingMargin" secondItem="2uJ-7o-vir" secondAttribute="trailing" constant="7" id="hP3-W8-hOX"/>
+                                                <constraint firstAttribute="trailingMargin" secondItem="2uJ-7o-vir" secondAttribute="trailing" constant="-4" id="hP3-W8-hOX"/>
                                                 <constraint firstItem="toj-hB-0pu" firstAttribute="leading" secondItem="OGi-ld-CGB" secondAttribute="leadingMargin" id="jyx-0m-GQa"/>
-                                                <constraint firstItem="2uJ-7o-vir" firstAttribute="top" secondItem="OGi-ld-CGB" secondAttribute="topMargin" id="lN0-fy-XpZ"/>
+                                                <constraint firstItem="2uJ-7o-vir" firstAttribute="top" secondItem="OGi-ld-CGB" secondAttribute="top" constant="9" id="k0c-gK-nFd"/>
                                                 <constraint firstItem="COT-68-EOT" firstAttribute="leading" secondItem="WG0-ke-fLo" secondAttribute="trailing" constant="17" id="lhN-A8-R6J"/>
                                                 <constraint firstItem="lGj-fJ-M0O" firstAttribute="top" secondItem="toj-hB-0pu" secondAttribute="bottom" constant="8" id="n8d-6e-wXu"/>
                                                 <constraint firstItem="1Rc-Gv-IYC" firstAttribute="leading" secondItem="OGi-ld-CGB" secondAttribute="leadingMargin" id="s0P-VB-Ehx"/>
@@ -131,7 +129,6 @@
                             </label>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="fLA-wl-cgD"/>
-                        <color key="backgroundColor" red="0.92143100499999997" green="0.92145264149999995" blue="0.92144101860000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
                             <constraint firstItem="Est-uD-lV5" firstAttribute="centerX" secondItem="Aep-Mu-875" secondAttribute="centerX" id="62f-Zn-Z18"/>
                             <constraint firstItem="IGG-Mg-aDD" firstAttribute="top" secondItem="fLA-wl-cgD" secondAttribute="top" id="OsU-f2-5L0"/>
@@ -150,11 +147,11 @@
                                 <button key="customView" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" id="dP0-bR-m12">
                                     <rect key="frame" x="320" y="4.6666666666666679" width="57" height="35"/>
                                     <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                    <color key="backgroundColor" red="0.92156863209999995" green="0.92156863209999995" blue="0.92156863209999995" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
-                                    <color key="tintColor" red="0.30196079609999998" green="0.30196079609999998" blue="0.30196079609999998" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                                    <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <color key="tintColor" red="0.59607845540000004" green="0.59607845540000004" blue="0.59607845540000004" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                                     <state key="normal" title="Button"/>
                                     <buttonConfiguration key="configuration" style="gray" image="line.3.horizontal.decrease" catalog="system" title="">
-                                        <color key="baseBackgroundColor" red="0.92156863209999995" green="0.92156863209999995" blue="0.92156863209999995" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                                        <color key="baseBackgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                     </buttonConfiguration>
                                     <connections>
                                         <action selector="didTapSearchButton:" destination="Ach-8h-faD" eventType="touchUpInside" id="oYw-eu-b5B"/>
@@ -165,11 +162,11 @@
                                 <button key="customView" opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" id="Cod-gn-tbm">
                                     <rect key="frame" x="255" y="4.6666666666666679" width="57" height="35"/>
                                     <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                    <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                    <color key="tintColor" red="0.33333334329999997" green="0.33333334329999997" blue="0.33333334329999997" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                                    <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <color key="tintColor" red="0.53333336109999996" green="0.53333336109999996" blue="0.53333336109999996" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                                     <state key="normal" title="Button"/>
                                     <buttonConfiguration key="configuration" style="gray" image="bookmark" catalog="system" title="">
-                                        <color key="baseBackgroundColor" red="0.92156863209999995" green="0.92156863209999995" blue="0.92156863209999995" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                                        <color key="baseBackgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                     </buttonConfiguration>
                                     <connections>
                                         <action selector="didTapFavorites:" destination="Ach-8h-faD" eventType="touchUpInside" id="8mr-K8-8EJ"/>

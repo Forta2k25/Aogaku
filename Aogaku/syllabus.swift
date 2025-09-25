@@ -11,15 +11,16 @@ private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
 // ===== 検索条件 =====
 struct SyllabusSearchCriteria {
     var keyword: String? = nil
-    var category: String? = nil      // 学部（上位）
-    var department: String? = nil    // 学科（完全一致）
-    var campus: String? = nil        // "青山" / "相模原"
-    var place: String? = nil         // "対面" / "オンライン" / nil
+    var category: String? = nil
+    var department: String? = nil
+    var campus: String? = nil
+    var place: String? = nil
     var grade: String? = nil
-    var day: String? = nil           // 単一曜日のときだけ入る最適化用
+    var day: String? = nil
     var periods: [Int]? = nil
-    var timeSlots: [(String, Int)]? = nil // 複数セル選択: (day, period)
-    var term: String? = nil          // "前期" / "後期" / nil
+    var timeSlots: [(String, Int)]? = nil
+    var term: String? = nil
+    var undecided: Bool? = nil      // ★ 追加：授業名に「不定」を含む
 }
 
 final class syllabus: UIViewController,
@@ -70,6 +71,7 @@ final class syllabus: UIViewController,
     private var filterPeriods: [Int]? = nil
     private var filterTimeSlots: [(day: String, period: Int)]? = nil
     private var filterTerm: String? = nil       // ★ 学期
+    private var filterUndecided: Bool = false
 
     // ===== データ =====
     struct SyllabusData {
@@ -429,6 +431,7 @@ final class syllabus: UIViewController,
         filterPeriods    = criteria.periods
         filterTimeSlots  = criteria.timeSlots
         filterTerm       = criteria.term
+        filterUndecided = criteria.undecided ?? false
 
         DispatchQueue.main.async { [weak self] in
             self?.resetAndReload(keyword: criteria.keyword)
@@ -479,7 +482,7 @@ final class syllabus: UIViewController,
             let want = canonicalizeCampusString(c) ?? c
             if !docCampusSet(x).contains(want) { return false }
         }
-        // 形態（授業名末尾の [オンライン] などで判定）
+        // 形態（オンライン/対面）
         if let p = filterPlace, !p.isEmpty {
             let name = (x["class_name"] as? String) ?? ""
             if p == "オンライン" {
@@ -493,25 +496,34 @@ final class syllabus: UIViewController,
             let s = (x["grade"] as? String) ?? ""
             if !(s == g || s.contains(g)) { return false }
         }
-        // 曜日・時限
-        let time = x["time"] as? [String: Any]
-        let docDay = (time?["day"] as? String) ?? ""
-        let docPeriods = (time?["periods"] as? [Int]) ?? []
 
-        if let slots = filterTimeSlots, !slots.isEmpty {
-            let ok = slots.contains { $0.0 == docDay && docPeriods.contains($0.1) }
-            if !ok { return false }
+        // === 不定（授業名に「不定」を含む）===
+        if filterUndecided {
+            let name = (x["class_name"] as? String) ?? ""
+            if name.contains("不定") == false { return false }
+            // 不定のときは曜日・時限チェックはスキップ（時間が空欄な科目に対応）
         } else {
-            if let d = filterDay, !d.isEmpty, docDay != d { return false }
-            if let ps = filterPeriods {
-                if ps.count == 1 {
-                    if !docPeriods.contains(ps[0]) { return false }
-                } else if ps.count > 1 {
-                    if !Set(ps).isSubset(of: Set(docPeriods)) { return false }
+            // 曜日・時限
+            let time = x["time"] as? [String: Any]
+            let docDay = (time?["day"] as? String) ?? ""
+            let docPeriods = (time?["periods"] as? [Int]) ?? []
+
+            if let slots = filterTimeSlots, !slots.isEmpty {
+                let ok = slots.contains { $0.0 == docDay && docPeriods.contains($0.1) }
+                if !ok { return false }
+            } else {
+                if let d = filterDay, !d.isEmpty, docDay != d { return false }
+                if let ps = filterPeriods {
+                    if ps.count == 1 {
+                        if !docPeriods.contains(ps[0]) { return false }
+                    } else if ps.count > 1 {
+                        if !Set(ps).isSubset(of: Set(docPeriods)) { return false }
+                    }
                 }
             }
         }
-        // ★ 学期（前期/後期）
+
+        // 学期（前期/後期 等）
         if let wantTerm = filterTerm, !wantTerm.isEmpty {
             let termRaw = (x["term"] as? String) ?? ""
             let normalized = normalizeTerm(termRaw)
@@ -536,12 +548,13 @@ final class syllabus: UIViewController,
         if let g = filterGrade,  !g.isEmpty { q = q.whereField("grade",  isEqualTo: g) }
 
         // 曜日/時限（単一のみはサーバで）
-        if (filterTimeSlots == nil || filterTimeSlots?.isEmpty == true) {
+        if !filterUndecided && (filterTimeSlots == nil || filterTimeSlots?.isEmpty == true) {
             if let d = filterDay,    !d.isEmpty { q = q.whereField("time.day", isEqualTo: d) }
             if let ps = filterPeriods, ps.count == 1 {
                 q = q.whereField("time.periods", arrayContains: ps[0])
             }
         }
+
 
         // ★ 学期（可能ならサーバで）
         if let t = filterTerm, !t.isEmpty {
@@ -556,8 +569,11 @@ final class syllabus: UIViewController,
         guard !isLoading, !reachedEnd else { return }
         isLoading = true
 
-        let qBase = baseQuery().order(by: "class_name")
-        var q: Query = qBase.limit(to: pageSizeBase)
+        let qBase = baseQuery()
+        let hasTimeFilter = (filterDay?.isEmpty == false) || ((filterPeriods?.count ?? 0) == 1)
+        var q: Query = hasTimeFilter
+            ? qBase.limit(to: pageSizeBase)                 // ← orderBy を外す（インデックス不要に）
+            : qBase.order(by: "class_name").limit(to: pageSizeBase)
         if let last = lastDoc { q = q.start(afterDocument: last) }
 
         q.getDocuments { [weak self] snap, err in
@@ -592,6 +608,11 @@ final class syllabus: UIViewController,
 
             print("📦 page:", snap.documents.count, "added:", chunk.count, "total:", self.data.count,
                   "last:", self.lastDoc?.documentID ?? "nil")
+            
+            // chunk を埋めた直後あたりに追記
+            if hasTimeFilter {
+                chunk.sort { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
+            }
         }
     }
 

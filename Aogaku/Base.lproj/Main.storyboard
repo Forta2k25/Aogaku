@@ -217,6 +217,9 @@
                                         <integer key="value" value="8"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="didTapDetailFilter:" destination="XWM-mO-tUM" eventType="touchUpInside" id="emd-Y7-s6j"/>
+                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="gyg-2q-gZy">
                                 <rect key="frame" x="312" y="46" width="46" height="46"/>
@@ -838,6 +841,7 @@
                     <connections>
                         <outlet property="campusSegmentedControl" destination="Qp9-AC-aMn" id="Mf7-E9-4Zl"/>
                         <outlet property="departmentButton" destination="qMx-1H-XJW" id="Uy5-rb-B3r"/>
+                        <outlet property="detailFilterButton" destination="mSM-6H-dKb" id="1pj-O8-vsZ"/>
                         <outlet property="facultyButton" destination="zdu-kz-RvL" id="Qah-KL-I0V"/>
                         <outlet property="gridContainerView" destination="UaY-RP-5cg" id="3it-r1-Pip"/>
                         <outlet property="keywordTextField" destination="kdK-Gy-r6a" id="vGE-67-Vrs"/>
@@ -1012,6 +1016,21 @@
                 <placeholder placeholderIdentifier="IBFirstResponder" id="ci6-zd-LVY" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
             <point key="canvasLocation" x="2265" y="272"/>
+        </scene>
+        <!--Syllabus Detail Filter View Controller-->
+        <scene sceneID="XAD-oY-YC1">
+            <objects>
+                <viewController id="MKz-dX-FzK" customClass="SyllabusDetailFilterViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="h1X-vs-E61">
+                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <viewLayoutGuide key="safeArea" id="1t4-In-Mru"/>
+                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                    </view>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="EaH-Z2-cHx" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="2999" y="272"/>
         </scene>
         <!--時間割-->
         <scene sceneID="ccc-Vx-WWP">

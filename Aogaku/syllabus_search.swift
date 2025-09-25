@@ -38,6 +38,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     @IBOutlet weak var termSegmentedControl: UISegmentedControl!    // ★ 追加: 前期/後期
     @IBOutlet var slotButtons: [UIButton]!
     @IBOutlet weak var gridContainerView: UIView!
+    @IBOutlet weak var detailFilterButton: UIButton!
 
     // ===== 内部状態 =====
     private var selectedCategory: String?
@@ -218,6 +219,56 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     }
 
     // ===== Actions =====
+    @IBAction func didTapDetailFilter(_ sender: Any) {
+        let vc = SyllabusDetailFilterViewController()
+        // 詳細画面 → この画面へ結果を返す
+        vc.onApply = { [weak self] detail in
+            guard let self = self else { return }
+
+            // いまこの画面にある選択状態からベース条件を作成
+            var campusValue: String? = nil
+            if let t = self.campusSegmentedControl.titleForSegment(at: self.campusSegmentedControl.selectedSegmentIndex),
+               t != "指定なし" { campusValue = t }
+
+            var placeValue: String? = nil
+            if let t = self.placeSegmentedControl.titleForSegment(at: self.placeSegmentedControl.selectedSegmentIndex),
+               t != "指定なし" { placeValue = t }
+
+            let slots = self.deriveTimeSlots()
+            let (day, ps) = self.deriveSingleDayAndPeriods()
+
+            var merged = SyllabusSearchCriteria(
+                keyword: self.keywordTextField?.text,
+                category: self.selectedCategory,
+                department: self.selectedDepartment,
+                campus: campusValue,
+                place: placeValue,
+                grade: self.selectedGrade,
+                day: day,
+                periods: ps,
+                timeSlots: slots,
+                term: self.selectedTerm,
+                undecided: nil
+            )
+
+            // 詳細条件で上書き（指定があるものだけ）
+            if let d = detail.day { merged.day = d }
+            if let p = detail.periods { merged.periods = p }
+            if let t = detail.timeSlots { merged.timeSlots = t }
+            merged.undecided = detail.undecided
+
+            self.onApply?(merged)
+        }
+
+        let nav = UINavigationController(rootViewController: vc)
+        nav.modalPresentationStyle = .pageSheet
+        if let sheet = nav.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(nav, animated: true)
+    }
+
     @IBAction func campusChanged(_ sender: UISegmentedControl) {
         let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
         selectedCampus = (title == "指定なし") ? nil : title

@@ -131,6 +131,11 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         // ▼ 追加：幅に合わせて一度だけロード
         loadBannerIfNeeded()
     }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
+    }
+
     
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)

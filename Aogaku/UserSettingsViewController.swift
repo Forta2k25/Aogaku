@@ -213,6 +213,11 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         loadBannerIfNeeded()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
+    }
+
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {

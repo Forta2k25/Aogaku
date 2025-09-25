@@ -19,6 +19,7 @@
 		A49A407F2E7BE7DB0036636C /* DeepLinkRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49A407E2E7BE7DB0036636C /* DeepLinkRouter.swift */; };
 		A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F02E62D45500947976 /* FirebaseCore */; };
 		A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F22E62D45500947976 /* FirebaseFirestore */; };
+		A4EFF9A12E84E99000135008 /* FirebaseRemoteConfig in Frameworks */ = {isa = PBXBuildFile; productRef = A4EFF9A02E84E99000135008 /* FirebaseRemoteConfig */; };
 		B37651392E7E8D3400E77AF2 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = B37651382E7E8D3400E77AF2 /* FirebaseFunctions */; };
 		B3F9F0962E79546D00BFB330 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = B3F9F0952E79546D00BFB330 /* FirebaseAuth */; };
 		B3F9F09C2E79952E00BFB330 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = B3F9F09B2E79952E00BFB330 /* FirebaseStorage */; };
@@ -142,6 +143,7 @@
 				B37651392E7E8D3400E77AF2 /* FirebaseFunctions in Frameworks */,
 				B3F9F09C2E79952E00BFB330 /* FirebaseStorage in Frameworks */,
 				B3F9F0962E79546D00BFB330 /* FirebaseAuth in Frameworks */,
+				A4EFF9A12E84E99000135008 /* FirebaseRemoteConfig in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -256,6 +258,7 @@
 				B3F9F0952E79546D00BFB330 /* FirebaseAuth */,
 				B3F9F09B2E79952E00BFB330 /* FirebaseStorage */,
 				B37651382E7E8D3400E77AF2 /* FirebaseFunctions */,
+				A4EFF9A02E84E99000135008 /* FirebaseRemoteConfig */,
 			);
 			productName = Aogaku;
 			productReference = B3A17B1F2E40A19700ACCA3A /* Aogaku.app */;
@@ -841,6 +844,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFirestore;
+		};
+		A4EFF9A02E84E99000135008 /* FirebaseRemoteConfig */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseRemoteConfig;
 		};
 		B37651382E7E8D3400E77AF2 /* FirebaseFunctions */ = {
 			isa = XCSwiftPackageProductDependency;

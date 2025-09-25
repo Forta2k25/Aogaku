@@ -352,6 +352,12 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         applyBackgroundStyle()
     }
     
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
+    }
+
+    
     // ダーク／ライト切替に追随
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)

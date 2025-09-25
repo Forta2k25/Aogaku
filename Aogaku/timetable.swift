@@ -613,6 +613,7 @@ final class timetable: UIViewController,
         publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
         startNowTicker()                     // 追加
         updateNowHighlight()                 // 追加（すぐ反映）
+        AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
     }
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)

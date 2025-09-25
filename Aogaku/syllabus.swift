@@ -194,6 +194,12 @@ final class syllabus: UIViewController,
         setupAdBanner()
         applyBackgroundStyle()
     }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
+    }
+
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()

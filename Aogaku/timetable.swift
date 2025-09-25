@@ -740,22 +740,35 @@ final class timetable: UIViewController,
         headerBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(headerBar)
 
-        // 左上：年度・学期ボタン（グレーのピル＋上下矢印）
-        var termCfg = UIButton.Configuration.filled()
-        termCfg.baseBackgroundColor = .secondarySystemBackground   // 薄いグレー
-        termCfg.baseForegroundColor = .label
-        termCfg.cornerStyle = .capsule
-        termCfg.contentInsets = .init(top: 6, leading: 12, bottom: 6, trailing: 10)
-        termCfg.title = currentTerm.displayTitle
-        termCfg.image = UIImage(systemName: "chevron.up.chevron.down") // 上下矢印
-        termCfg.imagePlacement = .trailing
-        termCfg.imagePadding = 6
-        termCfg.background.strokeColor = UIColor.separator
-        termCfg.background.strokeWidth = 1
-        leftButton.configuration = termCfg
-        leftButton.setTitle(nil, for: .normal)                       // configurationで管理
+        
+        // 左上：年度・学期ボタン（手組み：見た目は従来どおりのカプセル）
+        leftButton.configuration = nil
+        leftButton.backgroundColor = .secondarySystemBackground
+        leftButton.layer.cornerRadius = 22
+        leftButton.layer.masksToBounds = true
+        leftButton.layer.borderColor = UIColor.separator.cgColor
+        leftButton.layer.borderWidth = 1
+        leftButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 10)
+
+        leftButton.setTitle(currentTerm.displayTitle, for: .normal)
+        leftButton.setTitleColor(.label, for: .normal)
+        leftButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        leftButton.titleLabel?.numberOfLines = 1                       // ★ 常に1行
+        leftButton.titleLabel?.lineBreakMode = .byTruncatingTail       // 収まらなければ末尾省略
+        leftButton.titleLabel?.adjustsFontSizeToFitWidth = true        // まずは縮小して収める
+        leftButton.titleLabel?.minimumScaleFactor = 0.85
+        leftButton.titleLabel?.allowsDefaultTighteningForTruncation = true
+
+        leftButton.setImage(UIImage(systemName: "chevron.up.chevron.down"), for: .normal)
+        leftButton.tintColor = .label
+        leftButton.semanticContentAttribute = .forceRightToLeft        // 画像を右側へ
+        leftButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: 6, bottom: 0, right: -6)
+
+        leftButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         leftButton.setContentHuggingPriority(.required, for: .horizontal)
         leftButton.addTarget(self, action: #selector(tapLeft), for: .touchUpInside)
+
+        
 
         // タイトル
         titleLabel.text = "時間割"
@@ -1421,6 +1434,8 @@ final class timetable: UIViewController,
         } else {
             leftButton.setTitle(newTerm.displayTitle, for: .normal)
         }
+        
+        
         // → ここまで
 
         loadAssigned(for: newTerm)

@@ -359,8 +359,62 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         menu.modalTransitionStyle = .crossDissolve
         menu.delegate = self
         menu.showsAccountSection = false
-        present(menu, animated: false)
+        present(menu, animated: false) { [weak self, weak menu] in
+            self?.attachInstagramButton(to: menu)   // ★ 追加
+        }
     }
+    
+    // ===== Instagram: メニュー右下ボタンを後付け =====
+    private func attachInstagramButton(to menuVC: UIViewController?) {
+        guard let menuVC else { return }
+        let tag = 9901
+        if menuVC.view.viewWithTag(tag) != nil { return } // 二重追加ガード
+
+        let b = UIButton(type: .system)
+        b.tag = tag
+        b.translatesAutoresizingMaskIntoConstraints = false
+        if let img = UIImage(named: "instagram") {
+            b.setImage(img.withRenderingMode(.alwaysOriginal), for: .normal)
+            b.tintColor = nil
+        } else {
+            b.setImage(UIImage(systemName: "camera.viewfinder"), for: .normal)
+            b.tintColor = .label
+        }
+        b.contentEdgeInsets = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        b.accessibilityLabel = "Instagram を開く"
+
+        // タップでメニューを閉じて Instagram（アプリ優先→Web）へ
+        b.addAction(UIAction { [weak self, weak menuVC] _ in
+            menuVC?.dismiss(animated: true) { [weak self] in
+                self?.openInstagramProfile()
+            }
+        }, for: .touchUpInside)
+
+        menuVC.view.addSubview(b)
+        NSLayoutConstraint.activate([
+            b.trailingAnchor.constraint(equalTo: menuVC.view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            b.bottomAnchor.constraint(equalTo: menuVC.view.safeAreaLayoutGuide.bottomAnchor, constant: -32), // 12→32（+20）
+            b.widthAnchor.constraint(equalToConstant: 48), // 36→48
+            b.heightAnchor.constraint(equalTo: b.widthAnchor)
+        ])
+    }
+
+    private func openInstagramProfile() {
+        let appURL = URL(string: "instagram://user?username=aogaku.hack")!
+        if UIApplication.shared.canOpenURL(appURL) {
+            UIApplication.shared.open(appURL)
+            return
+        }
+        let webURL = URL(string: "https://www.instagram.com/aogaku.hack/")!
+        let safari = SFSafariViewController(url: webURL)
+        safari.preferredControlTintColor = .systemBlue
+        if let presented = self.presentedViewController {
+            presented.dismiss(animated: false) { [weak self] in self?.present(safari, animated: true) }
+        } else {
+            present(safari, animated: true)
+        }
+    }
+
 
     // MARK: - Auth Flow
     @objc private func signUp() { authFlow(isSignup: true) }

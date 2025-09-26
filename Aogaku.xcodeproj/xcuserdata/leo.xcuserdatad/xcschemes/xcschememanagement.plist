@@ -12,7 +12,20 @@
 		<key>AogakuWidgetsExtension.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>1</integer>
+			<integer>0</integer>
+		</dict>
+	</dict>
+	<key>SuppressBuildableAutocreation</key>
+	<dict>
+		<key>A49A405F2E7BDFCC0036636C</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>B3A17B1E2E40A19700ACCA3A</key>
+		<dict>
+			<key>primary</key>
+			<true/>
 		</dict>
 	</dict>
 </dict>

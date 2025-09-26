@@ -62,7 +62,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     private let departments: [String: [String]] = [
         "指定なし": ["指定なし"],
         "文学部": ["指定なし","英米文学科","フランス文学科","日本文学科","史学科","比較芸術学科"],
-        "教育人間科学部": ["指定なし","教育学科","心理学科"],
+        "教育人間科学部": ["指定なし","教育学科","心理学科","外国語科目"],
         "経済学部": ["指定なし","経済学科","現代経済デザイン学科"],
         "法学部": ["指定なし","法学科","ヒューマンライツ学科"],
         "経営学部": ["指定なし","経営学科","マーケティング学科"],
@@ -97,17 +97,19 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
 
         // 学部
         if let cat = selectedCategory, cat != "指定なし" {
-            facultyButton.setTitle(cat, for: .normal); setButtonTitleColor(facultyButton, .black)
+            setButtonTitleAndColor(facultyButton, title: cat, color: .black)
         } else {
-            facultyButton.setTitle("学部", for: .normal); setButtonTitleColor(facultyButton, .lightGray)
+            setButtonTitleAndColor(facultyButton, title: "学部", color: .lightGray)
             selectedCategory = nil
         }
-        // 学科
-        if let dept = selectedDepartment,
-           let list = departments[selectedCategory ?? "指定なし"], list.contains(dept) {
-            departmentButton.setTitle(dept, for: .normal); setButtonTitleColor(departmentButton, .black)
+
+        // 学科（★ 教育人間科学部だけ表示名↔クエリ名をマップ）
+        if let title = departmentDisplayTitle(for: selectedCategory, stored: selectedDepartment) {
+            departmentButton.setTitle(title, for: .normal)
+            setButtonTitleColor(departmentButton, .black)
         } else {
-            departmentButton.setTitle("学科", for: .normal); setButtonTitleColor(departmentButton, .lightGray)
+            departmentButton.setTitle("学科", for: .normal)
+            setButtonTitleColor(departmentButton, .lightGray)
             selectedDepartment = nil
         }
 
@@ -340,24 +342,44 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         let actions = faculties.map { name in
             UIAction(title: name) { [weak self] act in
                 guard let self = self else { return }
+
                 if act.title == "指定なし" {
                     self.selectedCategory = nil
-                    self.facultyButton.setTitle("学部", for: .normal)
-                    self.setButtonTitleColor(self.facultyButton, .lightGray)
+                    self.setButtonTitleAndColor(self.facultyButton, title: "学部", color: .lightGray)
                 } else {
                     self.selectedCategory = act.title
-                    self.facultyButton.setTitle(act.title, for: .normal)
-                    self.setButtonTitleColor(self.facultyButton, .black)
+                    self.setButtonTitleAndColor(self.facultyButton, title: act.title, color: .black)
                 }
+
+
+                // 学部が変わったので学科は毎回リセット
                 self.selectedDepartment = nil
                 self.departmentButton.setTitle("学科", for: .normal)
                 self.setButtonTitleColor(self.departmentButton, .lightGray)
+
+                // 学部に合わせて学科メニューを作り直し
                 self.setupDepartmentMenu(initial: act.title)
             }
         }
         facultyButton.menu = UIMenu(children: actions)
         facultyButton.showsMenuAsPrimaryAction = true
     }
+    
+    /// 教育人間科学部の stored 部（完全カテゴリ名）→ ボタン表示用の短い名前に変換
+    private func departmentDisplayTitle(for faculty: String?, stored: String?) -> String? {
+        guard let s = stored else { return nil }
+        guard let f = faculty, f == "教育人間科学部" else {
+            // それ以外の学部は stored = 表示名 とみなす
+            return s
+        }
+        // 受け取りは「教育人間　教育学科/心理学科/外国語科目」or 半角スペース版にも対応
+        let pairs = ["教育学科", "心理学科", "外国語科目"]
+        for v in pairs {
+            if s == "教育人間　\(v)" || s == "教育人間 \(v)" { return v }
+        }
+        return nil
+    }
+
 
     private func setupDepartmentMenu(initial faculty: String) {
         let list = departments[faculty] ?? ["指定なし"]
@@ -369,7 +391,16 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
                     self.departmentButton.setTitle("学科", for: .normal)
                     self.setButtonTitleColor(self.departmentButton, .lightGray)
                 } else {
-                    self.selectedDepartment = act.title
+                    if faculty == "教育人間科学部" {
+                        // 検索用に「教育人間　◯◯」（全角スペース）へ
+                        self.selectedDepartment = "教育人間　\(act.title)"
+                    } else if faculty == "理工学部" {
+                        // ★ 追加：理工学部は学科→カテゴリ名へマップ
+                        self.selectedDepartment = self.mapScienceDeptToCategory(deptDisplay: act.title)
+                    } else {
+                        self.selectedDepartment = act.title
+                    }
+                    // 表示は短い名前のまま
                     self.departmentButton.setTitle(act.title, for: .normal)
                     self.setButtonTitleColor(self.departmentButton, .black)
                 }
@@ -378,6 +409,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         departmentButton.menu = UIMenu(children: actions)
         departmentButton.showsMenuAsPrimaryAction = true
     }
+
 
     // ===== グリッド関連 =====
     private func assignTagsIfNeeded() {
@@ -476,6 +508,41 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     private func indexFor(value: String?, in list: [String]) -> Int {
         guard let v = value, let i = list.firstIndex(of: v) else { return 0 }
         return i
+    }
+    
+    /// UIButton の Configuration を考慮してタイトル＆色をまとめて更新
+    private func setButtonTitleAndColor(_ button: UIButton, title: String, color: UIColor) {
+        if var cfg = button.configuration {
+            cfg.title = title
+            cfg.baseForegroundColor = color
+            button.configuration = cfg
+        } else {
+            button.setTitle(title, for: .normal)
+            button.setTitleColor(color, for: .normal)
+        }
+    }
+
+    /// 理工学部の学科表示名 → 検索用 category へ変換
+    private func mapScienceDeptToCategory(deptDisplay: String) -> String {
+        switch deptDisplay {
+        case "物理科学科", "物理数学科", "物理・数理学科":
+            return "物理・数理"
+        case "数理サイエンス学科":
+            return "数理サイエンス"
+        case "化学・生命科学科":
+            return "化学・生命"
+        case "電気電子工学科":
+            return "電気電子工学科"
+        case "機械創造工学科":
+            return "機械創造"
+        case "経営システム工学科":
+            return "経営システム"
+        case "情報テクノロジー学科":
+            return "情報テクノロジー"
+        default:
+            // 予期しない表示名はそのまま（後方互換）
+            return deptDisplay
+        }
     }
 
     // 選択セル→配列

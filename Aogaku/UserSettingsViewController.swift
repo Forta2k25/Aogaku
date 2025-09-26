@@ -711,9 +711,18 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             present(safari, animated: true)
         }
     }
-    func sideMenuDidSelectTerms()   { /* TODO */ }
-    func sideMenuDidSelectPrivacy() { /* TODO */ }
-    func sideMenuDidSelectFAQ()     { /* TODO */ }
+    func sideMenuDidSelectTerms() {
+        presentTextPageFromFile(title: "利用規約", fileName: "Terms", fileExt: "rtf")
+    }
+
+    func sideMenuDidSelectPrivacy() {
+        presentTextPageFromFile(title: "プライバシーポリシー", fileName: "Privacy", fileExt: "rtf")
+    }
+
+    func sideMenuDidSelectFAQ() {
+        presentTextPageFromFile(title: "よくある質問", fileName: "FAQ", fileExt: "rtf")
+    }
+
 
     // MARK: - Auth ops
     private func performSignOut() {
@@ -990,6 +999,32 @@ extension UserSettingsViewController: UIPickerViewDataSource, UIPickerViewDelega
         let department = FACULTY_DATA[faculty]?[row] ?? ""
         facultyDeptField.text = department.isEmpty ? faculty : "\(faculty)・\(department)"
         updateFacultyDept(faculty: faculty, department: department)
+    }
+    
+}
+// MARK: - Textページ遷移（RTFファイルを読み込む）
+private extension UserSettingsViewController {
+    func presentTextPageFromFile(title: String, fileName: String, fileExt: String = "rtf") {
+        let show: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            if let nav = self.navigationController {
+                // UINavigationController 配下 → push
+                let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt)
+                nav.pushViewController(vc, animated: true)
+            } else {
+                // それ以外 → 全画面モーダル（閉じるボタン付き）
+                let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt, showsCloseButton: true)
+                let nav = UINavigationController(rootViewController: vc)
+                nav.modalPresentationStyle = .fullScreen
+                self.present(nav, animated: true)
+            }
+        }
+        if let presented = self.presentedViewController {
+            // サイドメニューなどが出ていたら先に閉じる
+            presented.dismiss(animated: false, completion: show)
+        } else {
+            show()
+        }
     }
 }
 

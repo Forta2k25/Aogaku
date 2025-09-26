@@ -487,9 +487,12 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
             present(safari, animated: true)
         }
     }
-    func sideMenuDidSelectTerms()   { showAlert(title: "利用規約", message: "規約ページへ遷移（TODO）") }
-    func sideMenuDidSelectPrivacy() { showAlert(title: "プライバシーポリシーへ遷移（TODO）") }
-    func sideMenuDidSelectFAQ()     { showAlert(title: "よくある質問", message: "FAQページへ遷移（TODO）") }
+    func sideMenuDidSelectTerms()    { presentTextPageFromFile(title: "利用規約",         fileName: "Terms",   fileExt: "rtf") }
+    func sideMenuDidSelectPrivacy()  { presentTextPageFromFile(title: "プライバシーポリシー", fileName: "Privacy", fileExt: "rtf") }
+    func sideMenuDidSelectFAQ()      { presentTextPageFromFile(title: "よくある質問",       fileName: "FAQ",     fileExt: "rtf") }
+
+
+
     func sideMenuDidSelectLogout() {}
     func sideMenuDidSelectDeleteAccount() {}
 
@@ -499,7 +502,33 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         ac.addAction(UIAlertAction(title: "OK", style: .default))
         present(ac, animated: true)
     }
+    
+    
 }
+// MARK: - Textページ遷移（ファイル名指定）
+private extension AuthViewController {
+    func presentTextPageFromFile(title: String, fileName: String, fileExt: String = "txt") {
+        let perform: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            if let nav = self.navigationController {
+                let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt)
+                nav.pushViewController(vc, animated: true)
+            } else {
+                let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt, showsCloseButton: true)
+                let nav = UINavigationController(rootViewController: vc)
+                nav.modalPresentationStyle = .fullScreen
+                self.present(nav, animated: true)
+            }
+        }
+        if let presented = self.presentedViewController {
+            presented.dismiss(animated: false, completion: perform)
+        } else {
+            perform()
+        }
+    }
+}
+
+
 
 
 // MARK: - UIPickerView DataSource/Delegate

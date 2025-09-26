@@ -363,7 +363,9 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
         let extra = profileInfo[u.uid]?.text
         cell.configure(user: u, isFriend: isFriend, isOutgoing: isOutgoing, placeholder: placeholder, extraText: extra)
-
+        cell.actionButton.isEnabled = !isFriend
+        cell.actionButton.isUserInteractionEnabled = !isFriend
+        cell.actionButton.alpha = isFriend ? 0.5 : 1.0
         let bg = cellBackgroundColor(for: traitCollection)
         cell.backgroundColor = bg
         cell.contentView.backgroundColor = bg
@@ -374,8 +376,42 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         cell.selectedBackgroundView = selected
         
         // ボタン動作（未申請 & 未フレンドのときのみ）
-        if !isFriend && !isOutgoing {
-            cell.actionButton.removeTarget(nil, action: nil, for: .allEvents)
+        // --- ボタン動作を状態ごとに付け替え ---
+        cell.actionButton.removeTarget(nil, action: nil, for: .allEvents)
+
+        if isFriend {
+            // 友だち：必要なら別動作を付ける。ここでは何もしない
+        } else if isOutgoing {
+            // 申請済 → 取り消し
+            cell.actionButton.addAction(UIAction { [weak self] _ in
+                guard let self = self else { return }
+                let alert = UIAlertController(
+                    title: "申請を取り消しますか？",
+                    message: "\(u.name) への友だち申請をキャンセルします。",
+                    preferredStyle: .alert
+                )
+                alert.addAction(UIAlertAction(title: "やめる", style: .cancel))
+                alert.addAction(UIAlertAction(title: "取り消す", style: .destructive, handler: { _ in
+                    self.cancelOutgoingRequest(to: u) { [weak self] err in
+                        guard let self = self else { return }
+                        if let err = err {
+                            let a = UIAlertController(title: "エラー", message: err.localizedDescription, preferredStyle: .alert)
+                            a.addAction(UIAlertAction(title: "OK", style: .default))
+                            self.present(a, animated: true)
+                            return
+                        }
+                        // 見た目を即時反映（listenerでも後追い同期）
+                        self.outgoing.remove(u.uid)
+                        if let r = self.results.firstIndex(where: { $0.uid == u.uid }) {
+                            self.tableView.reloadRows(at: [IndexPath(row: r, section: 0)], with: .automatic)
+                        }
+                    }
+                }))
+                self.present(alert, animated: true)
+            }, for: .touchUpInside)
+
+        } else {
+            // 未申請 → 送信
             cell.actionButton.addAction(UIAction { [weak self] _ in
                 guard let self = self else { return }
                 let alert = UIAlertController(
@@ -396,6 +432,7 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
                 self.present(alert, animated: true)
             }, for: .touchUpInside)
         }
+
         return cell
     }
 
@@ -426,6 +463,26 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         ])
         bannerView = bv
     }
+    
+    /// 「申請済」を取り消す：
+    /// 自分: users/{me}/requestsOutgoing/{other}
+    /// 相手: users/{other}/requestsIncoming/{me}
+    private func cancelOutgoingRequest(to user: UserPublic, completion: @escaping (Error?) -> Void) {
+        guard let me = Auth.auth().currentUser?.uid else {
+            completion(NSError(domain: "auth", code: 401,
+                               userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+        let batch = db.batch()
+        let myOutRef   = db.collection("users").document(me)
+            .collection("requestsOutgoing").document(user.uid)
+        let theirInRef = db.collection("users").document(user.uid)
+            .collection("requestsIncoming").document(me)
+        batch.deleteDocument(myOutRef)
+        batch.deleteDocument(theirInRef)
+        batch.commit(completion: completion)
+    }
+
 
     private func loadBannerIfNeeded() {
         guard let bv = bannerView else { return }

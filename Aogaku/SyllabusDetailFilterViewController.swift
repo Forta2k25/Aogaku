@@ -192,27 +192,46 @@ final class SyllabusDetailFilterViewController: UIViewController {
     }
 
     @objc private func didTapApply() {
-        // 6限/7限/土曜日/不定 だけまず対応
-        var day: String? = nil          // Firestore の day は「月/火/水/木/金/土」を想定
+        var day: String? = nil
         var periods: [Int]? = nil
         var slots: [(String, Int)]? = nil
-
         if checkSat.isSelected { day = "土" }
 
         var ps: [Int] = []
-        if check6.isSelected { ps.append(6) } // 6限
-        if check7.isSelected { ps.append(7) } // 7限
+        if check6.isSelected { ps.append(6) }
+        if check7.isSelected { ps.append(7) }
         if !ps.isEmpty { periods = ps }
 
-        // 「不定」は授業名に「不定」を含むものだけに絞るフラグ
-        let undecided = checkUndecided.isSelected ? true : nil
+        // ===== 学期 =====
+        let title = termField.configuration?.title ?? "指定なし"
+        var termValue: String? = nil
+        var forceUndecided = false
+        if title != "指定なし" {
+            switch title {
+            case "通年隔週第1週": termValue = "通年隔１"
+            case "通年隔週第2週": termValue = "通年隔２"
+            case "前期隔週第1週": termValue = "前期隔１"
+            case "前期隔週第2週": termValue = "前期隔２"
+            // （必要なら）後期も同様に：
+            case "後期隔週第1週": termValue = "後期隔１"
+            case "後期隔週第2週": termValue = "後期隔２"
+            case "不定集中":
+                termValue = "集中"
+                forceUndecided = true   // 授業名に「不定」を含む条件も同時に付与
+            default:
+                termValue = title       // 例: 「通年」「前期」「後期」「夏休集中」などはそのまま
+            }
+        }
+
+        // 「不定」チェック or 「不定集中」選択で true
+        let undecided = (checkUndecided.isSelected || forceUndecided) ? true : nil
 
         let criteria = SyllabusSearchCriteria(
             keyword: nil,
             category: nil, department: nil,
             campus: nil, place: nil, grade: nil,
             day: day, periods: periods, timeSlots: slots,
-            term: nil,
+            term: termValue,
             undecided: undecided
         )
 

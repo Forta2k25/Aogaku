@@ -251,13 +251,20 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
                 undecided: nil
             )
 
-            // 詳細条件で上書き（指定があるものだけ）
             if let d = detail.day { merged.day = d }
             if let p = detail.periods { merged.periods = p }
             if let t = detail.timeSlots { merged.timeSlots = t }
+            if let term = detail.term { merged.term = term }          // ★ 学期を上書き
             merged.undecided = detail.undecided
 
+            // ★ 詳細指定があれば、過去のグリッド選択（timeSlots）は解除して競合回避
+            if detail.day != nil || detail.periods != nil || (detail.undecided ?? false) || detail.term != nil {
+                merged.timeSlots = nil
+            }
+
             self.onApply?(merged)
+
+
         }
 
         let nav = UINavigationController(rootViewController: vc)

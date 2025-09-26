@@ -203,12 +203,12 @@
                             </label>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="mSM-6H-dKb">
                                 <rect key="frame" x="246" y="46" width="46" height="46"/>
-                                <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 <constraints>
                                     <constraint firstAttribute="height" constant="46" id="0zm-qd-DHS"/>
                                     <constraint firstAttribute="width" constant="46" id="zgk-av-p3t"/>
                                 </constraints>
-                                <color key="tintColor" red="0.1176470518" green="0.1176470518" blue="0.1176470518" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                                <color key="tintColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                                 <inset key="imageEdgeInsets" minX="0.0" minY="0.0" maxX="2.2250738585072014e-308" maxY="0.0"/>
                                 <state key="normal" title="Button" backgroundImage="slider.horizontal.3" catalog="system"/>
                                 <buttonConfiguration key="configuration" style="plain" image="slider.horizontal.3" catalog="system" title=""/>
@@ -217,9 +217,6 @@
                                         <integer key="value" value="8"/>
                                     </userDefinedRuntimeAttribute>
                                 </userDefinedRuntimeAttributes>
-                                <connections>
-                                    <action selector="didTapDetailFilter:" destination="XWM-mO-tUM" eventType="touchUpInside" id="emd-Y7-s6j"/>
-                                </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="gyg-2q-gZy">
                                 <rect key="frame" x="312" y="46" width="46" height="46"/>
@@ -841,7 +838,6 @@
                     <connections>
                         <outlet property="campusSegmentedControl" destination="Qp9-AC-aMn" id="Mf7-E9-4Zl"/>
                         <outlet property="departmentButton" destination="qMx-1H-XJW" id="Uy5-rb-B3r"/>
-                        <outlet property="detailFilterButton" destination="mSM-6H-dKb" id="1pj-O8-vsZ"/>
                         <outlet property="facultyButton" destination="zdu-kz-RvL" id="Qah-KL-I0V"/>
                         <outlet property="gridContainerView" destination="UaY-RP-5cg" id="3it-r1-Pip"/>
                         <outlet property="keywordTextField" destination="kdK-Gy-r6a" id="vGE-67-Vrs"/>

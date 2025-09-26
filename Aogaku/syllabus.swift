@@ -328,17 +328,34 @@ final class syllabus: UIViewController,
 
     // ===== 正規化ユーティリティ =====
 
-    // 学期表記の正規化
-    private func normalizeTerm(_ s: String) -> String {
-        let t = s.replacingOccurrences(of: "[()（）\\s]", with: "", options: .regularExpression).lowercased()
-        switch t {
-        case "前期","春学期","spring": return "前期"
-        case "後期","秋学期","autumn","fall": return "後期"
-        case "通年","年間","fullyear","yearlong": return "通年"
+    private func normalizeTerm(_ raw: String) -> String {
+        // 括弧・空白の除去
+        var s = raw.replacingOccurrences(of: "[()（）\\s]", with: "", options: .regularExpression)
+
+        // 全角→半角数字
+        if let x = s.applyingTransform(.fullwidthToHalfwidth, reverse: false) { s = x }
+
+        // 「隔週第1週/第2週」を短縮
+        s = s.replacingOccurrences(of: "隔週第1週", with: "隔1")
+             .replacingOccurrences(of: "隔週第2週", with: "隔2")
+
+        // 代表表記
+        switch s.lowercased() {
+        case "前期","春学期","spring":                 return "前期"
+        case "後期","秋学期","autumn","fall":           return "後期"
+        case "通年","年間","fullyear","yearlong":       return "通年"
         default:
-            return s.replacingOccurrences(of: "[()（）]", with: "", options: .regularExpression)
+            // 具体表記の短縮（通年隔1/前期隔1/後期隔1 など）
+            s = s.replacingOccurrences(of: "通年隔週第1週", with: "通年隔1")
+                 .replacingOccurrences(of: "通年隔週第2週", with: "通年隔2")
+                 .replacingOccurrences(of: "前期隔週第1週", with: "前期隔1")
+                 .replacingOccurrences(of: "前期隔週第2週", with: "前期隔2")
+                 .replacingOccurrences(of: "後期隔週第1週", with: "後期隔1")
+                 .replacingOccurrences(of: "後期隔週第2週", with: "後期隔2")
+            return s
         }
     }
+
 
     // カタカナ⇄ひらがな変換（SDK差異に依存しない）
     private func toKatakana(_ s: String) -> String {
@@ -523,12 +540,43 @@ final class syllabus: UIViewController,
             }
         }
 
-        // 学期（前期/後期 等）
-        if let wantTerm = filterTerm, !wantTerm.isEmpty {
+        // ★ 学期（括弧付きや表記ゆれを吸収して判定）
+        if let want = filterTerm, !want.isEmpty {
             let termRaw = (x["term"] as? String) ?? ""
-            let normalized = normalizeTerm(termRaw)
-            if normalized != wantTerm { return false }
+            let normalized = normalizeTerm(termRaw)  // ← ()/（）/空白を除去＆代表表記へ
+
+            if want == "集中" {
+                // 「不定集中」など、"～集中" なら OK（後段の「不定」判定と組み合わせ）
+                if !normalized.contains("集中") { return false }
+            } else {
+                // それ以外は完全一致
+                if normalized != want { return false }
+            }
         }
+
+        // 学期（括弧や表記ゆれを吸収して判定）
+        if let wantTerm = filterTerm, !wantTerm.isEmpty {
+            let doc  = normalizeTerm((x["term"] as? String) ?? "")
+            let want = normalizeTerm(wantTerm)
+
+            switch want {
+            case "集中":
+                // 例: 前期集中 / 後期集中 / 夏休集中 など
+                if doc.contains("集中") == false { return false }
+            case "通年":
+                // 例: 通年 / 通年隔1 / 通年隔2 / 通年集中 など
+                if doc.hasPrefix("通年") == false { return false }
+            case "前期":
+                // 例: 前期 / 前期隔1 / 前期隔2 / 前期集中 などもマッチさせたいなら hasPrefix に
+                if doc.hasPrefix("前期") == false { return false }
+            case "後期":
+                if doc.hasPrefix("後期") == false { return false }
+            default:
+                // 具体名（通年隔1 など）を選んだときは完全一致
+                if doc != want { return false }
+            }
+        }
+
         return true
     }
 
@@ -555,11 +603,6 @@ final class syllabus: UIViewController,
             }
         }
 
-
-        // ★ 学期（可能ならサーバで）
-        if let t = filterTerm, !t.isEmpty {
-            q = q.whereField("term", isEqualTo: t) // データが前期/後期で入っている前提
-        }
 
         return q
     }

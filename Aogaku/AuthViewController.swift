@@ -1,5 +1,6 @@
 import UIKit
 import GoogleMobileAds
+import SafariServices
 
 @inline(__always)
 private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
@@ -419,7 +420,19 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     }
 
     // MARK: - SideMenuDrawerDelegate（未ログイン時に使う項目）
-    func sideMenuDidSelectContact() { showAlert(title: "お問い合わせ", message: "お問い合わせページへ遷移（TODO）") }
+    func sideMenuDidSelectContact() {
+        guard let url = URL(string: "https://lin.ee/6O9GBTz") else { return }
+        let safari = SFSafariViewController(url: url)
+        safari.preferredControlTintColor = .systemBlue
+        // サイドメニューが出ている場合の二重提示ガード
+        if let presented = self.presentedViewController {
+            presented.dismiss(animated: false) { [weak self] in
+                self?.present(safari, animated: true)
+            }
+        } else {
+            present(safari, animated: true)
+        }
+    }
     func sideMenuDidSelectTerms()   { showAlert(title: "利用規約", message: "規約ページへ遷移（TODO）") }
     func sideMenuDidSelectPrivacy() { showAlert(title: "プライバシーポリシーへ遷移（TODO）") }
     func sideMenuDidSelectFAQ()     { showAlert(title: "よくある質問", message: "FAQページへ遷移（TODO）") }

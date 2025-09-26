@@ -605,8 +605,14 @@ final class timetable: UIViewController,
         super.viewDidLayoutSubviews()
         let safeHeight = view.safeAreaLayoutGuide.layoutFrame.height
         headerTopConstraint.constant = safeHeight * 0.02
+
+        // ← 追加：実寸に合わせて“完璧なカプセル”
+        leftButton.layer.cornerCurve = .continuous
+        leftButton.layer.cornerRadius = leftButton.bounds.height / 2
+
         loadBannerIfNeeded()
     }
+
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -741,18 +747,19 @@ final class timetable: UIViewController,
         view.addSubview(headerBar)
 
         
-        // 左上：年度・学期ボタン（手組み：見た目は従来どおりのカプセル）
         leftButton.configuration = nil
         leftButton.backgroundColor = .secondarySystemBackground
-        leftButton.layer.cornerRadius = 22
+        leftButton.layer.cornerCurve = .continuous          // ← 角のエッジを滑らかに
+        leftButton.layer.cornerRadius = 14                  // ← 仮の値。後で実サイズに合わせて更新
         leftButton.layer.masksToBounds = true
         leftButton.layer.borderColor = UIColor.separator.cgColor
         leftButton.layer.borderWidth = 1
-        leftButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 10)
+        leftButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12) // 左右対称
+        leftButton.heightAnchor.constraint(equalToConstant: 28).isActive = true              // 高さ固定で“カプセル”
 
         leftButton.setTitle(currentTerm.displayTitle, for: .normal)
         leftButton.setTitleColor(.label, for: .normal)
-        leftButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        leftButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .regular)
         leftButton.titleLabel?.numberOfLines = 1                       // ★ 常に1行
         leftButton.titleLabel?.lineBreakMode = .byTruncatingTail       // 収まらなければ末尾省略
         leftButton.titleLabel?.adjustsFontSizeToFitWidth = true        // まずは縮小して収める

@@ -5,6 +5,7 @@ import FirebaseFirestore
 import FirebaseStorage
 import GoogleMobileAds
 import FirebaseFunctions
+import SafariServices
 
 // ===== AdMob helper =====
 @inline(__always)
@@ -643,7 +644,19 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         present(ac, animated: true)
     }
 
-    func sideMenuDidSelectContact() { /* TODO */ }
+    func sideMenuDidSelectContact() {
+        guard let url = URL(string: "https://lin.ee/6O9GBTz") else { return }
+        let safari = SFSafariViewController(url: url)
+        safari.preferredControlTintColor = .systemBlue
+        // サイドメニューが出ている場合の二重提示ガード
+        if let presented = self.presentedViewController {
+            presented.dismiss(animated: false) { [weak self] in
+                self?.present(safari, animated: true)
+            }
+        } else {
+            present(safari, animated: true)
+        }
+    }
     func sideMenuDidSelectTerms()   { /* TODO */ }
     func sideMenuDidSelectPrivacy() { /* TODO */ }
     func sideMenuDidSelectFAQ()     { /* TODO */ }

@@ -550,6 +550,14 @@ final class FilterSheetController: UIViewController, UIPickerViewDataSource, UIP
         modalPresentationStyle = .pageSheet
     }
     required init?(coder: NSCoder) { fatalError() }
+    
+    // 学科リストを作るときに使う“有効な学部インデックス”
+    private func currentFacultyIndex() -> Int? {
+        if let i = selectedFacultyIndex { return i } // 保存済みがあれば優先
+        let i = facultyDeptPicker.selectedRow(inComponent: 0)
+        return (i < FACULTY_NAMES.count) ? i : nil   // “指定なし”はnil
+    }
+
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -615,8 +623,24 @@ final class FilterSheetController: UIViewController, UIPickerViewDataSource, UIP
         } else {
             facultyDeptPicker.selectRow(0, inComponent: 1, animated: false)      // ★ 指定なし
         }
+        // （既存の初期選択コードの直後に追加）
+        facultyDeptPicker.reloadComponent(1)
+
 
     }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if let fi = selectedFacultyIndex {
+            facultyDeptPicker.selectRow(fi, inComponent: 0, animated: false)
+        }
+        facultyDeptPicker.reloadComponent(1)
+        if let di = selectedDepartmentIndex {
+            facultyDeptPicker.selectRow(di + 1, inComponent: 1, animated: false)
+        } else {
+            facultyDeptPicker.selectRow(0, inComponent: 1, animated: false) // 学科=指定なし
+        }
+    }
+
 
     // MARK: UIPicker
     func numberOfComponents(in pickerView: UIPickerView) -> Int {
@@ -625,21 +649,19 @@ final class FilterSheetController: UIViewController, UIPickerViewDataSource, UIP
     // 学部・学科ピッカーの行数
     func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
         if pickerView === gradePicker { return gradeOptions.count }
-        if component == 0 { return FACULTY_NAMES.count + 1 }         // 学部 + 指定なし
-        let fi = facultyDeptPicker.selectedRow(inComponent: 0)
-        if fi == FACULTY_NAMES.count { return 0 }                    // 学部=指定なし → 学科なし
+        if component == 0 { return FACULTY_NAMES.count + 1 } // 学部 + 指定なし
+        guard let fi = currentFacultyIndex() else { return 1 } // 学科=「指定なし」1行だけ出す
         let fac = FACULTY_NAMES[fi]
-        return (FACULTY_DATA[fac]?.count ?? 0) + 1                   // ★ 学科 + 指定なし
+        return (FACULTY_DATA[fac]?.count ?? 0) + 1            // 学科 + 指定なし
     }
 
     // 表示タイトル
     func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
         if pickerView === gradePicker { return gradeOptions[row] }
         if component == 0 { return row == FACULTY_NAMES.count ? "指定なし" : FACULTY_NAMES[row] }
-        let fi = facultyDeptPicker.selectedRow(inComponent: 0)
-        guard fi < FACULTY_NAMES.count else { return nil }
+        guard let fi = currentFacultyIndex() else { return row == 0 ? "指定なし" : nil }
+        if row == 0 { return "指定なし" }
         let fac = FACULTY_NAMES[fi]
-        if row == 0 { return "指定なし" }                            // ★ 学科の0行目
         return FACULTY_DATA[fac]?[row - 1]
     }
 

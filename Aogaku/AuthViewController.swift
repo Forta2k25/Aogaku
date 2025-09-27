@@ -1,6 +1,7 @@
 import UIKit
 import GoogleMobileAds
 import SafariServices
+import FirebaseAuth
 
 @inline(__always)
 private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
@@ -19,8 +20,8 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     private let signupButton = UIButton(type: .system)
     private let loginButton = UIButton(type: .system)
     private let noteLabel = UILabel()
-
     private let stack = UIStackView()
+    private let kLocalProfileDraft = "LocalProfileDraftV1"
 
     // MARK: - Pickers
     private let gradePicker = UIPickerView()
@@ -461,10 +462,26 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
                         id: id, password: pw,
                         grade: grade, faculty: faculty, department: department
                     )
+
+                    // ★ 追加：ローカル即時キャッシュ（表示用）
+                    UserDefaults.standard.set([
+                        "id": id,
+                        "grade": grade,
+                        "faculty": faculty,
+                        "department": department
+                    ], forKey: kLocalProfileDraft)
+                    // ★ ここに追記（kLocalProfileDraft を保存した直後）
+                    if let user = Auth.auth().currentUser {
+                        let req = user.createProfileChangeRequest()
+                        req.displayName = id
+                        req.commitChanges(completion: nil) // 非同期OK（待たなくてよい）
+                    }
                 } else {
                     try await AuthManager.shared.login(id: id, password: pw)
                 }
-                await MainActor.run { self?.tabBarController?.selectedIndex = 2 }
+                // ★ 置換：少し待ってから「設定」タブへ（index=4）
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5秒
+                await MainActor.run { self?.tabBarController?.selectedIndex = 4 }
             } catch let e as AuthError {
                 await MainActor.run { self?.showAlert(title: "エラー", message: e.localizedDescription) }
             } catch {

@@ -19,6 +19,7 @@ private final class SelfAvatarCache {
     private let mem = NSCache<NSString, UIImage>()
     private let fm = FileManager.default
     private let dir: URL
+    private let kLocalProfileDraft = "LocalProfileDraftV1"
 
     private init() {
         let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -258,9 +259,14 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             currentAvatarVersion = cached.version
         }
 
+        // ★ 追加：ローカル下書きを即時表示
+        applyLocalProfileDraftIfAny()
+
+        // 既存:
         loadUserProfile()
         setupAdBanner()
         applyBackgroundStyle()
+
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -269,6 +275,17 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         if let tbc = tabBarController, tbc.selectedIndex != settingsTabIndex {
             tbc.selectedIndex = settingsTabIndex
         }
+        // ★ 追加：未表示の項目があればローカル下書きを即適用し、0.35秒だけカバーを出す
+        if (idField.text?.isEmpty ?? true) ||
+           (gradeField.text?.isEmpty ?? true) ||
+           (facultyDeptField.text?.isEmpty ?? true) {
+            setLoading(true)                // 既存のローディングカバー
+            applyLocalProfileDraftIfAny()   // ★ ローカル → 即表示
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.setLoading(false)     // Firestoreが遅れても一旦閉じる（その後はloadUserProfileで上書き）
+            }
+        }
+
     }
 
     override func viewDidLayoutSubviews() {
@@ -279,6 +296,8 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
+        reloadAllProfileFieldsIfIDMissing()
+
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -288,6 +307,69 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         }
     }
     
+    private func applyLocalProfileDraftIfAny() {
+        guard let raw = UserDefaults.standard.dictionary(forKey: kLocalProfileDraft) else { return }
+
+        let id  = (raw["id"] as? String) ?? ""
+        let g   = (raw["grade"] as? Int) ?? 0
+        let fac = (raw["faculty"] as? String) ?? ""
+        let dep = (raw["department"] as? String) ?? ""
+
+        // ID（無効フィールドだが表示はできる）
+        if !id.isEmpty { idField.text = id }
+
+        // 学年
+        if (1...4).contains(g) {
+            gradeField.text = "\(g)年"
+            gradePicker.selectRow(g - 1, inComponent: 0, animated: false)
+        } else if g == 0 {
+            gradeField.text = "指定なし"
+            gradePicker.selectRow(4, inComponent: 0, animated: false) // optionsの最後が「指定なし」
+        }
+
+        // 学部・学科（ピッカー位置も同期）
+        if !fac.isEmpty {
+            facultyDeptField.text = dep.isEmpty ? fac : "\(fac)・\(dep)"
+            if let fIdx = facultyNames.firstIndex(of: fac) {
+                selectedFacultyIndex = fIdx
+                facultyDeptPicker.reloadAllComponents()
+                facultyDeptPicker.selectRow(fIdx, inComponent: 0, animated: false)
+                if let list = FACULTY_DATA[fac], let dIdx = list.firstIndex(of: dep) {
+                    selectedDepartmentIndex = dIdx
+                    facultyDeptPicker.selectRow(dIdx, inComponent: 1, animated: false)
+                }
+            }
+        } else if dep.isEmpty {
+            facultyDeptField.text = "指定なし"
+        }
+    }
+    
+    // IDが空ならローカル即時反映→Authを軽くリロード→Firestore再取得
+    private func reloadAllProfileFieldsIfIDMissing() {
+        // すでに何か入っていれば何もしない
+        if let t = idField.text, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return
+        }
+
+        // 1) ローカル下書きを即時適用（ID/学年/学科を瞬時に見せる）
+        applyLocalProfileDraftIfAny()
+
+        // 2) ローディングを短時間だけ出す（体感改善）
+        setLoading(true)
+
+        // 3) Authの表示名などを最新化（完了を待つ必要は薄いが念のため）
+        Auth.auth().currentUser?.reload { [weak self] _ in
+            guard let self = self else { return }
+            // 4) Firestoreを再取得（loadUserProfileは既存）
+            self.loadUserProfile()
+            // 5) カバーは少し遅らせて外す（画面チラつき防止）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                self.setLoading(false)
+            }
+        }
+    }
+
+
     // MARK: - AdMob
     private func setupAdBanner() {
         adContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -426,6 +508,24 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         nameField.placeholder = "未設定"
         nameField.borderStyle = .none
         nameField.clearButtonMode = .whileEditing
+        // 右側に「編集できます」用のペンアイコン
+        let pencil = UIImageView(image: UIImage(systemName: "pencil"))
+        pencil.tintColor = .tertiaryLabel
+        pencil.contentMode = .scaleAspectFit
+        pencil.translatesAutoresizingMaskIntoConstraints = false
+
+        let rv = UIView(frame: CGRect(x: 0, y: 0, width: 28, height: 28))
+        rv.addSubview(pencil)
+        NSLayoutConstraint.activate([
+            pencil.widthAnchor.constraint(equalToConstant: 18),
+            pencil.heightAnchor.constraint(equalToConstant: 18),
+            pencil.centerYAnchor.constraint(equalTo: rv.centerYAnchor),
+            pencil.trailingAnchor.constraint(equalTo: rv.trailingAnchor)
+        ])
+
+        nameField.rightView = rv
+        nameField.rightViewMode = .always
+
         nameField.inputAccessoryView = doneToolbar(#selector(commitName))
         nameField.addTarget(self, action: #selector(nameEditingChanged), for: .editingChanged)
 
@@ -543,6 +643,8 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
                 } else if let disp = Auth.auth().currentUser?.displayName {
                     self.idField.text = disp
                 }
+                // 既存の UI 反映（grade / faculty&dept / name / id）を書き終えた末尾に追加
+                UserDefaults.standard.removeObject(forKey: self.kLocalProfileDraft)
             }
 
             let url  = data["photoURL"] as? String
@@ -726,11 +828,11 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     func sideMenuDidSelectPrivacy() {
         presentTextPageFromFile(title: "プライバシーポリシー", fileName: "Privacy", fileExt: "rtf")
     }
-
+/*
     func sideMenuDidSelectFAQ() {
         presentTextPageFromFile(title: "よくある質問", fileName: "FAQ", fileExt: "rtf")
     }
-
+*/
 
     // MARK: - Auth ops
     private func performSignOut() {
@@ -742,6 +844,9 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         }
         tabBarController?.selectedIndex = settingsTabIndex
     }
+    
+    private let kLocalProfileDraft = "LocalProfileDraftV1"
+
 
     private func performDeleteAccount() {
         guard Auth.auth().currentUser != nil else { return }
@@ -749,13 +854,23 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
 
         Task { @MainActor in
             do {
-                // サーバ側で全部削除（Auth含む）
+                guard let uid = Auth.auth().currentUser?.uid else { throw NSError(domain: "Auth", code: -1) }
+
+                // 1) 先にクライアント側で Firestore/Storage を確実に削除
+                //    - サブコレクション（timetable など）→ users/{uid} 本体
+                //    - usernames インデックス、アイコン画像 も併せて削除
+                try? await deleteUsernameMapping(uid: uid)
+                await deleteAvatarFiles(uid: uid)
+                try? await deleteSelfUserTree(uid: uid)   // ← users/{uid} ドキュメントまで消す
+
+                // 2) サーバ側の最終掃除（Authユーザー削除や片付けの保険）
                 _ = try await functions.httpsCallable("deleteAccountServerSide").call([:])
 
-                // ログアウト状態へ
+                // 3) ログアウト & UI
                 try? Auth.auth().signOut()
                 self.switchToTab(index: self.settingsTabIndex)
                 self.showAlert(title: "アカウント削除", message: "削除が完了しました。")
+
             } catch {
                 let ns = error as NSError
                 let detailsAny = ns.userInfo[FunctionsErrorDetailsKey]

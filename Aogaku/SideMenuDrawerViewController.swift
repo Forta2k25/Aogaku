@@ -6,7 +6,6 @@ protocol SideMenuDrawerDelegate: AnyObject {
     func sideMenuDidSelectContact()
     func sideMenuDidSelectTerms()
     func sideMenuDidSelectPrivacy()
-    func sideMenuDidSelectFAQ()
 }
 
 final class SideMenuDrawerViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
@@ -24,7 +23,7 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
     private enum Section: Int, CaseIterable { case account, others }
 
     private let accountTitles = ["ログアウト", "アカウント削除"]
-    private let otherTitles   = ["お問い合わせ", "利用規約", "プライバシーポリシー", "よくある質問"]
+    private let otherTitles   = ["お問い合わせ", "利用規約", "プライバシーポリシー"]
 
     private var containerWidth: CGFloat { min(view.bounds.width * 0.82, 320) }
     private var containerTrailingConstraint: NSLayoutConstraint!
@@ -210,7 +209,6 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
                 case 0: delegate?.sideMenuDidSelectContact()
                 case 1: delegate?.sideMenuDidSelectTerms()
                 case 2: delegate?.sideMenuDidSelectPrivacy()
-                case 3: delegate?.sideMenuDidSelectFAQ()
                 default: break
                 }
             }

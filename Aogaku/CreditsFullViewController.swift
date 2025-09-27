@@ -50,21 +50,27 @@ private var manualSegMap: [String: Seg4] = [:]
 
 // ======================== 表示セグメント（ドーナツ＆凡例） ========================
 private enum Seg4: String, CaseIterable, Codable {
-    case aoyama, language, department, free
+    case aoyama, language, department, free, teacher   // ← 追加: 教職課程（非表示）
+
+    /// ドーナツ／凡例など“表示に使う”4区分だけ
+    static var visibleCases: [Seg4] { [.aoyama, .language, .department, .free] }
+
     var title: String {
         switch self {
         case .aoyama:     return "青山スタンダード"
         case .language:   return "外国語科目"
         case .department: return "学科科目"
         case .free:       return "自由選択科目"
+        case .teacher:    return "教職課程科目"   // ← 追加（画面では使わないが網羅のため定義）
         }
     }
     var color: UIColor {
         switch self {
         case .aoyama:     return UIColor.systemBlue
-        case .language:   return UIColor.systemIndigo   // 語学は紫系
+        case .language:   return UIColor.systemIndigo
         case .department: return UIColor.systemRed
         case .free:       return UIColor.systemGreen
+        case .teacher:    return UIColor.systemGray3   // ← 任意（非表示なので参照されない）
         }
     }
 }
@@ -111,8 +117,6 @@ private func norm(_ s: String) -> String {
         .replacingOccurrences(of: " ", with: "")
         .replacingOccurrences(of: "　", with: "")
 }
-
-
 
 // ここを好きなだけ足してOK。未定義の学科はフォールバック（学科名が含まれるかどうか）で判定します。
 private let DEPT_RULES: [String: DeptMatchRule] = [
@@ -583,21 +587,25 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         let cat = (c.category ?? "").lowercased()
         return cat.contains("スタンダード") || cat.contains("standard")
     }
-    // 4区分（ドーナツ/凡例/一覧用）
+    
+    // 教職課程科目（category が完全一致「教職課程科目」）
+    private func isTeacherTraining(_ c: Course) -> Bool {
+        return (c.category ?? "") == "教職課程科目"
+    }
+
     private func classifySeg4(_ c: Course) -> Seg4 {
-        
-        // ✅ 手動追加は ID で強制分類
         if let seg = manualSegMap[c.id] { return seg }
-        
-        // ★ ここから追加：上書きがあれば最優先
+
         let ov = loadOverrides()
         if let raw = ov[courseKey(c)], let fixed = Seg4.allCases.first(where: { "\($0)" == raw }) {
             return fixed
         }
-        // ★ ここまで追加
-        
+
+        // ← 追加：教職課程は最優先で teacher に振る
+        if isTeacherTraining(c) { return .teacher }
+
         if isAoyamaStandard(c) { return .aoyama }
-        if isLanguageCourse(c) { return currentLanguageSink() }  // 学科吸収 or 外国語として独立
+        if isLanguageCourse(c) { return currentLanguageSink() }
         if isOwnDepartmentCourse(c) { return .department }
         return .free
     }
@@ -624,20 +632,16 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     }
 
 
-    // 一覧カテゴリ（見出し用）も同じロジックで
     private func classifyDisplay(_ c: Course) -> DisplayCategory {
-        
-        // ✅ 手動追加は ID で強制分類
-        //if manualSegMap[c.id] != nil{}
-        
-            switch classifySeg4(c) {
-            case .aoyama:     return .aoyama
-            case .language:   return .language
-            case .department: return .department
-            case .free:       return .free
-            }
-
+        switch classifySeg4(c) {
+        case .aoyama:     return .aoyama
+        case .language:   return .language
+        case .department: return .department
+        case .free:       return .free
+        case .teacher:    return .free   // ここは画面に出さない想定だが網羅のため
+        }
     }
+
 
     private var currentTermText: String { currentTerm.displayTitle }  // displayTitle は既存で使用中
     
@@ -695,6 +699,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                     case .language:   return "外国語"
                     case .department: return "学科科目"
                     case .free:       return "自由選択"
+                    case .teacher:    return "教職課程科目"   // 分類上は存在、表示/集計では除外
                     }
                 }(),
                 syllabusURL: "",
@@ -709,27 +714,38 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         earnedCourses  = earned
         // ★ ここまで追加
 
-        // ドーナツ用集計
+        // ドーナツ用集計（教職課程は除外）
         func add(_ c: Course, to dict: inout [Seg4: Int]) {
-            let val = (c.credits as Int?) ?? 0
             let k = classifySeg4(c)
+            guard k != .teacher else { return }           // ← 追加
+            let val = (c.credits as Int?) ?? 0
             dict[k, default: 0] += val
         }
-        totals = Totals()
-        earnedCourses.forEach { add($0, to: &totals.earned) }
-        plannedCourses.forEach { add($0, to: &totals.planned) }
-        totals.earnedTotal  = earnedCourses.reduce(0) { $0 + (( $1.credits as Int?) ?? 0) }
-        totals.plannedTotal = plannedCourses.reduce(0) { $0 + (( $1.credits as Int?) ?? 0) }
 
-        // クリップ（各区分の必要単位で）
+        totals = Totals()
+
+        // 表示対象（teacher を除外）に絞った配列を用意
+        let displayEarned  = earnedCourses.filter  { classifySeg4($0) != .teacher }
+        let displayPlanned = plannedCourses.filter { classifySeg4($0) != .teacher }
+
+        // ドーナツ用の加算
+        displayEarned.forEach  { add($0, to: &totals.earned) }
+        displayPlanned.forEach { add($0, to: &totals.planned) }
+
+        // 合計（中央表示用）も teacher を含めない
+        totals.earnedTotal  = displayEarned.reduce(0)  { $0 + (( $1.credits as Int?) ?? 0) }
+        totals.plannedTotal = displayPlanned.reduce(0) { $0 + (( $1.credits as Int?) ?? 0) }
+
+        // クリップ：teacher を含まない visibleCases を使用
         let req = requirement4()
-        for seg in Seg4.allCases {
+        for seg in Seg4.visibleCases {                      // ← 変更: allCases → visibleCases
             let need: Int = {
                 switch seg {
                 case .aoyama:     return req.aoyama
                 case .language:   return req.language
                 case .department: return req.department
                 case .free:       return req.free
+                case .teacher:    return 0  // 通らないが網羅性のため
                 }
             }()
             let e = totals.earned[seg] ?? 0
@@ -738,9 +754,12 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             totals.planned[seg] = min(p, max(0, need - (totals.earned[seg] ?? 0)))
         }
 
-        // 一覧カテゴリ分割
-        plannedByDisplay = Dictionary(grouping: plannedCourses, by: classifyDisplay)
-        earnedByDisplay  = Dictionary(grouping: earnedCourses,  by: classifyDisplay)
+
+        // 一覧カテゴリ分割（teacher を除外してから分割）
+        let listPlanned = displayPlanned
+        let listEarned  = displayEarned
+        plannedByDisplay = Dictionary(grouping: listPlanned, by: classifyDisplay)
+        earnedByDisplay  = Dictionary(grouping: listEarned,  by: classifyDisplay)
         for k in DisplayCategory.allCases {
             plannedByDisplay[k] = (plannedByDisplay[k] ?? []).sorted { $0.title < $1.title }
             earnedByDisplay[k]  = (earnedByDisplay[k]  ?? []).sorted { $0.title < $1.title }

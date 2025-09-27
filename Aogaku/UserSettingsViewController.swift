@@ -105,7 +105,7 @@ private enum ImageFetcher {
 final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate, BannerViewDelegate {
 
     // 設定タブのインデックス（必要なら調整）
-    private let settingsTabIndex = 3
+    private let settingsTabIndex = 4
 
     // MARK: UI（アイコンのみ・カメラボタン削除）
     private let avatarView = UIImageView()
@@ -261,6 +261,14 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         loadUserProfile()
         setupAdBanner()
         applyBackgroundStyle()
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // 初回だけ他タブに飛ばされるのを防ぐ：常に設定タブ(index=4)へ
+        if let tbc = tabBarController, tbc.selectedIndex != settingsTabIndex {
+            tbc.selectedIndex = settingsTabIndex
+        }
     }
 
     override func viewDidLayoutSubviews() {

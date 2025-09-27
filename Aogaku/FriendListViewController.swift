@@ -417,7 +417,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
                     // 左から4番目（index 3）のタブ＝設定へ遷移
                     if let tab = self.tabBarController ?? (self.view.window?.rootViewController as? UITabBarController) {
-                        let idx = 3 // 0-based
+                        let idx = 4 // 0-based
                         if let vcs = tab.viewControllers, vcs.indices.contains(idx) {
                             tab.selectedIndex = idx
                             // そのタブが UINavigationController ならルートまで戻しておく

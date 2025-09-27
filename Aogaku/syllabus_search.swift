@@ -141,7 +141,14 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         // グリッド制約/タグ採番/初期選択は viewDidLayoutSubviews で
 
         setupAdBanner()
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onAdMobReady),
+            name: .adMobReady, object: nil)
     }
+    @objc private func onAdMobReady() {
+        loadBannerIfNeeded()
+    }
+
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -163,10 +170,15 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
             adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: bannerBottomOffset),
             adContainerHeight!
         ])
-
+        // RCで広告を止めているときはUIも消す
+        guard AdsConfig.enabled else {
+            adContainer.isHidden = true
+            adContainerHeight?.constant = 0
+            return
+        }
         let bv = BannerView()
         bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID
+        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
         bv.rootViewController = self
         bv.adSize = AdSizeBanner  // 仮サイズ
         bv.delegate = self

@@ -909,6 +909,7 @@
                                 <buttonConfiguration key="configuration" style="plain" image="plus.app" catalog="system" title=""/>
                                 <connections>
                                     <action selector="didTapAdd:" destination="Sbg-Zk-Lwa" eventType="touchUpInside" id="1Op-ws-md3"/>
+                                    <action selector="tapRegisterButton:" destination="Sbg-Zk-Lwa" eventType="touchUpInside" id="cMI-te-Ef0"/>
                                 </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="czd-yd-kUu">

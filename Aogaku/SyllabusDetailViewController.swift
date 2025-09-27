@@ -4,32 +4,29 @@ import FirebaseFirestore
 
 final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
 
-    // 呼び出し側から渡されることがある情報
-    var targetDay: Int?      // 0=月…5=土
-    var targetPeriod: Int?   // 1..7
+    // MARK: - Inputs (caller may set)
+    var targetDay: Int?          // 0=Mon ... 5=Sat
+    var targetPeriod: Int?       // 1..7
     var docID: String?
     var initialTitle: String?
     var initialTeacher: String?
-    var initialCredit: String?
-    var initialURLString: String?   // ← 追加: 直接開くURL（友だち時間割から渡す）
+    var initialCredit: String?   // "2" など
+    var initialURLString: String?
     var initialRegNumber: String?
     var initialRoom: String?
 
-
-    // MARK: - Outlets（Storyboard接続）
+    // MARK: - IBOutlets (all optional; safe even if not connected)
     @IBOutlet weak var titleTextView: UITextView?
     @IBOutlet weak var addButton: UIButton?
     @IBOutlet weak var bookmarkButton: UIButton?
-
     @IBOutlet weak var codeLabel: UILabel?
     @IBOutlet weak var teacherLabel: UILabel?
     @IBOutlet weak var creditLabel: UILabel?
-
-    @IBOutlet weak var infoStack: UIStackView?      // 任意（無くてもOK）
-    @IBOutlet weak var webContainer: UIView?        // 任意（無くてもOK）
+    @IBOutlet weak var infoStack: UIStackView?
+    @IBOutlet weak var webContainer: UIView?
     @IBOutlet weak var roomTextField: UITextField?
 
-    // MARK: - Store Keys
+    // MARK: - UserDefaults keys
     private let plannedKey  = "plannedClassIDs"
     private let favoriteKey = "favoriteClassIDs"
 
@@ -37,10 +34,10 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     private var webView: WKWebView!
     private let indicator = UIActivityIndicatorView(style: .large)
 
-    // Firestore生データ（時間割登録通知で使用）
+    // Firestore raw (used to build payload)
     private var lastFetched: [String: Any] = [:]
 
-    // Navigation外観退避
+    // Navigation appearance backup
     private var savedStandard: UINavigationBarAppearance?
     private var savedScrollEdge: UINavigationBarAppearance?
     private var savedTint: UIColor?
@@ -49,54 +46,42 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // 1) 先にUIを作る（ここで webView を必ず作成）
         setupButtonsAppearance()
-        setupWebView()                 // ← 最初に呼ぶ
+        setupWebView()
         refreshButtons()
         reanchorHeaderRow()
 
-        // 2) タイトルなどの初期表示
+        // Prefill UI
         titleTextView?.isEditable = false
         titleTextView?.isSelectable = false
         titleTextView?.isScrollEnabled = false
         titleTextView?.backgroundColor = .clear
-        titleTextView?.isOpaque = false
         titleTextView?.textColor = .white
         titleTextView?.font = .boldSystemFont(ofSize: 20)
         titleTextView?.textAlignment = .center
-        titleTextView?.textContainer.lineFragmentPadding = 0
-        titleTextView?.textContainerInset = UIEdgeInsets(top: 6, left: 0, bottom: 0, right: 0)
-        titleTextView?.text = (initialTitle?.isEmpty == false) ? initialTitle! : "科目名"
+        titleTextView?.text = (initialTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? initialTitle : "科目名"
+
         teacherLabel?.text = initialTeacher ?? ""
-        // 教室プレフィル（TextFieldを置いていない場合は無視される）
+        if let c = initialCredit, !c.isEmpty { creditLabel?.text = "\(c)単位" }
         roomTextField?.text = initialRoom
 
-        
-        // 既存の初期化群の近くに
         if let code = initialRegNumber, !code.isEmpty {
             codeLabel?.text = code
-        } else if let id = docID, !id.isEmpty {
-            // 念のため docID をフォールバック
-            codeLabel?.text = id
-        }
+             } else {
+                 codeLabel?.text = "-"   // 取得後に正しい登録番号で上書き
+             }
 
-        if let c = initialCredit, !c.isEmpty { creditLabel?.text = "\(c)単位" }
-
-        // 3) データ表示（URL 直指定があればそれを即表示、なければ Firestore）
+        // Load content
         if let s = initialURLString?.trimmingCharacters(in: .whitespacesAndNewlines),
-           let url = URL(string: s), !s.isEmpty {
+           !s.isEmpty, let url = URL(string: s) {
             webView.isHidden = false
             webView.load(URLRequest(url: url))
         } else if let id = docID, !id.isEmpty {
             fetchDetail(docID: id)
-        } else {
-            // どちらもない場合は自動で閉じる（既存の挙動を踏襲）
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.dismiss(animated: true)
-            }
         }
 
-        // 4) モーダルで開かれたときの閉じるボタン
+        // Close button when presented modally
         if presentingViewController != nil,
            navigationController?.viewControllers.first === self {
             navigationItem.leftBarButtonItem = UIBarButtonItem(
@@ -106,50 +91,58 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         }
     }
 
-
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         guard let nav = navigationController else { return }
-        savedStandard = nav.navigationBar.standardAppearance
+        savedStandard   = nav.navigationBar.standardAppearance
         savedScrollEdge = nav.navigationBar.scrollEdgeAppearance
-        savedTint = nav.navigationBar.tintColor
+        savedTint       = nav.navigationBar.tintColor
 
-        let app = UINavigationBarAppearance()
-        app.configureWithTransparentBackground()
-        nav.navigationBar.standardAppearance = app
-        nav.navigationBar.scrollEdgeAppearance = app
-        nav.navigationBar.compactAppearance = app
-        nav.navigationBar.tintColor = .white   // 戻る矢印＆文字を白に
+        let a = UINavigationBarAppearance()
+        a.configureWithOpaqueBackground()
+        a.backgroundColor = .systemBackground
+        nav.navigationBar.standardAppearance = a
+        nav.navigationBar.scrollEdgeAppearance = a
+        nav.navigationBar.compactAppearance = a
+        nav.navigationBar.tintColor = .label
         navigationItem.largeTitleDisplayMode = .never
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         guard let nav = navigationController else { return }
-        if let a = savedStandard { nav.navigationBar.standardAppearance = a }
-        if let a = savedScrollEdge { nav.navigationBar.scrollEdgeAppearance = a }
+        if let x = savedStandard { nav.navigationBar.standardAppearance = x }
+        if let x = savedScrollEdge { nav.navigationBar.scrollEdgeAppearance = x }
         nav.navigationBar.compactAppearance = nav.navigationBar.standardAppearance
         nav.navigationBar.tintColor = savedTint
     }
+    
+    private func isAlreadyInTimetable() -> Bool {
+        // timetable と同じ保存先（TermStore / Course 型は既存のものを使用）
+        let term = TermStore.loadSelected()
+        guard let data = UserDefaults.standard.data(forKey: term.storageKey),
+              let assigned = try? JSONDecoder().decode([Course?].self, from: data) else {
+            return false
+        }
+        let ids = Set(assigned.compactMap { $0?.id })
+
+        // timetable では Course.id に登録番号（code）を入れて送っています
+        // 取得済み or 初期値から候補IDを作成
+        let codeFromFetched: String? =
+            (lastFetched["registration_number"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? (lastFetched["code"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? initialRegNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let code = codeFromFetched, ids.contains(code) { return true }
+        if let doc = docID, ids.contains(doc) { return true }   // code が無い授業の保険
+        return false
+    }
+
 
     // MARK: - Buttons
     private func setupButtonsAppearance() {
-        // 文字は常に空（"Addbutton"/"Bookmark"などが出ないように）
         addButton?.setTitle("", for: .normal)
         bookmarkButton?.setTitle("", for: .normal)
-
-        // 余白・アイコンサイズ
-        if #available(iOS 15.0, *) {
-            var addCfg = UIButton.Configuration.plain()
-            addCfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
-            addButton?.configuration = addCfg
-            var bmCfg = UIButton.Configuration.plain()
-            bmCfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
-            bookmarkButton?.configuration = bmCfg
-        } else {
-            addButton?.contentEdgeInsets = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
-            bookmarkButton?.contentEdgeInsets = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
-        }
         let sym = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
         addButton?.setPreferredSymbolConfiguration(sym, forImageIn: .normal)
         bookmarkButton?.setPreferredSymbolConfiguration(sym, forImageIn: .normal)
@@ -158,57 +151,43 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     }
 
     private func refreshButtons() {
-        guard let id = docID else { return }
-        let planned = Set(UserDefaults.standard.stringArray(forKey: plannedKey) ?? [])
-        let fav     = Set(UserDefaults.standard.stringArray(forKey: favoriteKey) ?? [])
+        let fav = Set(UserDefaults.standard.stringArray(forKey: favoriteKey) ?? [])
 
-        let addSymbol = planned.contains(id) ? "checkmark.circle.fill" : "plus.circle"
+        // timetable 側の保存を優先し、plannedKey は保険として併用
+        let inTimetable = isAlreadyInTimetable()
+        let alsoPlanned: Bool = {
+            guard let s = docID else { return false }
+            let planned = Set(UserDefaults.standard.stringArray(forKey: plannedKey) ?? [])
+            return planned.contains(s)
+        }()
+
+        let addSymbol = (inTimetable || alsoPlanned) ? "checkmark.circle.fill" : "plus.circle"
         addButton?.setImage(UIImage(systemName: addSymbol), for: .normal)
-        addButton?.tintColor = planned.contains(id) ? .systemGreen : .label
-        addButton?.setTitle("", for: .normal)
+        addButton?.tintColor = (inTimetable || alsoPlanned) ? .systemGreen : .label
 
-        let bmSymbol = fav.contains(id) ? "bookmark.fill" : "bookmark"
+        // ← ここを修正：id ではなく docID を使う
+        let isFav: Bool = {
+            guard let s = docID else { return false }
+            return fav.contains(s)
+        }()
+        let bmSymbol = isFav ? "bookmark.fill" : "bookmark"
         bookmarkButton?.setImage(UIImage(systemName: bmSymbol), for: .normal)
-        bookmarkButton?.tintColor = fav.contains(id) ? .systemOrange : .label
-        bookmarkButton?.setTitle("", for: .normal)
+        bookmarkButton?.tintColor = isFav ? .systemOrange : .label
 
-        // レイアウトを非アニメで確定（視覚揺れ抑制）
         UIView.performWithoutAnimation { self.view.layoutIfNeeded() }
     }
-    
+
+    // 右上の「＋」をStoryboardで繋いでいる場合はこちらを使う
     @IBAction func tapRegisterButton(_ sender: Any) {
-        // 画面の編集フィールドがあればそれを優先
-        let roomFromUI = (roomTextField?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let course: [String: Any] = [
-            "class_name":   (initialTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
-            "teacher_name": initialTeacher ?? "",
-            // timetable 側が読むキー名に合わせる
-            "room":         roomFromUI.isEmpty ? (initialRoom ?? "") : roomFromUI,
-            "code":         (initialRegNumber ?? docID) ?? "",        // ← 登録番号は code で渡す
-            "url":          initialURLString ?? ""                     // ← URL は url で渡す
-            // 必要なら "credit" / "campus" / "category" もここで付与
-        ]
-
-        NotificationCenter.default.post(
-            name: .registerCourseToTimetable,
-            object: nil,
-            userInfo: [
-                "day": targetDay,
-                "period": targetPeriod,
-                // docID も一応渡しておく（makeCourse 内で code フォールバックに使う）
-                "docID": docID ?? (initialRegNumber ?? ""),
-                "course": course
-            ]
-        )
-
-        dismiss(animated: true)
+        presentAddConfirmAndPost()
     }
 
     @IBAction func didTapAdd(_ sender: Any) {
         if lastFetched.isEmpty, let id = docID {
             fetchDetail(docID: id)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.presentAddConfirmAndPost() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.presentAddConfirmAndPost()
+            }
         } else {
             presentAddConfirmAndPost()
         }
@@ -225,9 +204,14 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
 
     private func presentAddConfirmAndPost() {
         let (payload, d, p) = buildPayload(from: lastFetched)
+
         let name = (payload["class_name"] as? String) ?? "この授業"
-        let dayText: String = { if let d = d { return ["月","火","水","木","金","土"][d] } else { return "（曜日不明）" } }()
+        let dayText: String = {
+            if let d = d, (0...5).contains(d) { return ["月","火","水","木","金","土"][d] }
+            return "（曜日不明）"
+        }()
         let periodText: String = p != nil ? "\(p!)限" : "（時限不明）"
+
         let ac = UIAlertController(title: "登録しますか？",
                                    message: "\(dayText) \(periodText) に\n「\(name)」を\n登録します。",
                                    preferredStyle: .alert)
@@ -243,7 +227,13 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             var info: [String: Any] = ["course": payload, "docID": id]
             if let d = d { info["day"] = d }
             if let p = p { info["period"] = p }
-            NotificationCenter.default.post(name: .registerCourseToTimetable, object: nil, userInfo: info)
+
+            // ここではリテラルで通知名を指定（重複拡張を避ける）
+            NotificationCenter.default.post(
+                name: Notification.Name("RegisterCourseToTimetable"),
+                object: nil,
+                userInfo: info
+            )
             print("➡️ payload:", payload)
         }))
         present(ac, animated: true)
@@ -276,8 +266,6 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         } else {
             view.addSubview(webView)
             webView.translatesAutoresizingMaskIntoConstraints = false
-
-            // ヘッダー（登録番号/ボタン群）直下から下端まで
             let topAnchor: NSLayoutYAxisAnchor = {
                 if let stack = infoStack { return stack.bottomAnchor }
                 if let btnHost = addButton?.superview { return btnHost.bottomAnchor }
@@ -324,47 +312,36 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
 
             self.lastFetched = data
 
-            if let name = data["class_name"] as? String { self.titleTextView?.text = name }
-            if let t = data["teacher_name"] as? String { self.teacherLabel?.text = t }
-
+            if let name = data["class_name"] as? String, (self.titleTextView?.text ?? "").isEmpty {
+                self.titleTextView?.text = name
+            }
+            if let t = data["teacher_name"] as? String, (self.teacherLabel?.text ?? "").isEmpty {
+                self.teacherLabel?.text = t
+            }
             if let c = data["credit"] as? Int {
                 self.creditLabel?.text = "\(c)単位"
             } else if let cStr = data["credit"] as? String, !cStr.isEmpty {
                 self.creditLabel?.text = "\(cStr)単位"
             }
 
-            let code = (data["registration_number"] as? String)
-                ?? (data["code"] as? String)
-                ?? (data["class_code"] as? String)
-                ?? (data["course_code"] as? String)
-            self.codeLabel?.text = code ?? "-"
+             let code = (data["registration_number"] as? String)
+                 ?? (data["code"] as? String)
+                 ?? (data["class_code"] as? String)
+                 ?? (data["course_code"] as? String)
+             self.codeLabel?.text = (code?.isEmpty == false) ? code! : "-"
 
-            // URL 取得（url / syllabusURL のどちらでも）
             let urlStr = ((data["url"] as? String) ?? (data["syllabusURL"] as? String) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-
             if let url = URL(string: urlStr), !urlStr.isEmpty {
                 self.webView.isHidden = false
                 self.webView.load(URLRequest(url: url))
-            } else {
-                let html = """
-                <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <style>body{font: -apple-system-body; color:#666; margin:24px}</style></head>
-                <body><p>リンクURLが見つかりませんでした。</p></body></html>
-                """
-                self.webView.isHidden = false
-                self.webView.loadHTMLString(html, baseURL: nil)
             }
-
         }
     }
 
-    // MARK: - Header Row re-anchoring
-    /// SafeArea.Top ではなく、タイトル直下に “共通の天井” を作って登録番号・追加・ブックマークの Top を揃える
+    // MARK: - Layout helper
     private func reanchorHeaderRow() {
         guard let root = self.view, let title = self.titleTextView else { return }
-
-        // 既存の Top→SafeArea 制約を無効化（Storyboard差分吸収）
         func deactivateTopToSafeArea(of v: UIView?) {
             guard let v = v else { return }
             for c in root.constraints {
@@ -381,7 +358,6 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         deactivateTopToSafeArea(of: addButton)
         deactivateTopToSafeArea(of: bookmarkButton)
 
-        // タイトルの「最後のベースライン」から一定距離下にガイドを作る
         let headerGuide = UILayoutGuide()
         root.addLayoutGuide(headerGuide)
         NSLayoutConstraint.activate([
@@ -390,7 +366,6 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             headerGuide.topAnchor.constraint(equalTo: title.lastBaselineAnchor, constant: 12)
         ])
 
-        // 3つのTopをガイドに=で合わせる（どこからの遷移でも高さが一致）
         func pinTop(_ v: UIView?) {
             guard let v = v else { return }
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -405,52 +380,72 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         UIView.performWithoutAnimation { root.layoutIfNeeded() }
     }
 
-    // MARK: - Timetable payload
-    // MARK: - Timetable payload
+    // MARK: - Payload builder（category/credit を必ず載せる）
     private func buildPayload(from data: [String: Any]) -> (course: [String: Any], day: Int?, period: Int?) {
-        // 文字列トリムのヘルパ
+
         func trim(_ s: String?) -> String { (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
 
-        let name     = trim(data["class_name"] as? String).isEmpty ? (titleTextView?.text ?? "") : trim(data["class_name"] as? String)
-        let teacher  = trim(data["teacher_name"] as? String).isEmpty ? (teacherLabel?.text ?? "") : trim(data["teacher_name"] as? String)
+        // name / teacher: UI > Firestore > initial
+        let name: String = {
+            let ui = trim(titleTextView?.text); if !ui.isEmpty { return ui }
+            let v  = trim(data["class_name"] as? String); if !v.isEmpty { return v }
+            return trim(initialTitle)
+        }()
+        let teacher: String = {
+            let ui = trim(teacherLabel?.text); if !ui.isEmpty { return ui }
+            let v  = trim(data["teacher_name"] as? String); if !v.isEmpty { return v }
+            return trim(initialTeacher)
+        }()
 
-        // code: Firestore → registration_number → initialRegNumber → docID
-        let code = trim(data["code"] as? String).isEmpty
-            ? ( trim(data["registration_number"] as? String).isEmpty
-                ? ( trim(initialRegNumber).isEmpty ? trim(docID) : trim(initialRegNumber) )
-                : trim(data["registration_number"] as? String) )
-            : trim(data["code"] as? String)
+        // code: Firestore → registration_number → initial → docID
+        let code: String = {
+            let c1 = trim(data["code"] as? String); if !c1.isEmpty { return c1 }
+            let c2 = trim(data["registration_number"] as? String); if !c2.isEmpty { return c2 }
+            let c3 = trim(initialRegNumber); if !c3.isEmpty { return c3 }
+            return trim(docID)
+        }()
 
-        // url: Firestore(url / syllabusURL) → initialURLString
-        let urlStr = {
-            let u1 = trim(data["url"] as? String)
-            if !u1.isEmpty { return u1 }
-            let u2 = trim(data["syllabusURL"] as? String)
-            if !u2.isEmpty { return u2 }
+        // url: Firestore(url / syllabusURL) → initial
+        let urlStr: String = {
+            let u1 = trim(data["url"] as? String); if !u1.isEmpty { return u1 }
+            let u2 = trim(data["syllabusURL"] as? String); if !u2.isEmpty { return u2 }
             return trim(initialURLString)
         }()
 
-        // room: TextField → initialRoom → Firestore(room)
-        let roomStr = {
-            let fromUI = trim(roomTextField?.text)
-            if !fromUI.isEmpty { return fromUI }
-            if let r = initialRoom, !trim(r).isEmpty { return trim(r) }
+        // room: TextField → initial → Firestore(room)
+        let roomStr: String = {
+            let fromUI = trim(roomTextField?.text); if !fromUI.isEmpty { return fromUI }
+            let r0 = trim(initialRoom); if !r0.isEmpty { return r0 }
             return trim(data["room"] as? String)
         }()
 
+        // credit: Int / String / initial
         let credit: Int = {
             if let n = data["credit"] as? Int { return n }
             if let s = data["credit"] as? String, let n = Int(s) { return n }
+            if let s = initialCredit, let n = Int(s) { return n }
             return 0
         }()
 
-        // day / period は既に targetDay/targetPeriod が来ていればそれを優先
+        // category: category → course_category → tags["教職課程科目"]
+        let categoryStr: String = {
+            let c1 = trim(data["category"] as? String); if !c1.isEmpty { return c1 }
+            let c2 = trim(data["course_category"] as? String); if !c2.isEmpty { return c2 }
+            if let tags = data["tags"] as? [String], tags.contains("教職課程科目") { return "教職課程科目" }
+            return ""
+        }()
+
+        // day/period: explicit > Firestore["time"]
         var d = targetDay
         var p = targetPeriod
         if (d == nil || p == nil), let time = data["time"] as? [String: Any] {
-            if d == nil, let dayJ = time["day"] as? String {
-                let ch = dayJ.trimmingCharacters(in: .whitespaces).first
-                d = ["月":0,"火":1,"水":2,"木":3,"金":4,"土":5][ch ?? " "]
+            if d == nil {
+                if let single = time["day"] as? Int { d = single }
+                else if let arr = time["days"] as? [Int], let first = arr.first { d = first }
+                else if let dayJ = time["day"] as? String {
+                    let ch = dayJ.trimmingCharacters(in: .whitespaces).first
+                    d = ["月":0,"火":1,"水":2,"木":3,"金":4,"土":5][ch ?? " "]
+                }
             }
             if p == nil {
                 if let single = time["period"] as? Int { p = single }
@@ -458,24 +453,18 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             }
         }
 
-        // timetable 側が読むキー名に合わせる（url / code / room）
-        let payload: [String: Any] = [
-            "class_name": name,
+        var payload: [String: Any] = [
+            "class_name":   name,
             "teacher_name": teacher,
-            "credit": credit,
-            "code": code,
-            "url": urlStr,
-            "room": roomStr
+            "code":         code,
+            "url":          urlStr,
+            "room":         roomStr
         ]
+        if credit > 0 { payload["credit"] = credit }
+        if !categoryStr.isEmpty { payload["category"] = categoryStr }
+
         return (payload, d, p)
     }
 
-
-    // 動的再計算は使わない（タイトルが動かないように）
     private func updateTitleVerticalInset() {}
-}
-
-// 通知名
-extension Notification.Name {
-    static let registerCourseToTimetable = Notification.Name("RegisterCourseToTimetable")
 }

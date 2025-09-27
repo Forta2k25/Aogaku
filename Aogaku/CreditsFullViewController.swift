@@ -392,18 +392,19 @@ private let REQUIREMENT_CATALOG: [String: [String: GradRule]] = [
 
 ]
 
-// ======================== 一覧表示カテゴリ（語学は独立） ========================
 private enum DisplayCategory: CaseIterable {
-    case aoyama, department, language, free
+    case aoyama, department, language, free, teacher
     var title: String {
         switch self {
         case .aoyama:     return "青山スタンダード"
         case .department: return "学科科目"
         case .language:   return "外国語科目"
         case .free:       return "自由選択科目"
+        case .teacher:    return "教職課程科目"   // ← 追加
         }
     }
 }
+
 
 // ======================== 本体 ========================
 final class CreditsFullViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
@@ -638,7 +639,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         case .language:   return .language
         case .department: return .department
         case .free:       return .free
-        case .teacher:    return .free   // ここは画面に出さない想定だが網羅のため
+        case .teacher:    return .teacher   // ← そのまま表示カテゴリへ
         }
     }
 
@@ -755,9 +756,9 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         }
 
 
-        // 一覧カテゴリ分割（teacher を除外してから分割）
-        let listPlanned = displayPlanned
-        let listEarned  = displayEarned
+        // 一覧カテゴリ分割（teacher も含めて分割）
+        let listPlanned = plannedCourses       // ← 変更
+        let listEarned  = earnedCourses        // ← 変更
         plannedByDisplay = Dictionary(grouping: listPlanned, by: classifyDisplay)
         earnedByDisplay  = Dictionary(grouping: listEarned,  by: classifyDisplay)
         for k in DisplayCategory.allCases {
@@ -1294,6 +1295,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         addAction(.language,   "外国語科目")
         addAction(.department, "学科科目")
         addAction(.free,       "自由選択科目")
+        addAction(.teacher,    "教職課程科目")   // ← 追加（表示はするが集計はゼロ）
         sheet.addAction(UIAlertAction(title: "元に戻す（自動判定）", style: .destructive) { _ in
             var map = self.loadOverrides(); map.removeValue(forKey: key); self.saveOverrides(map)
             self.compute(); self.apply()

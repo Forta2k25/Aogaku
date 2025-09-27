@@ -194,9 +194,16 @@ final class syllabus: UIViewController,
 
         loadNextPage()
         setupAdBanner()
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onAdMobReady),
+            name: .adMobReady, object: nil)
         applyBackgroundStyle()
     }
-    
+    @objc private func onAdMobReady() {
+        loadBannerIfNeeded()
+    }
+
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
@@ -259,10 +266,15 @@ final class syllabus: UIViewController,
             adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             adContainerHeight!
         ])
-
+        // RCで広告を止めているときはUIも消す
+        guard AdsConfig.enabled else {
+            adContainer.isHidden = true
+            adContainerHeight?.constant = 0
+            return
+        }
         let bv = BannerView()
         bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716" // テストID
+        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
         bv.rootViewController = self
         bv.adSize = AdSizeBanner
         bv.delegate = self

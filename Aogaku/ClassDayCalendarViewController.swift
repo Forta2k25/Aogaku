@@ -65,6 +65,9 @@ final class ClassDayCalendarViewController: UIViewController,
         setupCollection()
         setupBottomArea()
         setupAdBanner()
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onAdMobReady),
+            name: .adMobReady, object: nil)
         addSwipeGestures()
 
         // 前回のキャンパス選択を復元
@@ -78,6 +81,10 @@ final class ClassDayCalendarViewController: UIViewController,
         setMonth(clampedToAllowed(firstDay(of: Date())))
         reload()
     }
+    @objc private func onAdMobReady() {
+        loadBannerIfNeeded()
+    }
+
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -326,10 +333,17 @@ final class ClassDayCalendarViewController: UIViewController,
         // 注意書きの“下端”はバナーの“上端”に吸着
         disclaimerLabel.bottomAnchor.constraint(equalTo: adContainer.topAnchor, constant: -8).isActive = true
 
+        
+        // RCで広告を止めているときはUIも消す
+          guard AdsConfig.enabled else {
+              adContainer.isHidden = true
+              adContainerHeight?.constant = 0
+              return
+      }
         // バナー本体
         let bv = BannerView()
         bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"   // Google テストID
+        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
         bv.rootViewController = self
         bv.adSize = AdSizeBanner
         bv.delegate = self

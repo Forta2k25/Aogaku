@@ -6,12 +6,48 @@ import FirebaseStorage
 import GoogleMobileAds
 import FirebaseFunctions
 import SafariServices
+import FirebaseRemoteConfig
+
 
 // ===== AdMob helper =====
 @inline(__always)
 private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
 }
+
+// ===== Ad configuration (Remote Config + test devices) =====
+enum AdsConfig {
+    private static let rc = RemoteConfig.remoteConfig()
+
+    static func bootstrap() {
+        // AdMobのstart/testDeviceはAppDelegateで実行する想定
+        rc.setDefaults([
+            "ads_enabled": true as NSObject,
+            "ads_live": false as NSObject,
+            "ads_banner_id_test": "ca-app-pub-3940256099942544/2934735716" as NSObject,
+            "ads_banner_id_prod": "" as NSObject
+        ])
+        rc.fetchAndActivate { _, _ in
+            NotificationCenter.default.post(name: .adMobReady, object: nil)
+        }
+    }
+
+
+
+
+    static var enabled: Bool { rc["ads_enabled"].boolValue }
+
+    static var bannerUnitID: String {
+        let isLive = rc["ads_live"].boolValue
+        if isLive {
+            let s = rc["ads_banner_id_prod"].stringValue ?? ""
+            return s.isEmpty ? (rc["ads_banner_id_test"].stringValue ?? "ca-app-pub-3940256099942544/2934735716") : s
+        } else {
+            return rc["ads_banner_id_test"].stringValue ?? "ca-app-pub-3940256099942544/2934735716"
+        }
+    }
+}
+
 
 // ===== 自分用アイコンキャッシュ（メモリ＋ディスク、バージョン管理） =====
 private final class SelfAvatarCache {
@@ -248,6 +284,12 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemGroupedBackground
+        
+#if DEBUG
+let tripleTap = UITapGestureRecognizer(target: self, action: #selector(openAdInspector))
+tripleTap.numberOfTapsRequired = 3
+view.addGestureRecognizer(tripleTap)
+#endif
 
         setupAvatarUI()
         setupProfileUI()
@@ -265,8 +307,30 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         // 既存:
         loadUserProfile()
         setupAdBanner()
+        // Remote Config 反映完了を待ってから読み込む
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onAdsConfigReady),
+            name: .adMobReady,
+            object: nil
+        )
         applyBackgroundStyle()
 
+    }
+    
+#if DEBUG
+@objc private func openAdInspector() {
+    MobileAds.shared.presentAdInspector(from: self) { error in
+        print("AdInspector:", error?.localizedDescription ?? "opened")
+    }
+}
+#endif
+
+    @objc private func onAdsConfigReady() {
+        guard let bv = bannerView else { return }
+        bv.adUnitID = AdsConfig.bannerUnitID   // RCのads_live/ads_banner_id_*で自動切替
+        didLoadBannerOnce = false
+        loadBannerIfNeeded()
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -385,10 +449,21 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         stackBottomToSafeArea?.isActive = false
         stackBottomToAdTop = stack.bottomAnchor.constraint(lessThanOrEqualTo: adContainer.topAnchor, constant: -24)
         stackBottomToAdTop?.isActive = true
+        
+        // ★ RCで広告を無効化しているならUIも非表示に
+        guard AdsConfig.enabled else {
+            adContainer.isHidden = true
+            adContainerHeight?.constant = 0
+            return
+        }
 
         let bv = BannerView()
         bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"   // テストID
+        
+        
+        // ★ 本番/テストを Remote Config で切替
+        bv.adUnitID = AdsConfig.bannerUnitID
+
         bv.rootViewController = self
         bv.adSize = AdSizeBanner
         bv.delegate = self
@@ -401,10 +476,11 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
             bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
         ])
         self.bannerView = bv
+        
     }
 
     private func loadBannerIfNeeded() {
-        guard let bv = bannerView else { return }
+        guard AdsConfig.enabled, let bv = bannerView else { return }
         let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
         if safeWidth <= 0 { return }
 

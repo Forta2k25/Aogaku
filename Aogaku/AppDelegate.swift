@@ -8,6 +8,7 @@
 import UIKit
 import FirebaseCore
 import GoogleMobileAds
+import FirebaseRemoteConfig   // ← 追加
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -22,6 +23,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         MobileAds.shared.start { status in
             print("AdMob initialized: \(status.adapterStatusesByClassName)")
         }
+        // ✅ ここに追記（Remote Config で広告ID/ON-OFFを取得）
+        setupAdsRemoteConfig()
 
         // （任意）テストデバイス設定
         // v12 ではシミュレータ用の kGADSimulatorID は廃止。
@@ -76,5 +79,28 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 extension Notification.Name {
     static let adMobReady = Notification.Name("AdMobReady")
+}
+
+private func setupAdsRemoteConfig() {
+    let rc = RemoteConfig.remoteConfig()
+    rc.setDefaults([
+        "ads_enabled": true as NSObject,
+        "ads_live": false as NSObject,
+        "ads_banner_id_test": "ca-app-pub-3940256099942544/2934755716" as NSObject,
+        "ads_banner_id_prod": "" as NSObject,
+        "ads_test_devices": "" as NSObject
+    ])
+    rc.fetchAndActivate { _, _ in
+        // RC の CSV を実機IDに反映（シミュレータは自動でテスト扱い）
+        let csv = rc["ads_test_devices"].stringValue ?? ""
+        let extra = csv
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        MobileAds.shared.requestConfiguration.testDeviceIdentifiers = extra
+
+        NotificationCenter.default.post(name: .adMobReady, object: nil)
+    }
 }
 

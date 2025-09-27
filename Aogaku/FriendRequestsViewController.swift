@@ -42,7 +42,13 @@ final class FriendRequestsViewController: UITableViewController, BannerViewDeleg
         tableView.rowHeight = 92
         reload()
         setupAdBanner()            // [ADDED]
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onAdMobReady),
+            name: .adMobReady, object: nil)
         applyBackgroundStyle()
+    }
+    @objc private func onAdMobReady() {
+        loadBannerIfNeeded()
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -78,10 +84,16 @@ final class FriendRequestsViewController: UITableViewController, BannerViewDeleg
             adContainerHeight!
         ])
 
+        // RCで広告を止めているときはUIも消す
+        guard AdsConfig.enabled else {
+            adContainer.isHidden = true
+            adContainerHeight?.constant = 0
+            return
+        }
         // GADBannerView（プロジェクトの typealias: BannerView / Request / AdSize を使用）
         let bv = BannerView()
         bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"   // テスト用
+        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
         bv.rootViewController = self
         bv.adSize = AdSizeBanner
         bv.delegate = self

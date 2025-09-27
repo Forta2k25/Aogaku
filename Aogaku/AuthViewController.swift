@@ -117,6 +117,9 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         setupPasswordToggle()
         setupDismissKeyboardGesture()
         setupAdBanner()
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onAdMobReady),
+            name: .adMobReady, object: nil)
 
         // 右上のメニューボタン（未ログインは「その他」だけ）
         let menuButton = makeHamburgerButton(target: self, action: #selector(didTapSideMenuButton(_:)))
@@ -128,6 +131,10 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         
         applyBackgroundStyle()
     }
+    @objc private func onAdMobReady() {
+        loadBannerIfNeeded()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // ▼ 追加：幅に合わせて一度だけロード
@@ -239,10 +246,16 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         stackBottomToAdTop = stack.bottomAnchor.constraint(lessThanOrEqualTo: adContainer.topAnchor, constant: -24)
         stackBottomToAdTop?.isActive = true
 
+        // RCで広告を止めているときはUIも消す
+          guard AdsConfig.enabled else {
+              adContainer.isHidden = true
+              adContainerHeight?.constant = 0
+              return
+      }
         // GADBannerView（プロジェクトの typealias: BannerView / Request / AdSize）
         let bv = BannerView()
         bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = "ca-app-pub-3940256099942544/2934735716"   // テスト用ID
+        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
         bv.rootViewController = self
         bv.adSize = AdSizeBanner
         bv.delegate = self

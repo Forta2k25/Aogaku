@@ -507,24 +507,23 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         nameTitle.font = .systemFont(ofSize: 16, weight: .semibold)
         nameField.placeholder = "未設定"
         nameField.borderStyle = .none
+        nameField.textColor = .label       // 入力文字が見えるように固定
+        nameField.tintColor = .label       // キャレット（縦棒）の色。好みで .systemBlue でもOK
+        nameField.textAlignment = .left
         nameField.clearButtonMode = .whileEditing
-        // 右側に「編集できます」用のペンアイコン
-        let pencil = UIImageView(image: UIImage(systemName: "pencil"))
-        pencil.tintColor = .tertiaryLabel
-        pencil.contentMode = .scaleAspectFit
-        pencil.translatesAutoresizingMaskIntoConstraints = false
-
-        let rv = UIView(frame: CGRect(x: 0, y: 0, width: 28, height: 28))
-        rv.addSubview(pencil)
-        NSLayoutConstraint.activate([
-            pencil.widthAnchor.constraint(equalToConstant: 18),
-            pencil.heightAnchor.constraint(equalToConstant: 18),
-            pencil.centerYAnchor.constraint(equalTo: rv.centerYAnchor),
-            pencil.trailingAnchor.constraint(equalTo: rv.trailingAnchor)
-        ])
-
-        nameField.rightView = rv
-        nameField.rightViewMode = .always
+        nameField.rightView = nil
+        nameField.rightViewMode = .never
+        // 入力中文字の属性を明示（文字が透明になる事故を防止）
+        nameField.textColor = .label
+        nameField.backgroundColor = .clear
+        nameField.defaultTextAttributes = [
+            .foregroundColor: UIColor.label,
+            .font: UIFont.systemFont(ofSize: 17)
+        ]
+        nameField.typingAttributes = [
+            .foregroundColor: UIColor.label,
+            .font: UIFont.systemFont(ofSize: 17)
+        ]
 
         nameField.inputAccessoryView = doneToolbar(#selector(commitName))
         nameField.addTarget(self, action: #selector(nameEditingChanged), for: .editingChanged)
@@ -556,7 +555,12 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         nameStack.axis = .vertical
         nameStack.spacing = 8
         nameStack.addArrangedSubview(nameTitle)
-        nameStack.addArrangedSubview(underlineWrap(nameField))
+        let nameRow = underlineWrap(nameField)
+        nameStack.addArrangedSubview(nameRow)
+        let focusTap = UITapGestureRecognizer(target: self, action: #selector(focusNameField))
+        focusTap.cancelsTouchesInView = false
+        nameRow.addGestureRecognizer(focusTap)
+
 
         let idStack = UIStackView()
         idStack.axis = .vertical
@@ -632,10 +636,12 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
                     }
                 }
 
-                if let name = data["name"] as? String, !name.isEmpty {
-                    self.nameField.text = name
-                } else {
-                    self.nameField.text = nil
+                if !self.nameField.isFirstResponder {
+                    if let name = data["name"] as? String, !name.isEmpty {
+                        self.nameField.text = name
+                    } else {
+                        self.nameField.text = nil
+                    }
                 }
 
                 if let id = data["id"] as? String {
@@ -665,6 +671,10 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
                 }
             }
         }
+    }
+
+    @objc private func focusNameField() {
+        nameField.becomeFirstResponder()
     }
 
     // MARK: - Save handlers

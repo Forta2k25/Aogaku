@@ -42,6 +42,20 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     private var savedScrollEdge: UINavigationBarAppearance?
     private var savedTint: UIColor?
 
+    // MARK: - New UI
+    // 「教室番号：xxx」を登録番号の直下に出すための新規ラベル
+    private let roomInfoLabel: UILabel = {
+        let l = UILabel()
+        l.translatesAutoresizingMaskIntoConstraints = false
+        l.textAlignment = .left
+        l.font = .boldSystemFont(ofSize: 17)
+        l.textColor = .black
+        l.numberOfLines = 1
+        l.setContentCompressionResistancePriority(.required, for: .vertical)
+        l.setContentHuggingPriority(.required, for: .vertical)
+        return l
+    }()
+
     // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -64,13 +78,24 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
 
         teacherLabel?.text = initialTeacher ?? ""
         if let c = initialCredit, !c.isEmpty { creditLabel?.text = "\(c)単位" }
-        roomTextField?.text = initialRoom
 
-        if let code = initialRegNumber, !code.isEmpty {
-            codeLabel?.text = code
-             } else {
-                 codeLabel?.text = "-"   // 取得後に正しい登録番号で上書き
-             }
+        // ---- 登録番号ラベルは一行・中央・見切れ防止で戻す
+        codeLabel?.textAlignment = .center
+        codeLabel?.numberOfLines = 1
+        codeLabel?.font = .monospacedDigitSystemFont(ofSize: 17, weight: .semibold)
+        codeLabel?.adjustsFontSizeToFitWidth = true
+        codeLabel?.minimumScaleFactor = 0.7
+        codeLabel?.lineBreakMode = .byTruncatingMiddle
+        codeLabel?.text = ((initialRegNumber ?? "").isEmpty ? "-" : initialRegNumber)
+
+        // ---- 新しい「教室番号」ラベルを登録番号の直下へ追加
+        attachRoomInfoLabelBelowCode()
+
+        // 初期値でセット
+        updateCodeAndRoomLabels(code: initialRegNumber, room: initialRoom)
+
+        // TextField編集 → 2行目にライブ反映
+        roomTextField?.addTarget(self, action: #selector(roomFieldChanged(_:)), for: .editingChanged)
 
         // Load content
         if let s = initialURLString?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -116,7 +141,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         nav.navigationBar.compactAppearance = nav.navigationBar.standardAppearance
         nav.navigationBar.tintColor = savedTint
     }
-    
+
     private func isAlreadyInTimetable() -> Bool {
         // timetable と同じ保存先（TermStore / Course 型は既存のものを使用）
         let term = TermStore.loadSelected()
@@ -127,7 +152,6 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         let ids = Set(assigned.compactMap { $0?.id })
 
         // timetable では Course.id に登録番号（code）を入れて送っています
-        // 取得済み or 初期値から候補IDを作成
         let codeFromFetched: String? =
             (lastFetched["registration_number"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? (lastFetched["code"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,7 +161,6 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         if let doc = docID, ids.contains(doc) { return true }   // code が無い授業の保険
         return false
     }
-
 
     // MARK: - Buttons
     private func setupButtonsAppearance() {
@@ -165,7 +188,6 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         addButton?.setImage(UIImage(systemName: addSymbol), for: .normal)
         addButton?.tintColor = (inTimetable || alsoPlanned) ? .systemGreen : .label
 
-        // ← ここを修正：id ではなく docID を使う
         let isFav: Bool = {
             guard let s = docID else { return false }
             return fav.contains(s)
@@ -228,7 +250,6 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             if let d = d { info["day"] = d }
             if let p = p { info["period"] = p }
 
-            // ここではリテラルで通知名を指定（重複拡張を避ける）
             NotificationCenter.default.post(
                 name: Notification.Name("RegisterCourseToTimetable"),
                 object: nil,
@@ -268,6 +289,8 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             webView.translatesAutoresizingMaskIntoConstraints = false
             let topAnchor: NSLayoutYAxisAnchor = {
                 if let stack = infoStack { return stack.bottomAnchor }
+                // infoStack が無い場合でも新ラベルの直下から開始できるようにする
+                if view.subviews.contains(roomInfoLabel) { return roomInfoLabel.bottomAnchor }
                 if let btnHost = addButton?.superview { return btnHost.bottomAnchor }
                 if let title = titleTextView { return title.bottomAnchor }
                 return view.safeAreaLayoutGuide.topAnchor
@@ -324,11 +347,19 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
                 self.creditLabel?.text = "\(cStr)単位"
             }
 
-             let code = (data["registration_number"] as? String)
-                 ?? (data["code"] as? String)
-                 ?? (data["class_code"] as? String)
-                 ?? (data["course_code"] as? String)
-             self.codeLabel?.text = (code?.isEmpty == false) ? code! : "-"
+            let code = (data["registration_number"] as? String)
+                ?? (data["code"] as? String)
+                ?? (data["class_code"] as? String)
+                ?? (data["course_code"] as? String)
+            let room = (data["room"] as? String) ?? self.initialRoom
+
+            self.updateCodeAndRoomLabels(code: code, room: room)
+
+            // TextField 側も未入力なら埋めて同期
+            if (self.roomTextField?.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+               let r = data["room"] as? String {
+                self.roomTextField?.text = r
+            }
 
             let urlStr = ((data["url"] as? String) ?? (data["syllabusURL"] as? String) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -467,4 +498,56 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     }
 
     private func updateTitleVerticalInset() {}
+
+    // MARK: - New helpers
+    private func attachRoomInfoLabelBelowCode() {
+        // infoStack があればその直後に差し込む
+        if let stack = infoStack {
+            if let code = codeLabel, let idx = stack.arrangedSubviews.firstIndex(of: code) {
+                stack.insertArrangedSubview(roomInfoLabel, at: idx + 1)
+            } else {
+                stack.addArrangedSubview(roomInfoLabel)
+            }
+            // 多少の縦の詰めを効かせる（必要ならStack側のspacingで微調整）
+            if stack.spacing < 4 { stack.spacing = 4 }
+        } else {
+            // infoStack が無い場合は手動で下に固定
+            guard let root = view else { return }
+            root.addSubview(roomInfoLabel)
+            if let code = codeLabel {
+                NSLayoutConstraint.activate([
+                    roomInfoLabel.topAnchor.constraint(equalTo: code.bottomAnchor, constant: 2),
+                    roomInfoLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
+                    roomInfoLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16)
+                ])
+            } else {
+                NSLayoutConstraint.activate([
+                    roomInfoLabel.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 8),
+                    roomInfoLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+                    roomInfoLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16)
+                ])
+            }
+        }
+    }
+
+    private func updateCodeAndRoomLabels(code: String?, room: String?) {
+        // 登録番号（1行・中央・見切れ防止）
+        let codeText = (code?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? code!.trimmingCharacters(in: .whitespacesAndNewlines) : "-"
+        codeLabel?.text = codeText
+
+        // 教室番号（空なら「-」／ラベルは常に表示）
+        let roomText = (room ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        roomInfoLabel.text = "教室番号：" + (roomText.isEmpty ? "-" : roomText)
+    }
+
+    @objc private func roomFieldChanged(_ tf: UITextField) {
+        // 取得済み or 初期値から登録番号を再構成
+        let code = (lastFetched["registration_number"] as? String)
+            ?? (lastFetched["code"] as? String)
+            ?? (lastFetched["class_code"] as? String)
+            ?? (lastFetched["course_code"] as? String)
+            ?? initialRegNumber
+        updateCodeAndRoomLabels(code: code, room: tf.text)
+    }
 }

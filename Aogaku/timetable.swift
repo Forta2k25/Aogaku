@@ -216,7 +216,8 @@ final class timetable: UIViewController,
     }
 
     
-
+    // 現在のハイライト（曜日・時限）を描画するかどうか
+    private var highlightEnabled = true
     // 表示専用フラグ & 閲覧対象UID
     private var overrideUID: String? = nil
     private var viewOnly: Bool = false
@@ -231,7 +232,7 @@ final class timetable: UIViewController,
     // ====== 行数の上限 ======
     private let titleMaxLines = 5
     private let subtitleMaxLines = 2
-    private let periodRowMinHeight: CGFloat = 120
+    private let periodRowMinHeight: CGFloat = 105
 
     // ===== Scroll root =====
     private let scrollView = UIScrollView()
@@ -1028,7 +1029,7 @@ final class timetable: UIViewController,
     }
 
     private func updateNowHighlight() {
-        // ベースをクリア
+        // まず全部クリア
         for l in dayHeaderViews {
             l.backgroundColor = .clear
             l.textColor = .label
@@ -1040,6 +1041,9 @@ final class timetable: UIViewController,
             v.layer.cornerRadius = 0
             v.clipsToBounds = false
         }
+
+        // ← 追加：撮影モードならここで終了（＝ハイライト無しのまま）
+        guard highlightEnabled else { return }
 
         let hiBG = UIColor.systemBlue.withAlphaComponent(headerHighlightAlpha)
 
@@ -1485,8 +1489,24 @@ final class timetable: UIViewController,
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
         return renderer.image { ctx in targetView.layer.render(in: ctx.cgContext) }
     }
+    // ハイライトを消した状態でグリッドを撮影し、直後に元へ戻す
+    private func makeTimetableImageNeutral() -> UIImage {
+        let prev = highlightEnabled
+        highlightEnabled = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        UIView.performWithoutAnimation {
+            self.updateNowHighlight()
+            self.gridContainerView.layoutIfNeeded()
+        }
+        let img = makeTimetableImage()
+        CATransaction.commit()
+        highlightEnabled = prev
+        UIView.performWithoutAnimation { self.updateNowHighlight() }
+        return img
+    }
     private func shareCurrentTimetable() {
-        let image = makeTimetableImage()
+        let image = makeTimetableImageNeutral()
         let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
         if let sheet = activityVC.sheetPresentationController {
             if #available(iOS 16.0, *) { sheet.detents = [.medium(), .large()]; sheet.selectedDetentIdentifier = .medium }
@@ -1497,7 +1517,7 @@ final class timetable: UIViewController,
         present(activityVC, animated: true)
     }
     private func saveCurrentTimetableToPhotos() {
-        let image = makeTimetableImage()
+        let image = makeTimetableImageNeutral()
         func finish(_ ok: Bool, _ error: Error?) {
             let title = ok ? "保存しました" : "保存に失敗しました"
             let msg   = ok ? "写真アプリに保存されました" : (error?.localizedDescription ?? "写真への保存権限をご確認ください")
@@ -1554,7 +1574,7 @@ final class TimetableCellContentView: UIView {
         ])
         titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         titleLabel.textAlignment = .center
-        titleLabel.numberOfLines = 3
+        titleLabel.numberOfLines = 4
         titleLabel.lineBreakMode = .byTruncatingTail
         roomLabel.font = .systemFont(ofSize: 11, weight: .medium)
         roomLabel.textAlignment = .center

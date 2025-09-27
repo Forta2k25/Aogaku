@@ -922,19 +922,19 @@
                                 </connections>
                             </button>
                             <stackView opaque="NO" contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="W2U-QM-ljW">
-                                <rect key="frame" x="10" y="168" width="141" height="20.333333333333343"/>
+                                <rect key="frame" x="10" y="168" width="127" height="20.333333333333343"/>
                                 <subviews>
                                     <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="登録番号：" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="g8c-hU-fxK">
-                                        <rect key="frame" x="0.0" y="0.0" width="93.666666666666671" height="20.333333333333332"/>
+                                        <rect key="frame" x="0.0" y="0.0" width="79.666666666666671" height="20.333333333333332"/>
                                         <constraints>
                                             <constraint firstAttribute="height" constant="20.329999999999998" id="NdH-Hn-5QS"/>
                                         </constraints>
-                                        <fontDescription key="fontDescription" type="system" weight="heavy" pointSize="20"/>
+                                        <fontDescription key="fontDescription" type="system" weight="heavy" pointSize="17"/>
                                         <nil key="textColor"/>
                                         <nil key="highlightedColor"/>
                                     </label>
                                     <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Code" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="LGB-L7-Oqm">
-                                        <rect key="frame" x="93.666666666666671" y="0.0" width="47.333333333333329" height="20.333333333333332"/>
+                                        <rect key="frame" x="79.666666666666671" y="0.0" width="47.333333333333329" height="20.333333333333332"/>
                                         <constraints>
                                             <constraint firstAttribute="height" constant="20.329999999999998" id="Ov5-AN-Fgw"/>
                                         </constraints>

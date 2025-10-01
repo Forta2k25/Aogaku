@@ -187,12 +187,60 @@ final class ClassDayCalendarViewController: UIViewController,
         ])
 
         // カレンダー直下ヒント（より近く）
-        hintLabel.text = "日付をタップすると分類が表示されます"
+        hintLabel.text = "タップすると授業の有無と第何週目かが表示されます"
         hintLabel.font = .systemFont(ofSize: 14, weight: .medium)
         hintLabel.textColor = .secondaryLabel
         hintLabel.textAlignment = .center
         view.addSubview(hintLabel)
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
+    }
+    
+    // MARK: - Week Counter (Autumn 2025)
+    private func autumnWeekNumber(for date: Date, campus: Campus) -> Int? {
+        // 後期の定義：開始 2025-09-19（金）／終了 2026-01-26（試験開始前日想定）
+        guard
+            let termStart = cal.date(from: DateComponents(timeZone: tz, year: 2025, month: 9, day: 19)),
+            let termEnd   = cal.date(from: DateComponents(timeZone: tz, year: 2026, month: 1, day: 26))
+        else { return nil }
+
+        // 後期範囲外は表示しない
+        if date < termStart || date > termEnd { return nil }
+
+        // 日曜はカウント対象外
+        let targetWeekday = cal.component(.weekday, from: date) // Sun=1 ... Sat=7
+        if targetWeekday == 1 { return nil }
+
+        // 開始日以降で「同じ曜日」の最初の出現日を求める
+        // （開始日が同曜日ならその日、違えば次の同曜日）
+        let firstHit = cal.nextDate(
+            after: termStart.addingTimeInterval(-1),
+            matching: DateComponents(weekday: targetWeekday),
+            matchingPolicy: .nextTime,
+            direction: .forward
+        ) ?? termStart
+
+        // 同曜日ごとに7日刻みで進め、classDay のみカウント
+        var count = 0
+        var cursor = firstHit
+        while cursor <= date {
+            if model.category(of: cursor, campus: campus) == .classDay {
+                count += 1
+            }
+            guard let next = cal.date(byAdding: .day, value: 7, to: cursor) else { break }
+            cursor = next
+        }
+
+        // まだ一度も授業が実施されていない曜日の日付（例：9/23(火)が休講のため）
+        // は「第0週目」にならないよう、非表示にする
+        return (count > 0) ? count : nil
+    }
+
+    private func autumnWeekSuffix(for date: Date) -> String {
+        if let n = autumnWeekNumber(for: date, campus: campus) {
+            return "【第\(n)週目】"
+        } else {
+            return ""
+        }
     }
 
     // MARK: - Bottom (Legend, Disclaimer, Ad)
@@ -509,10 +557,14 @@ final class ClassDayCalendarViewController: UIViewController,
             msg = "\(name)は" + msg   // 祝日名を文頭に
         }
 
-        let alert = UIAlertController(title: "\(df.string(from: date))", message: msg, preferredStyle: .alert)
+        // ← ここを拡張：後期の週番号サフィックスを付ける
+        let titleText = "\(df.string(from: date))\(autumnWeekSuffix(for: date))"
+
+        let alert = UIAlertController(title: titleText, message: msg, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
+
 
     // 指定の祝日（2025/4〜2026/3）：名前を返す
     private func holidayName(for date: Date) -> String? {

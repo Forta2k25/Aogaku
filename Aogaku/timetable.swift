@@ -245,6 +245,7 @@ final class timetable: UIViewController,
     private var didLoadBannerOnce = false
     private var adContainerHeight: NSLayoutConstraint?
     private var scrollBottomConstraint: NSLayoutConstraint?
+    private var centerMinWidth: NSLayoutConstraint?
 
     // ===== Header =====
     private let headerBar = UIStackView()
@@ -616,7 +617,11 @@ final class timetable: UIViewController,
         // ← 追加：実寸に合わせて“完璧なカプセル”
         leftButton.layer.cornerCurve = .continuous
         leftButton.layer.cornerRadius = leftButton.bounds.height / 2
-
+        
+        let need = ceil(leftButton.intrinsicContentSize.width) + 8
+        if centerMinWidth?.constant != need {
+            centerMinWidth?.constant = need
+        }
         loadBannerIfNeeded()
     }
 
@@ -778,7 +783,7 @@ final class timetable: UIViewController,
         leftControls.axis = .horizontal
         leftControls.alignment = .center
         leftControls.spacing = 4
-        leftControls.setCustomSpacing(4, after: rightA)
+        leftControls.setCustomSpacing(10, after: rightA)
         leftControls.translatesAutoresizingMaskIntoConstraints = false
 
         // 共通ボタンスタイル（薄いフラット）
@@ -794,8 +799,8 @@ final class timetable: UIViewController,
             b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
 
-        configureFlat(rightA, title: "単", titleSize: 21, hPad: 12) // 単位
-        configureFlat(tasksButton, title: "課", titleSize: 21, hPad: 12) // 課題
+        configureFlat(rightA, title: "単", titleSize: 19, hPad: 14) // 単位
+        configureFlat(tasksButton, title: "課", titleSize: 19, hPad: 14) // 課題
         rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
         tasksButton.addTarget(self, action: #selector(tapTasks), for: .touchUpInside)
 
@@ -820,6 +825,24 @@ final class timetable: UIViewController,
         leftButton.semanticContentAttribute = .forceRightToLeft
         leftButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: 6, bottom: 0, right: -6)
         leftButton.addTarget(self, action: #selector(tapLeft), for: .touchUpInside)
+        
+        // 学期ボタンの表示文字に基づいて、中央領域の最低幅を確保
+        centerMinWidth?.isActive = false
+        let need = ceil(leftButton.intrinsicContentSize.width) + 8   // 文字幅 + ちょい余白
+        centerMinWidth = centerBox.widthAnchor.constraint(greaterThanOrEqualToConstant: need)
+        centerMinWidth?.priority = .defaultHigh  // 1000(Required)ではなく750にして他とバランス
+        centerMinWidth?.isActive = true
+        
+        // 左右グループは「必要なら先に縮む」ように弱める
+        [leftControls, rightStack].forEach {
+            $0.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            $0.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
+
+        // 中央（学期ボタン）は「できるだけ縮まない」
+        leftButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        leftButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        leftButton.titleLabel?.lineBreakMode = .byTruncatingTail // 念のため維持
 
         // centerBox の中央に固定（UIStackViewの「外側」に重ねる）
         centerBox.translatesAutoresizingMaskIntoConstraints = false
@@ -829,8 +852,13 @@ final class timetable: UIViewController,
         NSLayoutConstraint.activate([
             centerBox.centerXAnchor.constraint(equalTo: headerBar.centerXAnchor),
             centerBox.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor, constant: -5),
-            leftButton.centerXAnchor.constraint(equalTo: centerBox.centerXAnchor),
-            leftButton.centerYAnchor.constraint(equalTo: centerBox.centerYAnchor)
+
+            // （削除）leftButton.centerX/centerY == centerBox.centerX/centerY
+            // 代わりに 4 辺を centerBox に張り付けて、centerBox の当たり判定サイズを作る
+            leftButton.leadingAnchor.constraint(equalTo: centerBox.leadingAnchor),
+            leftButton.trailingAnchor.constraint(equalTo: centerBox.trailingAnchor),
+            leftButton.topAnchor.constraint(equalTo: centerBox.topAnchor),
+            leftButton.bottomAnchor.constraint(equalTo: centerBox.bottomAnchor)
         ])
 
         // --- 右：共有 / 設定 ---
@@ -867,6 +895,15 @@ final class timetable: UIViewController,
         // titleLabel は使わない（= 追加しない）
         headerBar.addArrangedSubview(spacerR)
         headerBar.addArrangedSubview(rightStack)
+        
+        // スペーサーはタップを拾わないようにする
+        spacerL.isUserInteractionEnabled = false
+        spacerR.isUserInteractionEnabled = false
+
+        // 学期ボタンの箱を最前面へ（万一の重なり防止）
+        headerBar.bringSubviewToFront(centerBox)
+        centerBox.isUserInteractionEnabled = true // 明示（デフォルトtrueだが安全のため）
+
 
         headerBar.isLayoutMarginsRelativeArrangement = true
         headerBar.layoutMargins = UIEdgeInsets(top: 0, left: 0, bottom: 8, right: 8)

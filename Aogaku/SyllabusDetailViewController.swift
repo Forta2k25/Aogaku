@@ -56,6 +56,9 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         return l
     }()
 
+    // MARK: - Add flow guard（二重アラート/二重起動防止）
+    private var isAddFlowBusy = false
+
     // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -199,20 +202,49 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         UIView.performWithoutAnimation { self.view.layoutIfNeeded() }
     }
 
+    // MARK: - Add flow（＋押下時の共通フロー）
+    private func startAddFlow() {
+        // 多重起動防止
+        guard !isAddFlowBusy else { return }
+        isAddFlowBusy = true
+
+        // まだ詳細未取得なら取得してから続行
+        if lastFetched.isEmpty, let id = docID {
+            fetchDetail(docID: id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.continueAddFlow()
+            }
+        } else {
+            continueAddFlow()
+        }
+    }
+
+    private func continueAddFlow() {
+        let (payload, dOpt, pOpt) = buildPayload(from: lastFetched)
+
+        // 曜日 or 時限が未確定なら選択シートを出す
+        if let d = dOpt, let p = pOpt {
+            presentAddConfirmAndPost(payload: payload, day: d, period: p)
+        } else {
+            presentDayPeriodPicker(
+                defaultDay: targetDay ?? 0,     // 月(0)で初期表示
+                defaultPeriod: targetPeriod ?? 1 // 1限で初期表示
+            ) { [weak self] day, period in
+                guard let self = self else { return }
+                self.targetDay = day
+                self.targetPeriod = period
+                self.presentAddConfirmAndPost(payload: payload, day: day, period: period)
+            }
+        }
+    }
+
     // 右上の「＋」をStoryboardで繋いでいる場合はこちらを使う
     @IBAction func tapRegisterButton(_ sender: Any) {
-        presentAddConfirmAndPost()
+        startAddFlow()
     }
 
     @IBAction func didTapAdd(_ sender: Any) {
-        if lastFetched.isEmpty, let id = docID {
-            fetchDetail(docID: id)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.presentAddConfirmAndPost()
-            }
-        } else {
-            presentAddConfirmAndPost()
-        }
+        startAddFlow()
     }
 
     @IBAction func didTapBookmark(_ sender: Any) {
@@ -224,40 +256,174 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
-    private func presentAddConfirmAndPost() {
-        let (payload, d, p) = buildPayload(from: lastFetched)
-
+    private func presentAddConfirmAndPost(payload: [String: Any], day: Int, period: Int) {
         let name = (payload["class_name"] as? String) ?? "この授業"
-        let dayText: String = {
-            if let d = d, (0...5).contains(d) { return ["月","火","水","木","金","土"][d] }
-            return "（曜日不明）"
-        }()
-        let periodText: String = p != nil ? "\(p!)限" : "（時限不明）"
+        let dayText = ["月","火","水","木","金","土"][max(0, min(day, 5))]
+        let periodText = "\(period)限"
 
-        let ac = UIAlertController(title: "登録しますか？",
-                                   message: "\(dayText) \(periodText) に\n「\(name)」を\n登録します。",
-                                   preferredStyle: .alert)
-        ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        let ac = UIAlertController(
+            title: "登録しますか？",
+            message: "\(dayText) \(periodText) に\n「\(name)」を\n登録します。",
+            preferredStyle: .alert
+        )
+        ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel, handler: { [weak self] _ in
+            self?.isAddFlowBusy = false
+        }))
         ac.addAction(UIAlertAction(title: "登録", style: .default, handler: { [weak self] _ in
             guard let self = self, let id = self.docID, !id.isEmpty else { return }
+
+            // planned のトグル（既存仕様を踏襲）
             var set = Set(UserDefaults.standard.stringArray(forKey: self.plannedKey) ?? [])
             if set.contains(id) { set.remove(id) } else { set.insert(id) }
             UserDefaults.standard.set(Array(set), forKey: self.plannedKey)
+
             self.refreshButtons()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-            var info: [String: Any] = ["course": payload, "docID": id]
-            if let d = d { info["day"] = d }
-            if let p = p { info["period"] = p }
-
+            var info: [String: Any] = ["course": payload, "docID": id, "day": day, "period": period]
             NotificationCenter.default.post(
                 name: Notification.Name("RegisterCourseToTimetable"),
                 object: nil,
                 userInfo: info
             )
-            print("➡️ payload:", payload)
+            print("➡️ payload:", payload, " day:", day, " period:", period)
+            self.isAddFlowBusy = false
         }))
-        present(ac, animated: true)
+
+        // 何かが前面にいるならそこから出す（ピッカー閉鎖後でも安全）
+        DispatchQueue.main.async {
+            let host = self.presentedViewController ?? self
+            host.present(ac, animated: true)
+        }
+    }
+
+    // MARK: - 曜日・時限ピッカー
+    private func presentDayPeriodPicker(
+        defaultDay: Int = 0,
+        defaultPeriod: Int = 1,
+        onDone: @escaping (_ day: Int, _ period: Int) -> Void
+    ) {
+        let vc = DayPeriodPickerVC()
+        vc.modalPresentationStyle = .pageSheet
+        vc.selectedDay = max(0, min(defaultDay, 5))
+        vc.selectedPeriod = max(1, min(defaultPeriod, 7))
+        vc.onDone = onDone
+        vc.onCancel = { [weak self] in self?.isAddFlowBusy = false } // ← キャンセル時も解除
+
+        if let sheet = vc.sheetPresentationController {
+            // タイトル(~44) + 間隔8 + ピッカー216 + 下余白4 + (提示VCの)セーフエリア下
+            let customID = UISheetPresentationController.Detent.Identifier("fit")
+            sheet.detents = [
+                .custom(identifier: customID) { [weak vc] _ in
+                    let headerHeight: CGFloat = 44
+                    let spacing: CGFloat = 8
+                    let pickerHeight: CGFloat = 216
+                    let bottomPadding: CGFloat = 4
+                    let bottomInset = vc?.view.safeAreaInsets.bottom ?? 0
+                    return headerHeight + spacing + pickerHeight + bottomPadding + bottomInset
+                }
+            ]
+            sheet.selectedDetentIdentifier = customID
+            sheet.prefersGrabberVisible = true
+            sheet.prefersScrollingExpandsWhenScrolledToEdge = false
+            sheet.largestUndimmedDetentIdentifier = customID
+        }
+        present(vc, animated: true)
+    }
+
+    // ピッカーVC本体
+    fileprivate final class DayPeriodPickerVC: UIViewController, UIPickerViewDataSource, UIPickerViewDelegate {
+        private let days = ["月","火","水","木","金","土"]
+        private let periods = Array(1...7)
+
+        var selectedDay: Int = 0
+        var selectedPeriod: Int = 1
+        var onDone:   ((_ day: Int, _ period: Int) -> Void)?
+        var onCancel: (() -> Void)?
+
+        private let picker = UIPickerView()
+        private let titleLabel: UILabel = {
+            let l = UILabel()
+            l.text = "曜日と時限を選択"
+            l.textAlignment = .center
+            l.font = .boldSystemFont(ofSize: 18)
+            return l
+        }()
+        private let cancelButton: UIButton = {
+            let b = UIButton(type: .system)
+            b.setTitle("キャンセル", for: .normal)
+            return b
+        }()
+        private let doneButton: UIButton = {
+            let b = UIButton(type: .system)
+            b.setTitle("決定", for: .normal)
+            b.titleLabel?.font = .boldSystemFont(ofSize: 17)
+            return b
+        }()
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .systemBackground
+
+            // ヘッダー
+            let header = UIStackView(arrangedSubviews: [cancelButton, titleLabel, doneButton])
+            header.axis = .horizontal
+            header.alignment = .center
+            header.distribution = .equalCentering
+
+            // ピッカー設定（0列=曜日, 1列=時限）
+            picker.dataSource = self
+            picker.delegate = self
+
+            let container = UIStackView(arrangedSubviews: [header, picker])
+            container.axis = .vertical
+            container.spacing = 8
+            container.translatesAutoresizingMaskIntoConstraints = false
+
+            view.addSubview(container)
+            // —— 下詰め：下端はsafeAreaにピッタリ／上側は≧制約で余白を吸収
+            NSLayoutConstraint.activate([
+                container.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+                container.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+                container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4),
+                picker.heightAnchor.constraint(equalToConstant: 216)
+            ])
+            let topGE = container.topAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 12)
+            topGE.priority = .defaultLow
+            topGE.isActive = true
+            container.setContentHuggingPriority(.required, for: .vertical)
+
+            // 初期選択
+            picker.selectRow(max(0, min(selectedDay, 5)), inComponent: 0, animated: false)
+            let pIndex = max(0, min(selectedPeriod - 1, periods.count - 1))
+            picker.selectRow(pIndex, inComponent: 1, animated: false)
+
+            // ボタン
+            cancelButton.addAction(UIAction { [weak self] _ in
+                guard let self = self else { return }
+                let cb = self.onCancel
+                self.dismiss(animated: true) { cb?() }
+            }, for: .touchUpInside)
+
+            doneButton.addAction(UIAction { [weak self] _ in
+                guard let self = self else { return }
+                let day = self.picker.selectedRow(inComponent: 0)              // 0...5
+                let period = self.periods[self.picker.selectedRow(inComponent: 1)] // 1...7
+                // 先に閉じてから onDone（= 確認アラート表示）
+                self.dismiss(animated: true) { [weak self] in
+                    self?.onDone?(day, period)
+                }
+            }, for: .touchUpInside)
+        }
+
+        // MARK: UIPickerViewDataSource/Delegate
+        func numberOfComponents(in pickerView: UIPickerView) -> Int { 2 }
+        func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
+            return (component == 0) ? days.count : periods.count
+        }
+        func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
+            return (component == 0) ? days[row] : "\(periods[row])限"
+        }
     }
 
     // MARK: - WebView

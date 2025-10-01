@@ -799,8 +799,8 @@ final class timetable: UIViewController,
             b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
 
-        configureFlat(rightA, title: "単", titleSize: 19, hPad: 14) // 単位
-        configureFlat(tasksButton, title: "課", titleSize: 19, hPad: 14) // 課題
+        configureFlat(rightA, title: "単", titleSize: 18, hPad: 14) // 単位
+        configureFlat(tasksButton, title: "課", titleSize: 18, hPad: 14) // 課題
         rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
         tasksButton.addTarget(self, action: #selector(tapTasks), for: .touchUpInside)
 

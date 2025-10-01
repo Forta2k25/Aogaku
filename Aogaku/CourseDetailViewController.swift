@@ -78,6 +78,10 @@ final class CourseDetailViewController: UIViewController {
     private let deleteButton = UIButton(type: .system)
     private let bottomBarHeight: CGFloat = 50
     
+    // 「コマの色を変更」の横に置くボタン
+    private let memoButton = UIButton(type: .system)
+
+    
     //色変更
     private let colorToggle = UIButton(type: .system)
     private let colorRow = UIStackView()
@@ -393,8 +397,29 @@ final class CourseDetailViewController: UIViewController {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        //actionsRow.addArrangedSubview(spacer)
+        
+        // 「メモ・課題を追加」ボタン（色ボタンと同じサイズ感）
+        var memoCfg = UIButton.Configuration.plain()
+        memoCfg.title = "メモ・課題を追加"
+        memoCfg.image = UIImage(systemName: "square.and.pencil")
+        memoCfg.imagePlacement = .leading
+        memoCfg.imagePadding = 6
+        memoCfg.contentInsets = .init(top: 4, leading: 10, bottom: 4, trailing: 10)
+        memoButton.configuration = memoCfg
+        memoButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        memoButton.backgroundColor = .secondarySystemBackground
+        memoButton.layer.cornerRadius = 12
+        memoButton.layer.masksToBounds = true
+        memoButton.setContentHuggingPriority(.required, for: .horizontal)
+        memoButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        memoButton.addTarget(self, action: #selector(openMemoTasks), for: .touchUpInside)
+
+        actionsRow.spacing = 8
         actionsRow.addArrangedSubview(spacer)
-        actionsRow.addArrangedSubview(colorToggle)
+        actionsRow.addArrangedSubview(memoButton)   // ← 追加
+        actionsRow.addArrangedSubview(colorToggle)  // ← 既存
+
 
         // stack のいちばん上に差し込む（緑ヘッダーの直下）
         stack.insertArrangedSubview(actionsRow, at: 0)
@@ -453,6 +478,25 @@ final class CourseDetailViewController: UIViewController {
             if !self.isColorRowOpen { self.colorRow.isHidden = true }
         })
     }
+    
+    @objc private func openMemoTasks() {
+        let vc = MemoTaskViewController(
+            courseId: "\(course.id)",     // 文字列化してキーに使う
+            courseTitle: course.title
+        )
+        // Navigation が無ければラップしてモーダル表示
+        if let nav = self.navigationController {
+            nav.pushViewController(vc, animated: true)
+        } else {
+            let nav = UINavigationController(rootViewController: vc)
+            if let sheet = nav.sheetPresentationController {
+                sheet.prefersGrabberVisible = true
+                if #available(iOS 16.0, *) { sheet.selectedDetentIdentifier = .large }
+            }
+            present(nav, animated: true)
+        }
+    }
+
 
     
     @objc private func editRoomTapped() { // [ADDED]

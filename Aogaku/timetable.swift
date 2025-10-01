@@ -248,12 +248,15 @@ final class timetable: UIViewController,
 
     // ===== Header =====
     private let headerBar = UIStackView()
-    private let leftButton = UIButton(type: .system)
-    private let titleLabel = UILabel()
+    private let leftControls = UIStackView()          // ← 追加：左側（単 / 課）
+    private let leftButton = UIButton(type: .system)  // 学期選択（中央に置く）
+    private let centerBox = UIView()                  // ← 追加：学期ボタンを中央配置する箱
+    private let titleLabel = UILabel()                // （使わない：追加しない）
     private let rightStack = UIStackView()
-    private let rightA = UIButton(type: .system)  // 単
-    private let rightB = UIButton(type: .system)  // 共有/保存
-    private let rightC = UIButton(type: .system)  // 設定
+    private let rightA = UIButton(type: .system)      // 単
+    private let tasksButton = UIButton(type: .system) // ← 追加：「課」
+    private let rightB = UIButton(type: .system)      // 共有/保存
+    private let rightC = UIButton(type: .system)      // 設定
     private var headerTopConstraint: NSLayoutConstraint!
 
     // ===== Grid =====
@@ -744,6 +747,24 @@ final class timetable: UIViewController,
     }
 
     // MARK: - Header
+    
+    @objc private func tapTasks() {
+        // timetable 上で把握している「id -> 授業名」マップを作成
+        var courseTitleById: [String: String] = [:]
+        for c in assigned.compactMap({ $0 }) {
+            if !c.id.isEmpty { courseTitleById[c.id] = c.title }
+        }
+        let vc = AssignmentListViewController(courseTitleById: courseTitleById)
+
+        if let nav = navigationController {
+            nav.pushViewController(vc, animated: true)
+        } else {
+            let nav = UINavigationController(rootViewController: vc)
+            nav.modalPresentationStyle = .fullScreen
+            present(nav, animated: true)
+        }
+    }
+
     private func buildHeader() {
         // Header container
         headerBar.axis = .horizontal
@@ -753,126 +774,107 @@ final class timetable: UIViewController,
         headerBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(headerBar)
 
-        
+        // --- 左：単 / 課 ---
+        leftControls.axis = .horizontal
+        leftControls.alignment = .center
+        leftControls.spacing = 4
+        leftControls.setCustomSpacing(4, after: rightA)
+        leftControls.translatesAutoresizingMaskIntoConstraints = false
+
+        // 共通ボタンスタイル（薄いフラット）
+        func configureFlat(_ b: UIButton, title: String,
+                           titleSize: CGFloat = 14, hPad: CGFloat = 12) {
+            var cfg = UIButton.Configuration.plain()
+            cfg.baseForegroundColor = UIColor.secondaryLabel
+            cfg.contentInsets = .init(top: 6, leading: hPad, bottom: 6, trailing: hPad)
+            cfg.cornerStyle = .capsule
+            cfg.attributedTitle = AttributedString(title,
+                attributes: .init([.font: UIFont.systemFont(ofSize: titleSize, weight: .semibold)]))
+            b.configuration = cfg
+            b.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        }
+
+        configureFlat(rightA, title: "単", titleSize: 21, hPad: 12) // 単位
+        configureFlat(tasksButton, title: "課", titleSize: 21, hPad: 12) // 課題
+        rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
+        tasksButton.addTarget(self, action: #selector(tapTasks), for: .touchUpInside)
+
+        leftControls.addArrangedSubview(rightA)
+        leftControls.addArrangedSubview(tasksButton)
+
+        // --- 中央：学期選択ボタン（leftButton） ---
         leftButton.configuration = nil
         leftButton.backgroundColor = .secondarySystemBackground
-        leftButton.layer.cornerCurve = .continuous          // ← 角のエッジを滑らかに
-        leftButton.layer.cornerRadius = 14                  // ← 仮の値。後で実サイズに合わせて更新
+        leftButton.layer.cornerCurve = .continuous
+        leftButton.layer.cornerRadius = 14
         leftButton.layer.masksToBounds = true
         leftButton.layer.borderColor = UIColor.separator.cgColor
         leftButton.layer.borderWidth = 1
-        leftButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12) // 左右対称
-        leftButton.heightAnchor.constraint(equalToConstant: 28).isActive = true              // 高さ固定で“カプセル”
-
+        leftButton.contentEdgeInsets = UIEdgeInsets(top: 7, left: 14, bottom: 6, right: 14)
+        leftButton.heightAnchor.constraint(equalToConstant: 32).isActive = true
         leftButton.setTitle(currentTerm.displayTitle, for: .normal)
         leftButton.setTitleColor(.label, for: .normal)
-        leftButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .regular)
-        leftButton.titleLabel?.numberOfLines = 1                       // ★ 常に1行
-        leftButton.titleLabel?.lineBreakMode = .byTruncatingTail       // 収まらなければ末尾省略
-        leftButton.titleLabel?.adjustsFontSizeToFitWidth = true        // まずは縮小して収める
-        leftButton.titleLabel?.minimumScaleFactor = 0.85
-        leftButton.titleLabel?.allowsDefaultTighteningForTruncation = true
-
+        leftButton.titleLabel?.font = .systemFont(ofSize: 15)
         leftButton.setImage(UIImage(systemName: "chevron.up.chevron.down"), for: .normal)
         leftButton.tintColor = .label
-        leftButton.semanticContentAttribute = .forceRightToLeft        // 画像を右側へ
+        leftButton.semanticContentAttribute = .forceRightToLeft
         leftButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: 6, bottom: 0, right: -6)
-
-        leftButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        leftButton.setContentHuggingPriority(.required, for: .horizontal)
         leftButton.addTarget(self, action: #selector(tapLeft), for: .touchUpInside)
 
-        
+        // centerBox の中央に固定（UIStackViewの「外側」に重ねる）
+        centerBox.translatesAutoresizingMaskIntoConstraints = false
+        headerBar.addSubview(centerBox)
+        centerBox.addSubview(leftButton)
+        leftButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            centerBox.centerXAnchor.constraint(equalTo: headerBar.centerXAnchor),
+            centerBox.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor, constant: -5),
+            leftButton.centerXAnchor.constraint(equalTo: centerBox.centerXAnchor),
+            leftButton.centerYAnchor.constraint(equalTo: centerBox.centerYAnchor)
+        ])
 
-        // タイトル
-        titleLabel.text = "時間割"
-        titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
-        titleLabel.textAlignment = .center
-        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        // 右側スタック
+        // --- 右：共有 / 設定 ---
         rightStack.axis = .horizontal
         rightStack.alignment = .center
-        rightStack.spacing = 8
+        rightStack.spacing = 20
         rightStack.translatesAutoresizingMaskIntoConstraints = false
-        rightStack.setContentHuggingPriority(.required, for: .horizontal)
 
-        // === ここから置換 ===
-        // 置換版：背景は透明のまま、必要なら横だけ広げられる
-        func configureRightButton(_ b: UIButton,
-                                  image systemName: String? = nil,
-                                  title: String? = nil,
-                                  titleFontSize: CGFloat = 14,
-                                  horizontalPadding: CGFloat = 12) {
+        func configureIcon(_ b: UIButton, systemName: String) {
             var cfg = UIButton.Configuration.plain()
-            cfg.baseForegroundColor = UIColor(red: 129/255.0, green: 129/255.0, blue: 129/255.0, alpha: 1.0)
-            cfg.contentInsets = .init(top: 6, leading: horizontalPadding, bottom: 6, trailing: horizontalPadding)
-            cfg.cornerStyle = .capsule // 見た目はフラットだけど当たり判定を少し厚めに
-
-            if let t = title {
-                cfg.attributedTitle = AttributedString(t, attributes: AttributeContainer([
-                    .font : UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
-                ]))
-            }
-            if let name = systemName {
-                cfg.image = UIImage(systemName: name)
-                cfg.preferredSymbolConfigurationForImage =
-                    UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
-                cfg.imagePlacement = .leading
-                cfg.imagePadding = 0
-            }
+            cfg.baseForegroundColor = UIColor.secondaryLabel
+            cfg.image = UIImage(systemName: systemName)
+            cfg.preferredSymbolConfigurationForImage =
+                UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+            cfg.cornerStyle = .capsule
+            cfg.contentInsets = .init(top: 6, leading: 12, bottom: 6, trailing: 12)
             b.configuration = cfg
+            b.heightAnchor.constraint(equalToConstant: 35).isActive = true
         }
-
-        // 「単」だけフォント大きめ＋横パディング広め（→ 左の見切れ解消）
-        configureRightButton(rightA, title: "単", titleFontSize: 19, horizontalPadding: 40)
-        // 他2つは従来どおり
-        configureRightButton(rightB, image: "square.and.arrow.up", horizontalPadding: 12)
-        configureRightButton(rightC, image: "gearshape", horizontalPadding: 12)
-        
-        // 動作
-        rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
+        configureIcon(rightB, systemName: "square.and.arrow.up")
+        configureIcon(rightC, systemName: "gearshape")
         rightB.addTarget(self, action: #selector(tapRightB), for: .touchUpInside)
         rightC.addTarget(self, action: #selector(tapRightC), for: .touchUpInside)
 
-        // 右側スタックに追加
-        rightStack.addArrangedSubview(rightA)
         rightStack.addArrangedSubview(rightB)
         rightStack.addArrangedSubview(rightC)
 
-        // ヘッダーに配置
+        // スペーサを入れて左右に寄せる
         let spacerL = UIView(); spacerL.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let spacerR = UIView(); spacerR.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        headerBar.addArrangedSubview(leftButton)
+
+        headerBar.addArrangedSubview(leftControls)
         headerBar.addArrangedSubview(spacerL)
-        headerBar.addArrangedSubview(titleLabel)
+        // titleLabel は使わない（= 追加しない）
         headerBar.addArrangedSubview(spacerR)
         headerBar.addArrangedSubview(rightStack)
 
-        [leftButton, titleLabel, rightStack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
         headerBar.isLayoutMarginsRelativeArrangement = true
-        headerBar.layoutMargins = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
-        headerBar.setContentHuggingPriority(.required, for: .vertical)
-        headerBar.setContentCompressionResistancePriority(.required, for: .vertical)
-        let clamp = headerBar.heightAnchor.constraint(equalTo: titleLabel.heightAnchor, constant: 16)
-        clamp.priority = .required; clamp.isActive = true
+        headerBar.layoutMargins = UIEdgeInsets(top: 0, left: 0, bottom: 8, right: 8)
 
+        let gapToCenter: CGFloat = 12  // お好みで 8〜16
         NSLayoutConstraint.activate([
-            leftButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            rightStack.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor)
-        ])
-        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        titleLabel.centerXAnchor.constraint(equalTo: headerBar.centerXAnchor).isActive = true
-
-        // 右上3ボタンのサイズをそろえる
-        let buttonHeight: CGFloat = 32
-        [rightA, rightB, rightC].forEach {
-            $0.translatesAutoresizingMaskIntoConstraints = false
-            $0.heightAnchor.constraint(equalToConstant: buttonHeight).isActive = true
-        }
-        NSLayoutConstraint.activate([
-            rightA.widthAnchor.constraint(equalTo: rightB.widthAnchor),
-            rightC.widthAnchor.constraint(equalTo: rightB.widthAnchor)
+            leftControls.trailingAnchor.constraint(lessThanOrEqualTo: centerBox.leadingAnchor, constant: -gapToCenter),
+            rightStack.leadingAnchor.constraint(greaterThanOrEqualTo: centerBox.trailingAnchor, constant: gapToCenter)
         ])
 
         // 位置制約
@@ -880,11 +882,12 @@ final class timetable: UIViewController,
         headerTopConstraint = headerBar.topAnchor.constraint(equalTo: g.topAnchor, constant: 0)
         NSLayoutConstraint.activate([
             headerTopConstraint,
-            headerBar.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 16),
-            headerBar.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
+            headerBar.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 20),
+            headerBar.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -20),
             headerBar.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
         ])
     }
+
 
     // MARK: - Grid container（縦スクロール）
     private func layoutGridContainer() {

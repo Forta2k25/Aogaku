@@ -20,35 +20,40 @@ struct SlotContext: Equatable {
     static func global() -> SlotContext { .init(year: 0, termCode: "all", weekday: 0, period: 0) }
 }
 
-
 fileprivate struct TaskItem: Codable {
     var title: String
     var due: Date?
     var done: Bool
-    // 追加: 通知IDとカレンダーイベントID（後で削除・更新に使う）
     var notificationIds: [String]?   // UNNotificationRequest identifiers
     var calendarEventId: String?     // EKEvent.eventIdentifier
 }
 
+// MARK: - メモ／課題 画面
 final class MemoTaskViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
 
     // MARK: Inputs
     private let courseId: String
     private let courseTitle: String
-    private let slot: SlotContext    // ← 追加
+    private let slot: SlotContext
 
-    // MARK: Storage Keys
-    private var storageScope: String { "\(courseId)_\(slot.keySuffix)" } // ← 追加
-    private var memoKey: String  { "memo.\(storageScope)" }              // ← 変更
-    private var tasksKey: String { "tasks.\(storageScope)" }             // ← 変更
+    // MARK: Storage Keys（この授業×このコマ毎に分離）
+    private var storageScope: String { "\(courseId)_\(slot.keySuffix)" }
+    private var memoKey: String  { "memo.\(storageScope)" }
+    private var tasksKey: String { "tasks.\(storageScope)" }
 
     // MARK: UI
     private let scroll = UIScrollView()
     private let stack  = UIStackView()
+    private let taskHeaderLabel = UILabel()   // ← 追加：「課題」見出し
     private let memoLabel = UILabel()
     private let memoView  = UITextView()
     private let addTaskButton = UIButton(type: .system)
     private let table = UITableView(frame: .zero, style: .insetGrouped)
+    private var tableHeightConstraint: NSLayoutConstraint?
+
+    // 空状態（重なり防止のため上寄せでレイアウト）
+    private let emptyBGContainer = UIView()
+    private let emptyLabel = UILabel()
 
     // MARK: Model
     private var tasks: [TaskItem] = []
@@ -63,18 +68,18 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         self.slot = slot
         super.init(nibName: nil, bundle: nil)
     }
-    // 互換用（古い呼び出しが残っていても動くが、スコープ分離はされません）
+    // 互換用（スコープ分離はされない）
     convenience init(courseId: String, courseTitle: String) {
         self.init(courseId: courseId, courseTitle: courseTitle, slot: .global())
     }
-
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     // MARK: Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        title = "メモ・課題"
+        // 上部タイトルに授業名を表示
+        title = "（\(courseTitle)）"
 
         // モーダル始まりなら閉じるボタン
         if presentingViewController != nil && navigationController?.viewControllers.first === self {
@@ -91,6 +96,23 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         saveMemo() // 自動保存
+    }
+
+    // フッター＆空状態の再レイアウト
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if let footer = table.tableFooterView {
+            let targetW = table.bounds.width
+            footer.frame.size.width = targetW
+            footer.setNeedsLayout()
+            footer.layoutIfNeeded()
+            let h = footer.systemLayoutSizeFitting(CGSize(width: targetW, height: 0)).height
+            if abs(footer.frame.height - h) > 0.5 {
+                footer.frame.size.height = h
+                table.tableFooterView = footer
+            }
+        }
+        layoutEmptyStateIfNeeded()
     }
 
     // MARK: UI Build
@@ -115,12 +137,28 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -16),
         ])
 
-        // メモラベル
-        memoLabel.text = "メモ（\(courseTitle)）"
+        // ▼ 「課題」見出し（メモと同様にBold）
+        taskHeaderLabel.text = "課題"
+        taskHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        stack.addArrangedSubview(taskHeaderLabel)
+
+        // ▼ 課題テーブル
+        table.dataSource = self
+        table.delegate = self
+        table.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+        table.isScrollEnabled = false
+        table.layer.cornerRadius = 12
+        stack.addArrangedSubview(table)
+        let h = table.heightAnchor.constraint(greaterThanOrEqualToConstant: 120)
+        h.isActive = true
+        tableHeightConstraint = h
+        applyAddButtonFooter() // ← フッター内に「課題を追加」
+
+        // ▼ メモ（見出しの括弧付き授業名は削除）
+        memoLabel.text = "メモ"
         memoLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         stack.addArrangedSubview(memoLabel)
 
-        // メモ
         memoView.font = .systemFont(ofSize: 16)
         memoView.backgroundColor = .secondarySystemBackground
         memoView.layer.cornerRadius = 12
@@ -129,37 +167,64 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         stack.addArrangedSubview(memoView)
         memoView.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
 
-        // 「課題を追加」ボタン
-        var addCfg = UIButton.Configuration.filled()
-        addCfg.title = "課題を追加"
-        addCfg.cornerStyle = .large
-        addCfg.contentInsets = .init(top: 10, leading: 14, bottom: 10, trailing: 14)
-        addTaskButton.configuration = addCfg
-        addTaskButton.addTarget(self, action: #selector(addTaskTapped), for: .touchUpInside)
-        stack.addArrangedSubview(addTaskButton)
+        addDoneButtonToMemoKeyboard()
+    }
 
-        // 課題テーブル
-        table.dataSource = self
-        table.delegate = self
-        table.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-        table.isScrollEnabled = false
-        table.layer.cornerRadius = 12
-        stack.addArrangedSubview(table)
-        table.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+    // メモ用キーボードアクセサリ（完了）
+    private func addDoneButtonToMemoKeyboard() {
+        let tb = UIToolbar()
+        tb.sizeToFit()
+        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+        let done = UIBarButtonItem(title: "完了", style: .done, target: self, action: #selector(dismissMemoKeyboard))
+        tb.items = [flex, done]
+        memoView.inputAccessoryView = tb
+    }
+    @objc private func dismissMemoKeyboard() {
+        memoView.resignFirstResponder()
+        saveMemo()
+    }
+
+    // テーブルのフッターに「課題を追加」ボタンを設置
+    private func applyAddButtonFooter() {
+        let container = UIView()
+        container.backgroundColor = .clear
+
+        var cfg = UIButton.Configuration.filled()
+        cfg.title = "課題を追加"
+        cfg.cornerStyle = .large
+        cfg.contentInsets = .init(top: 10, leading: 14, bottom: 10, trailing: 14)
+        addTaskButton.configuration = cfg
+        addTaskButton.removeTarget(nil, action: nil, for: .allEvents)
+        addTaskButton.addTarget(self, action: #selector(addTaskTapped), for: .touchUpInside)
+
+        container.addSubview(addTaskButton)
+        addTaskButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            addTaskButton.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            addTaskButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            addTaskButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            addTaskButton.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+            addTaskButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        ])
+
+        // 初期サイズ（viewDidLayoutSubviewsで高さを追従させる）
+        container.frame = CGRect(x: 0, y: 0, width: table.bounds.width, height: 68)
+        table.tableFooterView = container
     }
 
     // MARK: Actions
     @objc private func closeSelf() { dismiss(animated: true) }
 
     @objc private func addTaskTapped() {
-        let ac = UIAlertController(title: "課題を追加", message: nil, preferredStyle: .alert)
+        let ac = UIAlertController(title: "タイトルと期限を設定", message: nil, preferredStyle: .alert)
         ac.addTextField { tf in
             tf.placeholder = "タイトル（例: レポート提出）"
         }
-        // 期日ピッカー
+        // 期日ピッカー（日本語）
         let picker = UIDatePicker()
         picker.datePickerMode = .dateAndTime
         if #available(iOS 13.4, *) { picker.preferredDatePickerStyle = .wheels }
+        picker.locale = Locale(identifier: "ja_JP")
         ac.view.addSubview(picker)
         picker.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -180,7 +245,7 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         present(ac, animated: true)
     }
 
-    // 2段目のUI: カスタムのボトムシートで表示（はみ出し回避＆下部固定ボタン）
+    // 通知・カレンダー設定のボトムシート（最初から最上段）
     private func presentReminderAndCalendarOptions(taskTitle: String, due: Date) {
         let sheetVC = ReminderOptionsSheet(due: due)
         sheetVC.title = "通知とカレンダー"
@@ -217,22 +282,31 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         let nav = UINavigationController(rootViewController: sheetVC)
         nav.modalPresentationStyle = .pageSheet
         if let sp = nav.sheetPresentationController {
-            if #available(iOS 16.0, *) {
-                sp.detents = [.medium(), .large()]
-                sp.selectedDetentIdentifier = .medium
-            } else {
-                sp.detents = [.medium()]
-            }
+            sp.detents = [.large()]
+            if #available(iOS 16.0, *) { sp.selectedDetentIdentifier = .large }
+            sp.prefersScrollingExpandsWhenScrolledToEdge = true
             sp.prefersGrabberVisible = true
             sp.preferredCornerRadius = 16
         }
         present(nav, animated: true)
     }
 
+    // MARK: Sort（期限が早い順 → 期限なしは最後）
+    private func sortTasksInPlace() {
+        tasks.sort { a, b in
+            switch (a.due, b.due) {
+            case let (x?, y?): return x < y
+            case (_?, nil):     return true
+            case (nil, _?):     return false
+            case (nil, nil):    return false
+            }
+        }
+    }
 
     private func finalizeAddTask(title: String, due: Date, notificationIds: [String], calendarEventId: String?) {
-        var item = TaskItem(title: title, due: due, done: false, notificationIds: notificationIds, calendarEventId: calendarEventId)
+        let item = TaskItem(title: title, due: due, done: false, notificationIds: notificationIds, calendarEventId: calendarEventId)
         tasks.append(item)
+        sortTasksInPlace()
         saveTasks()
         reloadTableHeight()
     }
@@ -242,16 +316,13 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
-            case .authorized, .provisional, .ephemeral:
-                completion(true)
-            case .denied:
-                completion(false)
+            case .authorized, .provisional, .ephemeral: completion(true)
+            case .denied: completion(false)
             case .notDetermined:
                 center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
                     completion(granted)
                 }
-            @unknown default:
-                completion(false)
+            @unknown default: completion(false)
             }
         }
     }
@@ -274,8 +345,7 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         func schedule(at fireDate: Date, subtitle: String) {
             guard fireDate > now else { return }
             let content = UNMutableNotificationContent()
-            // ← タイトルに「科目名 + 追加した課題名」、本文に期限表示
-            content.title = "【\(courseTitle)】\(taskTitle)"
+            content.title = "【\(courseTitle)】\(taskTitle)"            // タイトル=科目＋課題名
             content.body  = "期限: \(f.string(from: due))（\(subtitle)）"
             content.sound = .default
             if #available(iOS 15.0, *) { content.interruptionLevel = .timeSensitive }
@@ -308,7 +378,6 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         return createdIds
     }
 
-
     // MARK: Calendar (EventKit)
     private func addToCalendar(title: String, due: Date, completion: @escaping (String?) -> Void) {
         eventStore.requestAccess(to: .event) { [weak self] granted, _ in
@@ -317,7 +386,7 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
                 return
             }
 
-            // 書き込み可能なカレンダーを確実に取得（デフォルト → 書き込み可の先頭）
+            // 書き込み可能なカレンダーを取得
             var targetCalendar: EKCalendar?
             if let def = self.eventStore.defaultCalendarForNewEvents, def.allowsContentModifications {
                 targetCalendar = def
@@ -347,12 +416,10 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         }
     }
 
-
     private func deleteCalendarEventIfNeeded(id: String?) {
         guard let id, let event = eventStore.event(withIdentifier: id) else { return }
         do { try eventStore.remove(event, span: .thisEvent, commit: true) } catch { }
     }
-
     private func cancelNotificationsIfNeeded(ids: [String]?) {
         guard let ids, !ids.isEmpty else { return }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
@@ -370,6 +437,7 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         cfg.text = item.title
         if let d = item.due {
             let f = DateFormatter()
+            f.locale = Locale(identifier: "ja_JP")
             f.dateFormat = "M/d(E) HH:mm"
             cfg.secondaryText = "期限: " + f.string(from: d)
         } else {
@@ -405,14 +473,40 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         return UISwipeActionsConfiguration(actions: [del])
     }
 
+    // 空状態表示（灰色テキスト）※ボタンと重ならないよう上寄せ
+    private func updateEmptyState() {
+        if tasks.isEmpty {
+            emptyBGContainer.subviews.forEach { $0.removeFromSuperview() }
+            emptyLabel.text = "課題は設定されていません"
+            emptyLabel.textColor = .secondaryLabel
+            emptyLabel.textAlignment = .center
+            emptyLabel.numberOfLines = 0
+            emptyLabel.font = .systemFont(ofSize: 15)
+            emptyBGContainer.addSubview(emptyLabel)
+            table.backgroundView = emptyBGContainer
+            layoutEmptyStateIfNeeded()
+        } else {
+            table.backgroundView = nil
+        }
+    }
+
+    private func layoutEmptyStateIfNeeded() {
+        guard table.backgroundView === emptyBGContainer else { return }
+        emptyBGContainer.frame = table.bounds
+        let margin: CGFloat = 16
+        let top: CGFloat = 20   // ← 上寄せ（必要なら数値で微調整）
+        let width = table.bounds.width - margin * 2
+        let size = emptyLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        emptyLabel.frame = CGRect(x: margin, y: top, width: width, height: size.height)
+    }
+
     // テーブル高さを中身に合わせて更新
     private func reloadTableHeight() {
         table.reloadData()
         table.layoutIfNeeded()
-        let h = min(max(table.contentSize.height, 120), 600)
-        if let c = (table.constraints.first { $0.firstAttribute == .height }) {
-            c.constant = h
-        }
+        let contentH = min(max(table.contentSize.height, 120), 600)
+        tableHeightConstraint?.constant = contentH
+        updateEmptyState()
     }
 
     // MARK: Persistence
@@ -420,7 +514,6 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         let text = memoView.text ?? ""
         UserDefaults.standard.set(text, forKey: memoKey)
     }
-    // loadMemo()
     private func loadMemo() {
         let ud = UserDefaults.standard
         if let text = ud.string(forKey: memoKey) {
@@ -452,10 +545,12 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         } else {
             tasks = []
         }
+        sortTasksInPlace()
         reloadTableHeight()
     }
 }
-// MARK: - ReminderOptionsSheet (bottom sheet)
+
+// MARK: - 通知・カレンダー設定のボトムシート
 private final class ReminderOptionsSheet: UIViewController {
 
     struct Result {
@@ -488,6 +583,7 @@ private final class ReminderOptionsSheet: UIViewController {
         let p = UIDatePicker()
         p.datePickerMode = .time
         if #available(iOS 13.4, *) { p.preferredDatePickerStyle = .wheels }
+        p.locale = Locale(identifier: "ja_JP")
         p.isEnabled = false
         return p
     }()
@@ -550,16 +646,16 @@ private final class ReminderOptionsSheet: UIViewController {
         calendarRow.addArrangedSubview(UIView()) // spacer
         calendarRow.addArrangedSubview(calendarSwitch)
 
-        // ← これを追加：ONにしたら即座に権限確認＆要求
+        // ONにしたら即座に権限確認＆要求
         calendarSwitch.addTarget(self, action: #selector(calendarSwitchChanged(_:)), for: .valueChanged)
-        
-        // 上コンテンツに追加
+
+        // 上コンテンツ
         content.addArrangedSubview(toggles)
         content.addArrangedSubview(timeLabel)
         content.addArrangedSubview(timePicker)
         content.addArrangedSubview(calendarRow)
 
-        // 下部固定バー（はみ出し防止のため別レイヤ）
+        // 下部固定バー
         bottomBar.axis = .horizontal
         bottomBar.spacing = 12
         bottomBar.distribution = .fillEqually
@@ -604,9 +700,7 @@ private final class ReminderOptionsSheet: UIViewController {
     }
 
     @objc private func closeTapped() { dismiss(animated: true) }
-    @objc private func skipTapped() {
-        dismiss(animated: true) { [weak self] in self?.onSkip?() }
-    }
+    @objc private func skipTapped() { dismiss(animated: true) { [weak self] in self?.onSkip?() } }
     @objc private func okTapped() {
         var offsets: [Int] = []
         if oneWeekBtn.isSelected { offsets.append(7) }
@@ -619,12 +713,13 @@ private final class ReminderOptionsSheet: UIViewController {
         )
         dismiss(animated: true) { [weak self] in self?.onDone?(result) }
     }
+
     @objc private func calendarSwitchChanged(_ sw: UISwitch) {
         guard sw.isOn else { return }
         let status = EKEventStore.authorizationStatus(for: .event)
         switch status {
-        case .authorized, .fullAccess: // iOS18では .fullAccess が返る場合あり
-            return // そのまま使える
+        case .authorized, .fullAccess:
+            return
         case .notDetermined:
             EKEventStore().requestAccess(to: .event) { granted, _ in
                 DispatchQueue.main.async {
@@ -660,7 +755,6 @@ private final class ReminderOptionsSheet: UIViewController {
         ac.addAction(UIAlertAction(title: "OK", style: .cancel))
         present(ac, animated: true)
     }
-
 
     // 選択トグル用の共通ボタン
     private static func makeToggle(title: String) -> UIButton {

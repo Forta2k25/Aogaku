@@ -33,6 +33,7 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         view.backgroundColor = .clear
         setupUI()
         setupGestures()
+        prepareClosedState()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -42,9 +43,16 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         view.layoutIfNeeded()
         open(animated: true)
     }
+    
+    
+   /* override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        animateOpen()          // ← 画面表示と同時に“遅延ゼロ”で開始
+    } */
 
     // MARK: - UI
     private func setupUI() {
+
         dimmingButton.backgroundColor = UIColor.black.withAlphaComponent(0.0)
         dimmingButton.translatesAutoresizingMaskIntoConstraints = false
         dimmingButton.addTarget(self, action: #selector(didTapDimming), for: .touchUpInside)
@@ -88,30 +96,124 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         versionLabel.font = .systemFont(ofSize: 12)
         versionLabel.textColor = .secondaryLabel
         versionLabel.textAlignment = .right
-        versionLabel.text = "バージョン 1.0\n© 2025 FORTA"
+        versionLabel.text = "バージョン 1.1\n© 2025 FORTA"
         versionLabel.numberOfLines = 2
         versionLabel.translatesAutoresizingMaskIntoConstraints = false
         footer.addSubview(versionLabel)
+        
+        // ▼ Instagramボタン（footerを作った“後”に追加）— 差し替え版
+        let igButton = UIButton(type: .system)
+        igButton.translatesAutoresizingMaskIntoConstraints = false
+
+        // 画像セット（アセット "instagram" が無ければ SF Symbols にフォールバック）
+        let baseImage = UIImage(named: "instagram")?.withRenderingMode(.alwaysOriginal)
+            ?? UIImage(systemName: "camera.fill")
+        igButton.setImage(baseImage, for: .normal)
+
+        // ★ Configuration は使わず従来レイアウトに（制約が素直に効くように）
+        igButton.configuration = nil
+        igButton.contentEdgeInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+
+        // 画像をボタン枠内に確実にフィットさせる
+        igButton.contentHorizontalAlignment = .fill
+        igButton.contentVerticalAlignment   = .fill
+        igButton.clipsToBounds = true
+        igButton.tintColor = .label
+
+        // imageView 自体に制約を張って “ボタン＝20pt、画像＝ボタンいっぱい” を保証
+        if let iv = igButton.imageView {
+            iv.translatesAutoresizingMaskIntoConstraints = false
+            iv.contentMode = .scaleAspectFit
+            NSLayoutConstraint.activate([
+                iv.topAnchor.constraint(equalTo: igButton.topAnchor),
+                iv.bottomAnchor.constraint(equalTo: igButton.bottomAnchor),
+                iv.leadingAnchor.constraint(equalTo: igButton.leadingAnchor),
+                iv.trailingAnchor.constraint(equalTo: igButton.trailingAnchor),
+            ])
+        }
+
+        igButton.accessibilityLabel = "Open Instagram"
+        igButton.addTarget(self, action: #selector(didTapInstagram), for: .touchUpInside)
+        footer.addSubview(igButton)
+
 
         NSLayoutConstraint.activate([
+            // tableView と footer の関係
             tableView.topAnchor.constraint(equalTo: containerView.topAnchor),
             tableView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: footer.topAnchor),
 
+            // footer 自身の外枠
             footer.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
             footer.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
             footer.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -12),
 
+            // ▼ Instagramボタン（右下固定）
+            igButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+            igButton.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -4),
+            igButton.widthAnchor.constraint(equalToConstant: 30),
+            igButton.heightAnchor.constraint(equalToConstant: 30),
+
+            // バージョン表記は左→Instagramボタン手前まで
             versionLabel.topAnchor.constraint(equalTo: footer.topAnchor, constant: 8),
-            versionLabel.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+            versionLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
+            versionLabel.trailingAnchor.constraint(equalTo: igButton.leadingAnchor, constant: -8),
             versionLabel.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -4)
         ])
+
+    }
+    
+    // 追加：一度だけ開くアニメを走らせるためのフラグ
+    private var didAnimateOpenOnce = false
+
+    // 閉じた初期状態を即セット（オフスクリーン＆暗幕ゼロ）
+    private func prepareClosedState() {
+        containerTrailingConstraint.constant = containerWidth    // 右外へ退避
+        dimmingButton.alpha = 0
+        view.layoutIfNeeded()                                    // ← ここで状態を確定
+    }
+
+    // 開くアニメ（delay: 0.0）
+    private func animateOpenIfNeeded() {
+        guard !didAnimateOpenOnce else { return }
+        didAnimateOpenOnce = true
+
+        // 初期状態を確実に反映
+        prepareClosedState()
+
+        // 目標：メニューin / 暗幕フェードin
+        containerTrailingConstraint.constant = 0
+        UIView.animate(withDuration: 0.22,
+                       delay: 0.0,
+                       options: [.curveEaseOut, .allowUserInteraction]) {
+            self.dimmingButton.alpha = 1
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    // 閉じるアニメ（参考・既存があればそのまま）
+    private func animateClose(completion: (() -> Void)? = nil) {
+        containerTrailingConstraint.constant = containerWidth
+        UIView.animate(withDuration: 0.18,
+                       delay: 0.0,
+                       options: [.curveEaseIn, .allowUserInteraction]) {
+            self.dimmingButton.alpha = 0
+            self.view.layoutIfNeeded()
+        } completion: { _ in
+            completion?()
+            self.dismiss(animated: false, completion: nil)
+        }
     }
 
     private func setupGestures() {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         containerView.addGestureRecognizer(pan)
+    }
+
+    @objc private func didTapInstagram() {
+        guard let url = URL(string: "https://www.instagram.com/aogaku.hack") else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
     // MARK: - Actions

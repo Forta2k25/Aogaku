@@ -70,9 +70,9 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         view.backgroundColor = bg
         adContainer.backgroundColor = bg
 
-        let fieldBG = cardBackgroundColor(for: traitCollection)
+        // ここを置換：常に白
         [gradeField, facultyDeptField].forEach {
-            $0.backgroundColor = fieldBG      // ピッカー用の2つのテキスト欄を少し明るいグレーに
+            $0.backgroundColor = .white
         }
     }
 
@@ -89,9 +89,10 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         b.backgroundColor = .clear
         b.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            b.widthAnchor.constraint(equalToConstant: 34),
-            b.heightAnchor.constraint(equalToConstant: 34),
+            b.widthAnchor.constraint(equalToConstant: 44),
+            b.heightAnchor.constraint(equalToConstant: 44),
         ])
+        b.contentEdgeInsets = UIEdgeInsets(top: 11, left: 11, bottom: 11, right: 11)
         b.addTarget(target, action: action, for: .touchUpInside)
         return b
     }
@@ -155,7 +156,7 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
 
     // MARK: - UI
     private func setupUI() {
-        titleLabel.text = "Aogaku アカウント"
+        titleLabel.text = "青学ハック アカウント"
         titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
         titleLabel.textAlignment = .center
 
@@ -194,7 +195,7 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         loginButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
         loginButton.addTarget(self, action: #selector(login), for: .touchUpInside)
 
-        noteLabel.text = "＊IDは公開名として使われます。メール入力は不要です。"
+        noteLabel.text = "※一度作成したアカウントのIDを変更することはできません。"
         noteLabel.textColor = .secondaryLabel
         noteLabel.font = .systemFont(ofSize: 12)
         noteLabel.numberOfLines = 0
@@ -214,8 +215,9 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         
         stackBottomToSafeArea = stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24)
 
+        let topInset: CGFloat = 120
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: topInset),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
             stackBottomToSafeArea!,
@@ -374,12 +376,12 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         menu.delegate = self
         menu.showsAccountSection = false
         present(menu, animated: false) { [weak self, weak menu] in
-            self?.attachInstagramButton(to: menu)   // ★ 追加
+          //  self?.attachInstagramButton(to: menu)   // ★ 追加
         }
     }
     
     // ===== Instagram: メニュー右下ボタンを後付け =====
-    private func attachInstagramButton(to menuVC: UIViewController?) {
+   /* private func attachInstagramButton(to menuVC: UIViewController?) {
         guard let menuVC else { return }
         let tag = 9901
         if menuVC.view.viewWithTag(tag) != nil { return } // 二重追加ガード
@@ -427,7 +429,7 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         } else {
             present(safari, animated: true)
         }
-    }
+    } */
 
 
     // MARK: - Auth Flow

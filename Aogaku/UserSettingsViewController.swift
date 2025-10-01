@@ -217,17 +217,16 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     }
 
 
+ 
     // MARK: - Menu
     @objc @IBAction func didTapMenuButton(_ sender: Any) {
         let vc = SideMenuDrawerViewController()
         vc.modalPresentationStyle = .overFullScreen
-        vc.modalTransitionStyle = .crossDissolve
+        // vc.modalTransitionStyle = .crossDissolve // ← 削ってOK
         vc.delegate = self
-        present(vc, animated: false) { [weak self, weak vc] in
-            self?.attachInstagramButton(to: vc)   // ★ 追加
-        }
+        present(vc, animated: false)
     }
-    
+/*
     // ===== Instagram: メニュー右下ボタンを後付け =====
     private func attachInstagramButton(to menuVC: UIViewController?) {
         guard let menuVC else { return }
@@ -278,7 +277,7 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
         }
     }
 
-
+*/
 
     // MARK: - LifeCycle
     override func viewDidLoad() {
@@ -317,6 +316,7 @@ view.addGestureRecognizer(tripleTap)
         applyBackgroundStyle()
 
     }
+    
     
 #if DEBUG
 @objc private func openAdInspector() {
@@ -407,6 +407,7 @@ view.addGestureRecognizer(tripleTap)
             facultyDeptField.text = "指定なし"
         }
     }
+    
     
     // IDが空ならローカル即時反映→Authを軽くリロード→Firestore再取得
     private func reloadAllProfileFieldsIfIDMissing() {
@@ -515,9 +516,10 @@ view.addGestureRecognizer(tripleTap)
             b.addTarget(self, action: #selector(didTapMenuButton(_:)), for: .touchUpInside)
             b.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                b.widthAnchor.constraint(equalToConstant: 34),
-                b.heightAnchor.constraint(equalToConstant: 34)
+                b.widthAnchor.constraint(equalToConstant: 44),
+                b.heightAnchor.constraint(equalToConstant: 44)
             ])
+            b.contentEdgeInsets = UIEdgeInsets(top: 11, left: 11, bottom: 11, right: 11)
             navigationItem.rightBarButtonItem = UIBarButtonItem(customView: b)
         }
     }

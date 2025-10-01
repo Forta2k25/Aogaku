@@ -8,6 +8,19 @@ import UIKit
 import UserNotifications
 import EventKit
 
+// そのコマ（年度・学期・曜日・時限）を表す識別子
+struct SlotContext: Equatable {
+    let year: Int            // 例: 2025
+    let termCode: String     // 例: "S"(前期), "F"(後期), "Y"(通年) など安定コード
+    let weekday: Int         // 1=Mon ... 7=Sun（土曜なら 6）
+    let period: Int          // 1..n
+    var keySuffix: String { "y\(year)_t\(termCode)_w\(weekday)p\(period)" }
+
+    // 互換用（古い呼び出しが残ってもビルドは通る）
+    static func global() -> SlotContext { .init(year: 0, termCode: "all", weekday: 0, period: 0) }
+}
+
+
 fileprivate struct TaskItem: Codable {
     var title: String
     var due: Date?
@@ -22,10 +35,12 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
     // MARK: Inputs
     private let courseId: String
     private let courseTitle: String
+    private let slot: SlotContext    // ← 追加
 
     // MARK: Storage Keys
-    private var memoKey: String { "memo.\(courseId)" }
-    private var tasksKey: String { "tasks.\(courseId)" }
+    private var storageScope: String { "\(courseId)_\(slot.keySuffix)" } // ← 追加
+    private var memoKey: String  { "memo.\(storageScope)" }              // ← 変更
+    private var tasksKey: String { "tasks.\(storageScope)" }             // ← 変更
 
     // MARK: UI
     private let scroll = UIScrollView()
@@ -42,11 +57,17 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
     private let eventStore = EKEventStore()
 
     // MARK: Init
-    init(courseId: String, courseTitle: String) {
+    init(courseId: String, courseTitle: String, slot: SlotContext) {
         self.courseId = courseId
         self.courseTitle = courseTitle
+        self.slot = slot
         super.init(nibName: nil, bundle: nil)
     }
+    // 互換用（古い呼び出しが残っていても動くが、スコープ分離はされません）
+    convenience init(courseId: String, courseTitle: String) {
+        self.init(courseId: courseId, courseTitle: courseTitle, slot: .global())
+    }
+
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     // MARK: Lifecycle
@@ -261,7 +282,7 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
 
             let comps = Calendar.current.dateComponents([.year,.month,.day,.hour,.minute,.second], from: fireDate)
             let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
-            let id = "task.\(courseId).\(UUID().uuidString)"
+            let id = "task.\(storageScope).\(UUID().uuidString)"
             let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
             center.add(request, withCompletionHandler: nil)
             createdIds.append(id)
@@ -399,17 +420,37 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
         let text = memoView.text ?? ""
         UserDefaults.standard.set(text, forKey: memoKey)
     }
+    // loadMemo()
     private func loadMemo() {
-        memoView.text = UserDefaults.standard.string(forKey: memoKey) ?? ""
+        let ud = UserDefaults.standard
+        if let text = ud.string(forKey: memoKey) {
+            memoView.text = text
+            return
+        }
+        // 旧キー（memo.<courseId>）から読み替え
+        if let legacy = ud.string(forKey: "memo.\(courseId)"), !legacy.isEmpty {
+            ud.set(legacy, forKey: memoKey)
+            memoView.text = legacy
+        } else {
+            memoView.text = ""
+        }
     }
     private func saveTasks() {
         let data = try? JSONEncoder().encode(tasks)
         UserDefaults.standard.set(data, forKey: tasksKey)
     }
     private func loadTasks() {
-        if let data = UserDefaults.standard.data(forKey: tasksKey),
+        let ud = UserDefaults.standard
+        if let data = ud.data(forKey: tasksKey),
            let arr = try? JSONDecoder().decode([TaskItem].self, from: data) {
             tasks = arr
+        } else if let data = ud.data(forKey: "tasks.\(courseId)"),
+                  let arr = try? JSONDecoder().decode([TaskItem].self, from: data) {
+            // 旧キーから読み替え
+            tasks = arr
+            saveTasks() // 新キーに保存
+        } else {
+            tasks = []
         }
         reloadTableHeight()
     }

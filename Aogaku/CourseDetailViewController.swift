@@ -478,24 +478,50 @@ final class CourseDetailViewController: UIViewController {
             if !self.isColorRowOpen { self.colorRow.isHidden = true }
         })
     }
+    /// TermKey から (year, termCode) を作る
+    /// termCode: "S"=前期, "F"=後期, "Y"=通年/その他
+    private func yearAndTermCode() -> (Int, String) {
+        let term = TermStore.loadSelected()  // 現在選択中の学期
+        let title = term.displayTitle        // 例: "2025年前期"
+
+        // 年（先頭の西暦4桁を拾う。取れなければ今年）
+        let y = Int(title.prefix(4)) ?? Calendar.current.component(.year, from: Date())
+
+        // 学期コード
+        let code: String
+        if title.contains("前期") { code = "S" }
+        else if title.contains("後期") { code = "F" }
+        else if title.contains("通年") { code = "Y" }
+        else { code = "Y" } // 不明な場合は通年扱い
+
+        return (y, code)
+    }
+
     
     @objc private func openMemoTasks() {
+        // 年度・学期コード
+        let (year, termCode) = yearAndTermCode()
+
+        // 0=月…の day を 1=Mon… に変換 / 時限はそのまま
+        let weekday = location.day + 1
+        let period  = location.period
+
+        let slot = SlotContext(year: year, termCode: termCode, weekday: weekday, period: period)
+
         let vc = MemoTaskViewController(
-            courseId: "\(course.id)",     // 文字列化してキーに使う
-            courseTitle: course.title
+            courseId: "\(course.id)",
+            courseTitle: course.title,
+            slot: slot
         )
-        // Navigation が無ければラップしてモーダル表示
-        if let nav = self.navigationController {
+        if let nav = navigationController {
             nav.pushViewController(vc, animated: true)
         } else {
             let nav = UINavigationController(rootViewController: vc)
-            if let sheet = nav.sheetPresentationController {
-                sheet.prefersGrabberVisible = true
-                if #available(iOS 16.0, *) { sheet.selectedDetentIdentifier = .large }
-            }
             present(nav, animated: true)
         }
     }
+
+
 
 
     

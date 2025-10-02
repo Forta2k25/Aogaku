@@ -1,4 +1,3 @@
-import UIKit
 import FirebaseCore
 import FirebaseFirestore
 import GoogleMobileAds
@@ -614,7 +613,6 @@ final class syllabus: UIViewController,
                 q = q.whereField("time.periods", arrayContains: ps[0])
             }
         }
-
 
         return q
     }

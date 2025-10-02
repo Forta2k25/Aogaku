@@ -418,7 +418,7 @@ struct TodayView: View {
         VStack(spacing: 4) {
             Text(entry.snapshot.dayLabel)
                 .font(.caption2).opacity(0.6)
-            Text("今日の授業はありません")
+            Text("授業無し")
                 .font(family == .systemSmall ? .caption2 : .headline)
                 .multilineTextAlignment(.center)
                 .padding(.top, 2)

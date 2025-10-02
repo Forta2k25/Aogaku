@@ -364,9 +364,15 @@ final class FriendTimetableViewController: UIViewController {
 
         let nav = UINavigationController(rootViewController: vc)
         nav.modalPresentationStyle = .pageSheet
+
+        // ← これを追加：ナビゲーションバーを隠して「白いバー」と「×」を消す
+        nav.setNavigationBarHidden(true, animated: false)
+
         if let sheet = nav.sheetPresentationController {
             sheet.detents = [.large()]
             sheet.prefersGrabberVisible = true
+            // ※ 上の小さな“つまみ”も消したい場合は ↓ を true→false に
+            // sheet.prefersGrabberVisible = false
         }
         present(nav, animated: true)
     }

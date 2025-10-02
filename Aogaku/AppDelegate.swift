@@ -19,12 +19,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         FirebaseApp.configure()
         PushManager.shared.start()   // ← 追加
         
+       
         // AdMob 初期化（Google Mobile Ads SDK v12+）
         MobileAds.shared.start { status in
             print("AdMob initialized: \(status.adapterStatusesByClassName)")
         }
+        
+        // ▼ 追加：Remote Config をフェッチして広告設定を有効化
+        AdsSwitchboard.shared.start()
+        
         // ✅ ここに追記（Remote Config で広告ID/ON-OFFを取得）
-        setupAdsRemoteConfig()
+        //setupAdsRemoteConfig()
 
         // （任意）テストデバイス設定
         // v12 ではシミュレータ用の kGADSimulatorID は廃止。
@@ -33,6 +38,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let reqConfig = MobileAds.shared.requestConfiguration
         reqConfig.testDeviceIdentifiers = []   // 例: ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
         #endif
+        // 任意：従来のフックを残す場合
+        NotificationCenter.default.post(name: .adMobReady, object: nil)
         
         // Override point for customization after application launch.
         return true
@@ -81,26 +88,6 @@ extension Notification.Name {
     static let adMobReady = Notification.Name("AdMobReady")
 }
 
-private func setupAdsRemoteConfig() {
-    let rc = RemoteConfig.remoteConfig()
-    rc.setDefaults([
-        "ads_enabled": true as NSObject,
-        "ads_live": false as NSObject,
-        "ads_banner_id_test": "ca-app-pub-3940256099942544/2934755716" as NSObject,
-        "ads_banner_id_prod": "" as NSObject,
-        "ads_test_devices": "" as NSObject
-    ])
-    rc.fetchAndActivate { _, _ in
-        // RC の CSV を実機IDに反映（シミュレータは自動でテスト扱い）
-        let csv = rc["ads_test_devices"].stringValue ?? ""
-        let extra = csv
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
 
-        MobileAds.shared.requestConfiguration.testDeviceIdentifiers = extra
 
-        NotificationCenter.default.post(name: .adMobReady, object: nil)
-    }
-}
 

@@ -516,6 +516,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Aogaku/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "青学ハック";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "授業や学事予定をiOSカレンダーに追加・表示するためにカレンダーへのアクセスが必要です。";
 				INFOPLIST_KEY_NSCameraUsageDescription = "QRコードを読み取るためにカメラを使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "時間割のスクリーンショットを写真に保存するために使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";
@@ -550,6 +551,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Aogaku/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "青学ハック";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "授業や学事予定をiOSカレンダーに追加・表示するためにカレンダーへのアクセスが必要です。";
 				INFOPLIST_KEY_NSCameraUsageDescription = "QRコードを読み取るためにカメラを使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "時間割のスクリーンショットを写真に保存するために使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";

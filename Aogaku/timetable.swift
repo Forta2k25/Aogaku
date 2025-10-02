@@ -24,6 +24,7 @@ struct SlotLocation: Codable, Hashable {
 private func cellKey(day: Int, period: Int) -> String { "cells.d\(day)p\(period)" }
 private func cellKey(_ loc: SlotLocation) -> String { cellKey(day: loc.day, period: loc.period) }
 
+
 // Firestore 1コマのハッシュ
 private func slotHash(_ c: Course, colorKey: String?) -> String {
     [
@@ -433,6 +434,12 @@ final class timetable: UIViewController,
         reloadAllButtons()
     }
     
+    // 出席カウンター（学期×曜日×時限）を削除
+    private func clearAttendance(for location: SlotLocation) {
+        let key = "attendance.\(currentTerm.storageKey).d\(location.day).p\(location.period)"
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+    
     // 今日のスナップショットを作って WidgetShared に保存
     private func publishWidgetSnapshot() {
         let cal = Calendar.current
@@ -513,6 +520,8 @@ final class timetable: UIViewController,
                         }
                         didAnyChange = true
                     }
+                    // ★ 追加：該当コマの出席カウンターをリセット
+                    self.clearAttendance(for: SlotLocation(day: day, period: period))
                     self.remoteHashes.removeValue(forKey: key)     // [FIX] ハッシュも消す
                 }
                 // --- ② 更新/追加（既存ロジック） ---
@@ -1195,7 +1204,7 @@ final class timetable: UIViewController,
 
     // MARK: - Detail / List
     private func presentCourseDetail(_ course: Course, at loc: SlotLocation) {
-        let vc = CourseDetailViewController(course: course, location: loc)
+        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm)
         vc.delegate = self
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController {
@@ -1320,6 +1329,10 @@ final class timetable: UIViewController,
         else { self.reloadAllButtons() }
         vc.dismiss(animated: true)
         saveAssigned()
+        
+        // ★ 追加：このコマの出席カウンターをリセット
+        clearAttendance(for: location)
+        
         let key = cellKey(day: location.day, period: location.period)   // [FIX] 追加
         remoteHashes.removeValue(forKey: key)                            // [FIX] 追加
         Task { await remoteStore?.delete(day: location.day, period: location.period) }
@@ -1328,6 +1341,8 @@ final class timetable: UIViewController,
         assigned[index(for: location)] = nil
         reloadAllButtons()
         saveAssigned()
+        // ★ 追加：このコマの出席カウンターをリセット
+        clearAttendance(for: location)
         let key = cellKey(day: location.day, period: location.period)   // [FIX] 追加
         remoteHashes.removeValue(forKey: key)                            // [FIX] 追加
         Task { await remoteStore?.delete(day: location.day, period: location.period) }
@@ -1438,23 +1453,34 @@ final class timetable: UIViewController,
     
     private func changeTerm(to newTerm: TermKey) {
         guard newTerm != currentTerm else { return }
-        currentTerm = newTerm
 
-        // ← ここだけ上のブロックに置換
+        // 1) 現在のリスナーを停止＆ハッシュ初期化
+        termListener?.remove(); termListener = nil
+        remoteHashes.removeAll()
+
+        // 2) 学期を更新（タイトルも即反映）
+        currentTerm = newTerm
         if var cfg = leftButton.configuration {
             cfg.title = newTerm.displayTitle
             leftButton.configuration = cfg
         } else {
             leftButton.setTitle(newTerm.displayTitle, for: .normal)
         }
-        
-        
-        // → ここまで
 
-        loadAssigned(for: newTerm)
+        // 3) ローカルの割当を読み込んで UI を即反映
+        loadAssigned(for: newTerm)   // UserDefaults → assigned を切替
+        normalizeAssigned()          // 念のためサイズを整える
+        reloadAllButtons()           // ← ★ 重要：ボタン内容を更新
+        updateNowHighlight()         // ← （任意）見出しのハイライトも更新
+
+        // 4) リモート同期をこの学期で再開
         startTermSync()
-        saveAssigned()
+
+        // 5) 永続化とウィジェットのミラー更新
+        saveAssigned()               // TermStore.saveSelected も呼ばれる
+        // mirrorForWidget() は saveAssigned() 中で実施済み
     }
+
 
     @objc private func tapRightA() {
         let term = TermStore.loadSelected()

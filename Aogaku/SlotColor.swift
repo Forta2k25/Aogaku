@@ -1,16 +1,17 @@
 import UIKit
 
 enum SlotColorKey: String, Codable, CaseIterable {
-    case teal, blue, green, yellow, red, gray
+    case teal, blue, green, orange, red, gray, purple   // ← 追加
 
     var uiColor: UIColor {
         switch self {
         case .teal:   return .systemTeal
         case .blue:   return .systemBlue
         case .green:  return .systemGreen
-        case .yellow: return .systemYellow
+        case .orange: return .systemOrange
         case .red:    return .systemRed
         case .gray:   return .systemGray
+        case .purple: return .systemPurple
         }
     }
 }

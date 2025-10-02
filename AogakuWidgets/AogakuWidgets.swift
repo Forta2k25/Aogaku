@@ -79,25 +79,28 @@ struct TodayProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TodayEntry>) -> ()) {
-        // まず共有から“今日”を生成。無ければ従来の保存スナップショットにフォールバック
         let snap = buildTodayFromShared() ?? (WidgetBridge.load() ?? Self.mock)
 
         let now  = Date()
         let cal  = Calendar.current
 
-        // 次回更新は「各コマ開始の1分後」か「翌日0:05」の早い方
         func time(_ hhmm: String) -> Date? {
             var c = cal.dateComponents([.year,.month,.day], from: now)
             let p = hhmm.split(separator: ":").map { Int($0) ?? 0 }
             c.hour = p[0]; c.minute = p[1]
             return cal.date(from: c)
         }
-        let nextClass = snap.periods.compactMap { time($0.start) }.first { $0 > now }?.addingTimeInterval(60)
-        let nextDay   = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))!.addingTimeInterval(5*60)
-        let next = min(nextClass ?? nextDay, nextDay)
 
-        completion(Timeline(entries: [TodayEntry(date: now, snapshot: snap)], policy: .after(next)))
+        let nextStart = snap.periods.compactMap { time($0.start) }.first { $0 > now }
+        let nextEnd   = snap.periods.compactMap { time($0.end)   }.first { $0 > now }
+        let nextDay   = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))!.addingTimeInterval(5*60)
+
+        let candidates = [nextStart, nextEnd, nextDay].compactMap { $0 }
+        let nextUpdate = (candidates.min() ?? nextDay).addingTimeInterval(20) // 境界＋20秒
+
+        completion(Timeline(entries: [TodayEntry(date: now, snapshot: snap)], policy: .after(nextUpdate)))
     }
+
 
     private func nextRefreshDate(basedOn snap: WidgetSnapshot, from now: Date) -> Date {
         let cal = Calendar.current
@@ -169,10 +172,11 @@ private func uiColor(for key: String?) -> UIColor {
     switch key {
     case "blue":   return .systemBlue
     case "green":  return .systemGreen
-    case "yellow": return .systemYellow
+    case "orange": return .systemOrange
     case "red":    return .systemRed
     case "teal":   return .systemTeal
     case "gray":   return .systemGray
+    case "purple": return .systemPurple     // ← 追加
     default:       return UIColor.systemTeal // 未設定時は既存と同じグレー系
     }
 }
@@ -198,6 +202,143 @@ private enum WFont {
     static let largeIndexSize: CGFloat = 13
     static let largeTimeSize: CGFloat = 10 // ← Large 用の開始/終了（既存の .caption2 より少し小さめ）
 }
+
+// ========================
+// Lock Screen: 専用ビュー
+// ========================
+
+struct LockRectNowView: View {
+    let entry: TodayEntry
+
+    var body: some View {
+        if let cur = entry.snapshot.periods.first(where: isNow(_:)) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(uiColor: uiColor(for: cur.colorKey)))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("進行中 · \(cur.index)限")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(cur.title.isEmpty ? " " : cur.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(cur.start)–\(cur.end)  \(cur.room)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .widgetURL(URL(string: "aogaku://timetable?day=today&period=\(cur.index)"))
+        } else if let nxt = nextUpcoming() {
+            // ← 授業と授業の“間”は次の授業を表示
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(uiColor: uiColor(for: nxt.colorKey)))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("このあと · \(nxt.index)限")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(nxt.title.isEmpty ? " " : nxt.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(nxt.start)  \(nxt.room)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .widgetURL(URL(string: "aogaku://timetable?day=today&period=\(nxt.index)"))
+        } else {
+            Text("進行中の授業はありません").font(.caption)
+        }
+    }
+
+    // 現在の時限かどうか
+    private func isNow(_ p: WidgetPeriod) -> Bool {
+        let cal = Calendar.current, now = Date()
+        func t(_ s: String) -> Date {
+            var c = cal.dateComponents([.year,.month,.day], from: now)
+            let sp = s.split(separator: ":").map { Int($0) ?? 0 }
+            c.hour = sp[0]; c.minute = sp[1]
+            return cal.date(from: c)!
+        }
+        return (t(p.start)...t(p.end)).contains(now)
+    }
+
+    // 「このあと始まる最初の授業」
+    private func nextUpcoming() -> WidgetPeriod? {
+        let now = Date()
+        func parse(_ s: String) -> Date? {
+            var c = Calendar.current.dateComponents([.year,.month,.day], from: now)
+            let sp = s.split(separator: ":").compactMap { Int($0) }
+            guard sp.count >= 2 else { return nil }
+            c.hour = sp[0]; c.minute = sp[1]
+            return Calendar.current.date(from: c)
+        }
+        func hasContent(_ p: WidgetPeriod) -> Bool {
+            let t = p.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let r = p.room.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !(t.isEmpty && r.isEmpty)
+        }
+        return entry.snapshot.periods
+            .filter(hasContent)
+            .sorted { (parse($0.start) ?? .distantFuture) < (parse($1.start) ?? .distantFuture) }
+            .first { (parse($0.start) ?? .distantPast) > now }
+    }
+}
+
+
+struct LockRectNextView: View {
+    let entry: TodayEntry
+    var body: some View {
+        if let nxt = nextUpcoming() {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(uiColor: uiColor(for: nxt.colorKey)))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("次 · \(nxt.index)限")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(nxt.title.isEmpty ? " " : nxt.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(nxt.start)  \(nxt.room)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .widgetURL(URL(string: "aogaku://timetable?day=today&period=\(nxt.index)"))
+        } else {
+            Text("このあとの授業はありません").font(.caption)
+        }
+    }
+
+    // 「このあと始まる最初の授業」
+    private func nextUpcoming() -> WidgetPeriod? {
+        let now = Date()
+        func parse(_ s: String) -> Date? {
+            var c = Calendar.current.dateComponents([.year,.month,.day], from: now)
+            let sp = s.split(separator: ":").compactMap { Int($0) }
+            guard sp.count >= 2 else { return nil }
+            c.hour = sp[0]; c.minute = sp[1]
+            return Calendar.current.date(from: c)
+        }
+        func hasContent(_ p: WidgetPeriod) -> Bool {
+            let t = p.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let r = p.room.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !(t.isEmpty && r.isEmpty)
+        }
+        return entry.snapshot.periods
+            .filter(hasContent)
+            .sorted { (parse($0.start) ?? .distantFuture) < (parse($1.start) ?? .distantFuture) }
+            .first { (parse($0.start) ?? .distantPast) > now }
+    }
+}
+
 
 struct TodayView: View {
     @Environment(\.widgetFamily) var family
@@ -233,6 +374,44 @@ struct TodayView: View {
             teacher(of: $0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
+    // 小さい円形用：タイトルを短くして表示（空ならスペース）
+    private func shortTitle(_ raw: String, maxChars: Int = 10) -> String {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return " " }
+        return String(s.prefix(maxChars))
+    }
+    // 教室名を短くして表示（空ならスペース）
+    private func shortRoom(_ raw: String, maxChars: Int = 6) -> String {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return " " }
+        return String(s.prefix(maxChars))
+    }
+
+    // accessoryCircular 用の描画（上：コマ番号 / 中：授業名 / 下：教室）
+    private func circularFace(index: Int, title: String, room: String) -> some View {
+        VStack(spacing: 0) {
+            // 上：コマ番号（やや小さめ & 上寄せ）
+            Text("\(index)")
+                .font(.system(size: 14, weight: .semibold))
+                .widgetAccentable()
+                .padding(.top, 1)
+
+            // 中：授業名（短縮）
+            Text(shortTitle(title, maxChars: 6))
+                .font(.system(size: 9.5, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+
+            // 下：教室（等幅数字）
+            Text(shortRoom(room))
+                .font(.system(size: 8.5, weight: .regular).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
 
     @ViewBuilder
     private func noClassView() -> some View {
@@ -258,6 +437,12 @@ struct TodayView: View {
                 mediumStrip().widgetURL(URL(string: "aogaku://timetable?day=today"))
             case .systemLarge:
                 largeDetail().widgetURL(URL(string: "aogaku://timetable?day=today"))
+            case .accessoryRectangular:
+                lockRect()
+            case .accessoryInline:
+                lockInline()
+            case .accessoryCircular:
+                lockCircular()
             default:
                 mediumStrip()
             }
@@ -272,6 +457,112 @@ struct TodayView: View {
     }
     
     
+    // === Lock Screen helpers ===
+    private func hasContent(_ p: WidgetPeriod?) -> Bool {
+        guard let p else { return false }
+        let t = p.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let r = p.room.trimmingCharacters(in: .whitespacesAndNewlines)
+        let teach = teacher(of: p).trimmingCharacters(in: .whitespacesAndNewlines)
+        return !(t.isEmpty && r.isEmpty && teach.isEmpty)
+    }
+
+    private func parseTime(_ s: String, relativeTo base: Date = Date()) -> Date? {
+        var c = Calendar.current.dateComponents([.year,.month,.day], from: base)
+        let sp = s.split(separator: ":").compactMap { Int($0) }
+        guard sp.count >= 2 else { return nil }
+        c.hour = sp[0]; c.minute = sp[1]
+        return Calendar.current.date(from: c)
+    }
+
+    /// 「今やっている授業」
+    private func currentPeriodStrict() -> WidgetPeriod? {
+        entry.snapshot.periods.first(where: isNow(in:))
+    }
+
+    /// 「このあと始まる最も近い授業」
+    private func nextUpcomingPeriod() -> WidgetPeriod? {
+        let now = Date()
+        return entry.snapshot.periods
+            .filter { hasContent($0) }
+            .sorted { (parseTime($0.start) ?? .distantFuture) < (parseTime($1.start) ?? .distantFuture) }
+            .first { (parseTime($0.start) ?? .distantPast) > now }
+    }
+
+    // === Lock Screen views ===
+    @ViewBuilder
+    private func lockRect() -> some View {
+        // 進行中があればそれを優先、無ければ「次の授業」
+        if let cur = currentPeriodStrict() {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(uiColor: uiColor(for: cur.colorKey)))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("進行中 · \(cur.index)限")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(cur.title.isEmpty ? " " : cur.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(cur.start)–\(cur.end)  \(cur.room)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .widgetURL(URL(string: "aogaku://timetable?day=today&period=\(cur.index)"))
+        } else if let nxt = nextUpcomingPeriod() {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(uiColor: uiColor(for: nxt.colorKey)))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("次 · \(nxt.index)限")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(nxt.title.isEmpty ? " " : nxt.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(nxt.start)  \(nxt.room)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .widgetURL(URL(string: "aogaku://timetable?day=today&period=\(nxt.index)"))
+        } else {
+            Text("今日の授業はありません").font(.caption)
+        }
+    }
+
+    @ViewBuilder
+    private func lockInline() -> some View {
+        if let cur = currentPeriodStrict() {
+            Text("今 \(cur.index)限 \(cur.title) \(cur.end)まで")
+                .monospacedDigit()
+        } else if let nxt = nextUpcomingPeriod() {
+            Text("次 \(nxt.index)限 \(nxt.title) \(nxt.start) @\(nxt.room)")
+                .monospacedDigit()
+        } else {
+            Text("授業なし")
+        }
+    }
+
+    @ViewBuilder
+    private func lockCircular() -> some View {
+        if let cur = currentPeriodStrict() {
+            circularFace(index: cur.index, title: cur.title, room: cur.room)
+                .widgetURL(URL(string: "aogaku://timetable?day=today&period=\(cur.index)"))
+        } else if let nxt = nextUpcomingPeriod() {
+            circularFace(index: nxt.index, title: nxt.title, room: nxt.room)
+                .widgetURL(URL(string: "aogaku://timetable?day=today&period=\(nxt.index)"))
+        } else {
+            Image(systemName: "checkmark.circle")
+        }
+    }
+
+
+
 
     
     // === 小サイズ用：時限＋授業名のみ ===
@@ -687,8 +978,54 @@ struct TodayView: View {
     }
 }
 
+// ========================
+// Lock Screen: 2つのWidget
+// ========================
+struct AogakuLockNowWidget: Widget {
+    var body: some WidgetConfiguration {
+        let base = StaticConfiguration(kind: "AogakuLockNowRect",
+                                      provider: TodayProvider()) { entry in
+            let v = LockRectNowView(entry: entry)
+            if #available(iOSApplicationExtension 17.0, *) {
+                v.containerBackground(for: .widget) { widgetBGColor() }
+            } else {
+                v.background(widgetBGColor())
+            }
+        }
+        .configurationDisplayName("進行中")
+        .description("ロック画面に進行中の授業を表示します。")
 
-@main
+        if #available(iOSApplicationExtension 16.0, *) {
+            return base.supportedFamilies([.accessoryRectangular])
+        } else {
+            return base.supportedFamilies([]) // iOS16未満は対象外
+        }
+    }
+}
+
+struct AogakuLockNextWidget: Widget {
+    var body: some WidgetConfiguration {
+        let base = StaticConfiguration(kind: "AogakuLockNextRect",
+                                      provider: TodayProvider()) { entry in
+            let v = LockRectNextView(entry: entry)
+            if #available(iOSApplicationExtension 17.0, *) {
+                v.containerBackground(for: .widget) { widgetBGColor() }
+            } else {
+                v.background(widgetBGColor())
+            }
+        }
+        .configurationDisplayName("次の授業")
+        .description("ロック画面に次の授業を表示します。")
+
+        if #available(iOSApplicationExtension 16.0, *) {
+            return base.supportedFamilies([.accessoryRectangular])
+        } else {
+            return base.supportedFamilies([])
+        }
+    }
+}
+
+// 既存ホーム画面用（system* と inline/circular）
 struct AogakuWidgets: Widget {
     var body: some WidgetConfiguration {
         let base = StaticConfiguration(kind: "AogakuWidgets",
@@ -700,15 +1037,33 @@ struct AogakuWidgets: Widget {
                 view.background(widgetBGColor())
             }
         }
-        .configurationDisplayName("今日の時間割")
-        .description("今日の授業や教室、教員名まで確認できます。")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge]) // ⬅︎ large 追加
+        .configurationDisplayName("今の授業を確認")
+        .description("今の授業や教室を確認できます。")
 
         if #available(iOSApplicationExtension 17.0, *) {
-            return base.contentMarginsDisabled()
+            return base
+                .supportedFamilies([.systemSmall, .systemMedium, .systemLarge,
+                                    .accessoryInline, .accessoryCircular])
+                .contentMarginsDisabled()
+        } else if #available(iOSApplicationExtension 16.0, *) {
+            return base
+                .supportedFamilies([.systemSmall, .systemMedium, .systemLarge,
+                                    .accessoryInline, .accessoryCircular])
         } else {
             return base
+                .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         }
+    }
+}
+
+// 3つを束ねる
+@main
+struct AogakuWidgetBundle: WidgetBundle {
+    @WidgetBundleBuilder
+    var body: some Widget {
+        AogakuWidgets()          // 既存（ホーム画面ほか）
+        AogakuLockNowWidget()    // ロック画面：進行中
+        AogakuLockNextWidget()   // ロック画面：次の授業
     }
 }
 

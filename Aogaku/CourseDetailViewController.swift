@@ -37,7 +37,7 @@ final class CourseDetailViewController: UIViewController {
     private let titleHeader = UIView()   // 緑の帯コンテナ
 
     // MARK: - Color Picker
-    private let colorKeys: [SlotColorKey] = [.blue, .green, .yellow, .red, .teal, .gray]
+    private let colorKeys: [SlotColorKey] = [.blue, .green, .orange, .red, .teal, .gray, .purple]
     private var colorButtons: [UIButton] = []
 
     // MARK: - UI
@@ -57,6 +57,8 @@ final class CourseDetailViewController: UIViewController {
     private let periodUnderline = UIView()
     private let idRow = UIView()
     private let idUnderline = UIView()
+    
+    private let term: TermKey
 
     private let summaryRow = UIStackView()
     private let metaCard   = UIView()
@@ -93,15 +95,20 @@ final class CourseDetailViewController: UIViewController {
 
     // MARK: - Attendance
     private var counts = AttendanceCounts(attended: 0, late: 0, absent: 0)
-    private var attendanceKey: String { "attendance.\(course.id)" }
+    private var attendanceKey: String {
+        "attendance.\(term.storageKey).d\(location.day).p\(location.period)"
+    }
 
     // MARK: - Init
-    init(course: Course, location: SlotLocation) {
+    // 変更（引数を term: TermKey 付きに）
+    init(course: Course, location: SlotLocation, term: TermKey) {
         self.course = course
         self.location = location
+        self.term = term
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .pageSheet
     }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -559,10 +566,11 @@ final class CourseDetailViewController: UIViewController {
             switch key {
             case .blue: return "青"
             case .green: return "緑"
-            case .yellow: return "黄"
+            case .orange: return "オレンジ"
             case .red: return "赤"
             case .teal: return "エメラルドグリーン"
             case .gray: return "グレー"
+            case .purple: return "紫"
             }
         }()
 
@@ -848,10 +856,16 @@ final class CourseDetailViewController: UIViewController {
     }
 
     private func loadCounts() {
-        if let array = UserDefaults.standard.array(forKey: attendanceKey) as? [Int], array.count == 3 {
-            counts = AttendanceCounts(attended: array[0], late: array[1], absent: array[2])
+        let d = UserDefaults.standard
+        if let arr = d.array(forKey: attendanceKey) as? [Int], arr.count == 3 {
+            counts = AttendanceCounts(attended: arr[0], late: arr[1], absent: arr[2])
+        } else if let legacy = d.array(forKey: "attendance.\(course.id)") as? [Int], legacy.count == 3 {
+            // 旧仕様で入っている値があれば、初回だけ新キーにコピー
+            counts = AttendanceCounts(attended: legacy[0], late: legacy[1], absent: legacy[2])
+            saveCounts()
         }
     }
+
 
     // MARK: - Helpers
     private func courseCreditsText() -> String? {

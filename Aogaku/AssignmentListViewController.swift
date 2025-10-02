@@ -1,6 +1,14 @@
+
 import UIKit
 import UserNotifications
 import EventKit
+import GoogleMobileAds   // ← 追加
+
+// TimetableSettingsViewController と同じヘルパー（Adaptive Banner）
+@inline(__always)
+private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
 
 /// MemoTaskViewController 側の保存形式に合わせた最小モデル
 private struct SavedTask: Codable {
@@ -26,10 +34,18 @@ private struct TaskRow {
     var calendarEventId: String?
 }
 
-final class AssignmentListViewController: UITableViewController {
+final class AssignmentListViewController: UITableViewController, BannerViewDelegate {
 
     private let courseTitleById: [String: String]
     private var rows: [TaskRow] = []
+
+    // ===== AdMob Banner ===== (他画面と同じ構成)
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
+    private let bannerTopPadding: CGFloat = 60  // 他画面に合わせて余白を確保
 
     init(courseTitleById: [String:String]) {
         self.courseTitleById = courseTitleById
@@ -37,6 +53,10 @@ final class AssignmentListViewController: UITableViewController {
         self.title = "課題一覧"
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self, name: .adMobReady, object: nil)
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -51,12 +71,28 @@ final class AssignmentListViewController: UITableViewController {
 
         loadAllTasks()
         applyEmptyStateIfNeeded()
+
+        // --- AdMob 設置（TimetableSettings と同じ流儀） ---
+        setupAdBanner()
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onAdMobReady),
+            name: .adMobReady, object: nil)
+    }
+
+    @objc private func onAdMobReady() {
+        loadBannerIfNeeded()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         // 万一ナビゲーションバーが隠れている構成でも表示されるように
         navigationController?.setNavigationBarHidden(false, animated: false)
+    }
+
+    // 画面サイズ確定後に Adaptive サイズでロード
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()
     }
 
     @objc private func closeTapped() {
@@ -202,5 +238,94 @@ final class AssignmentListViewController: UITableViewController {
             done(true)
         }
         return UISwipeActionsConfiguration(actions: [action])
+    }
+
+    // MARK: - AdMob Banner (TimetableSettings と同等の実装)
+    private func setupAdBanner() {
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(adContainer)
+
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            adContainerHeight!
+        ])
+
+        // Remote Config で広告停止中なら UI も畳む
+        guard AdsConfig.enabled else {
+            adContainer.isHidden = true
+            adContainerHeight?.constant = 0
+            updateBottomInset(0)
+            return
+        }
+
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = AdsConfig.bannerUnitID
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner
+        bv.delegate = self
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor, constant: bannerTopPadding) // 少し下げる
+        ])
+
+        // 初期高さ（余白分も確保）
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        let useWidth = max(320, floor(safeWidth))
+        let size = makeAdaptiveAdSize(width: useWidth)
+        adContainerHeight?.constant = size.size.height + bannerTopPadding
+
+        bannerView = bv
+    }
+
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        guard safeWidth > 0 else { return }
+
+        let useWidth = max(320, floor(safeWidth))
+        if abs(useWidth - lastBannerWidth) < 0.5 { return }  // 同幅の連続ロードを抑止
+        lastBannerWidth = useWidth
+
+        let size = makeAdaptiveAdSize(width: useWidth)
+        adContainerHeight?.constant = size.size.height + bannerTopPadding
+        view.layoutIfNeeded()
+
+        guard size.size.height > 0 else { return }
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) {
+            bv.adSize = size
+        }
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+
+    // Table の下インセットを調整してバナーと被らないようにする
+    private func updateBottomInset(_ h: CGFloat) {
+        tableView.contentInset.bottom = h
+        tableView.scrollIndicatorInsets.bottom = h
+    }
+
+    // MARK: - BannerViewDelegate
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        let h = bannerView.adSize.size.height
+        adContainerHeight?.constant = h + bannerTopPadding
+        updateBottomInset(h + bannerTopPadding)
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+    }
+
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainerHeight?.constant = 0
+        updateBottomInset(0)
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+        print("Ad failed:", error.localizedDescription)
     }
 }

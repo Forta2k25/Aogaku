@@ -96,7 +96,7 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         versionLabel.font = .systemFont(ofSize: 12)
         versionLabel.textColor = .secondaryLabel
         versionLabel.textAlignment = .right
-        versionLabel.text = "バージョン 1.1\n© 2025 FORTA"
+        versionLabel.text = "バージョン 1.3\n© 2025 FORTA"
         versionLabel.numberOfLines = 2
         versionLabel.translatesAutoresizingMaskIntoConstraints = false
         footer.addSubview(versionLabel)

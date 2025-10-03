@@ -680,6 +680,8 @@ final class timetable: UIViewController,
         saveAssigned()
 
         let loc = SlotLocation(day: day, period: period)
+        SlotColorStore.set(.teal, for: loc)
+
         let colorName = SlotColorStore.color(for: loc)?.rawValue
         let key = cellKey(day: day, period: period)
         let localH = slotHash(course, colorKey: colorName)
@@ -1253,9 +1255,12 @@ final class timetable: UIViewController,
         if let btn = slotButtons.first(where: { $0.tag == idx }) { configureButton(btn, at: idx) }
         else { reloadAllButtons() }
         saveAssigned()
+        
+        
 
         let day = location.day, period = location.period
         let loc = SlotLocation(day: day, period: period)
+        SlotColorStore.set(.teal, for: loc)
         let colorName = SlotColorStore.color(for: loc)?.rawValue
         let key = cellKey(day: day, period: period)
         let localH = slotHash(course, colorKey: colorName)

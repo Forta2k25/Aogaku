@@ -592,7 +592,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     }
 
     // ===== 見た目更新 =====
-    private func configureSlotButtons() {
+  /*  private func configureSlotButtons() {
         guard let slotButtons else { return }
         for b in slotButtons {
             var cfg = b.configuration ?? .plain()
@@ -611,7 +611,44 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
                 btn.configuration = c
             }
         }
+    }*/
+    // 置換後：角丸なしで四角いマスに固定
+    // 角丸なしで四角に固定（エラー修正版）
+    private func configureSlotButtons() {
+        guard let slotButtons else { return }
+
+        for b in slotButtons {
+            // 念のためレイヤー側でも無効化
+            b.layer.cornerRadius = 0
+            b.clipsToBounds = true
+
+            var cfg = b.configuration ?? .plain()
+            cfg.cornerStyle = .fixed              // ← こちらは UIButton.Configuration のプロパティ
+
+            var bg = cfg.background ?? UIBackgroundConfiguration.clear()
+            bg.cornerRadius = 0                   // ← 背景の角丸を物理的に 0
+            bg.backgroundColor = .white
+            cfg.background = bg
+
+            cfg.baseForegroundColor = .lightGray
+            b.configuration = cfg
+
+            b.configurationUpdateHandler = { btn in
+                var c = btn.configuration ?? .plain()
+                c.cornerStyle = .fixed            // 毎回固定
+
+                var bg = c.background ?? UIBackgroundConfiguration.clear()
+                bg.cornerRadius = 0
+                bg.backgroundColor = btn.isSelected ? .systemGreen : .white
+                c.background = bg
+
+                c.baseForegroundColor = btn.isSelected ? .white : .lightGray
+                btn.configuration = c
+            }
+        }
     }
+
+
 
     // ===== ヘルパ =====
     private func setButtonTitleColor(_ button: UIButton, _ color: UIColor) {

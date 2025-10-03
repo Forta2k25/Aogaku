@@ -2,6 +2,7 @@
 <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="23727" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="ehP-GV-50T">
     <device id="retina6_9" orientation="portrait" appearance="light"/>
     <dependencies>
+        <deployment identifier="iOS"/>
         <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="23721"/>
         <capability name="Safe area layout guides" minToolsVersion="9.0"/>
         <capability name="System colors in document resources" minToolsVersion="11.0"/>
@@ -201,23 +202,6 @@
                                 <color key="textColor" red="0.0" green="0.0" blue="0.0" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                                 <nil key="highlightedColor"/>
                             </label>
-                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="mSM-6H-dKb">
-                                <rect key="frame" x="293" y="46" width="46" height="46"/>
-                                <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                <constraints>
-                                    <constraint firstAttribute="height" constant="46" id="0zm-qd-DHS"/>
-                                    <constraint firstAttribute="width" constant="46" id="zgk-av-p3t"/>
-                                </constraints>
-                                <color key="tintColor" white="0.0" alpha="0.0" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                <inset key="imageEdgeInsets" minX="0.0" minY="0.0" maxX="2.2250738585072014e-308" maxY="0.0"/>
-                                <state key="normal" title="Button" backgroundImage="slider.horizontal.3" catalog="system"/>
-                                <buttonConfiguration key="configuration" style="plain" image="slider.horizontal.3" catalog="system" title=""/>
-                                <userDefinedRuntimeAttributes>
-                                    <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
-                                        <integer key="value" value="8"/>
-                                    </userDefinedRuntimeAttribute>
-                                </userDefinedRuntimeAttributes>
-                            </button>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="gyg-2q-gZy">
                                 <rect key="frame" x="359" y="46" width="46" height="46"/>
                                 <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
@@ -325,7 +309,7 @@
                                 </connections>
                             </segmentedControl>
                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text=" " textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="TA5-hm-Avx">
-                                <rect key="frame" x="217.66666666666663" y="182" width="5" height="40"/>
+                                <rect key="frame" x="217.66666666666666" y="182" width="5" height="40"/>
                                 <constraints>
                                     <constraint firstAttribute="height" constant="40" id="BM9-UX-GAR"/>
                                 </constraints>
@@ -788,6 +772,26 @@
                                     <action selector="termChanged:" destination="XWM-mO-tUM" eventType="valueChanged" id="5mg-j5-c4D"/>
                                 </connections>
                             </segmentedControl>
+                            <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="ZeQ-BW-v0a">
+                                <rect key="frame" x="288" y="46" width="46" height="46"/>
+                                <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="46" id="0jd-qd-2Lu"/>
+                                    <constraint firstAttribute="height" constant="46" id="UcH-hn-0rq"/>
+                                </constraints>
+                                <color key="tintColor" red="0.1176470518" green="0.1176470518" blue="0.1176470518" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
+                                <inset key="imageEdgeInsets" minX="0.0" minY="0.0" maxX="2.2250738585072014e-308" maxY="0.0"/>
+                                <state key="normal" title="Button" backgroundImage="slider.horizontal.3" catalog="system"/>
+                                <buttonConfiguration key="configuration" style="plain" image="arrow.clockwise" catalog="system" title=""/>
+                                <userDefinedRuntimeAttributes>
+                                    <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
+                                        <integer key="value" value="8"/>
+                                    </userDefinedRuntimeAttribute>
+                                </userDefinedRuntimeAttributes>
+                                <connections>
+                                    <action selector="didTapReset:" destination="XWM-mO-tUM" eventType="touchUpInside" id="MFG-VL-flJ"/>
+                                </connections>
+                            </button>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="kPl-wp-qWl"/>
                         <color key="backgroundColor" red="0.92143100499999997" green="0.92145264149999995" blue="0.92144101860000005" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
@@ -798,12 +802,11 @@
                             <constraint firstItem="NXc-9E-DZh" firstAttribute="top" secondItem="DUR-O8-WTg" secondAttribute="bottom" constant="41" id="6oT-5l-6ch"/>
                             <constraint firstItem="IfJ-t3-LP1" firstAttribute="leading" secondItem="kdK-Gy-r6a" secondAttribute="trailing" constant="20" id="7Rm-TR-NTM"/>
                             <constraint firstItem="TA5-hm-Avx" firstAttribute="leading" secondItem="zdu-kz-RvL" secondAttribute="trailing" constant="5" id="7W0-Pz-eFp"/>
-                            <constraint firstItem="uIl-fM-EPP" firstAttribute="top" secondItem="mSM-6H-dKb" secondAttribute="bottom" constant="23" id="7l3-pw-Evt"/>
+                            <constraint firstItem="uIl-fM-EPP" firstAttribute="top" secondItem="ZeQ-BW-v0a" secondAttribute="bottom" constant="23" id="92I-4g-eqw"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="qQj-md-bUh" secondAttribute="trailing" constant="20" id="BTV-m5-yde"/>
                             <constraint firstItem="qMx-1H-XJW" firstAttribute="top" secondItem="uIl-fM-EPP" secondAttribute="bottom" constant="15" id="Cl1-h5-XfB"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="bottom" secondItem="UaY-RP-5cg" secondAttribute="bottom" constant="40" id="FkZ-7j-b8j"/>
                             <constraint firstItem="IfJ-t3-LP1" firstAttribute="top" secondItem="gyg-2q-gZy" secondAttribute="bottom" constant="23" id="GA8-fT-BTe"/>
-                            <constraint firstItem="kdK-Gy-r6a" firstAttribute="top" secondItem="mSM-6H-dKb" secondAttribute="bottom" constant="32" id="Iqp-El-BCC"/>
                             <constraint firstItem="zdu-kz-RvL" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="K5s-uk-0fb"/>
                             <constraint firstItem="gyg-2q-gZy" firstAttribute="top" secondItem="Nae-Qf-sP9" secondAttribute="top" constant="46" id="Lb3-yR-aPm"/>
                             <constraint firstItem="ouz-PE-xVV" firstAttribute="centerX" secondItem="Nae-Qf-sP9" secondAttribute="centerX" id="MX4-aH-4vS"/>
@@ -814,20 +817,21 @@
                             <constraint firstItem="Qp9-AC-aMn" firstAttribute="top" secondItem="zdu-kz-RvL" secondAttribute="bottom" constant="15" id="R3J-wH-kxb"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="qMx-1H-XJW" secondAttribute="trailing" constant="20" id="Sl1-x6-Vqp"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="UaY-RP-5cg" secondAttribute="trailing" constant="20" id="TeE-cd-I3q"/>
+                            <constraint firstItem="ZeQ-BW-v0a" firstAttribute="top" secondItem="Nae-Qf-sP9" secondAttribute="top" constant="46" id="X7v-LK-lN2"/>
                             <constraint firstItem="zdu-kz-RvL" firstAttribute="top" secondItem="uIl-fM-EPP" secondAttribute="bottom" constant="15" id="XD4-aR-6dN"/>
                             <constraint firstItem="kPl-wp-qWl" firstAttribute="trailing" secondItem="ouz-PE-xVV" secondAttribute="trailing" constant="20" id="Xcy-f1-zIi"/>
                             <constraint firstItem="DUR-O8-WTg" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="30" id="Xqz-ub-Q18"/>
                             <constraint firstItem="uIl-fM-EPP" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="dFG-ls-vgR"/>
                             <constraint firstItem="qQj-md-bUh" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="dLu-nG-fIP"/>
-                            <constraint firstItem="mSM-6H-dKb" firstAttribute="top" secondItem="Nae-Qf-sP9" secondAttribute="top" constant="46" id="eZp-wl-2xk"/>
                             <constraint firstItem="TA5-hm-Avx" firstAttribute="centerX" secondItem="Nae-Qf-sP9" secondAttribute="centerX" id="f5k-Nu-6N4"/>
                             <constraint firstItem="ouz-PE-xVV" firstAttribute="top" secondItem="Qp9-AC-aMn" secondAttribute="bottom" constant="15" id="fwB-UZ-hpv"/>
-                            <constraint firstItem="gyg-2q-gZy" firstAttribute="leading" secondItem="mSM-6H-dKb" secondAttribute="trailing" constant="20" id="g0E-WJ-bxm"/>
                             <constraint firstItem="Qp9-AC-aMn" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="gYV-7N-O3g"/>
                             <constraint firstItem="UaY-RP-5cg" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="h88-Xj-kRf"/>
                             <constraint firstItem="qMx-1H-XJW" firstAttribute="leading" secondItem="TA5-hm-Avx" secondAttribute="trailing" constant="5" id="ifE-1N-M3m"/>
                             <constraint firstItem="UaY-RP-5cg" firstAttribute="top" secondItem="qQj-md-bUh" secondAttribute="bottom" constant="20" id="jxU-Rt-OUc"/>
                             <constraint firstItem="kdK-Gy-r6a" firstAttribute="leading" secondItem="NXc-9E-DZh" secondAttribute="trailing" constant="12" id="ofT-03-TSO"/>
+                            <constraint firstItem="kdK-Gy-r6a" firstAttribute="top" secondItem="ZeQ-BW-v0a" secondAttribute="bottom" constant="32" id="rpl-3u-rTs"/>
+                            <constraint firstItem="gyg-2q-gZy" firstAttribute="leading" secondItem="ZeQ-BW-v0a" secondAttribute="trailing" constant="25" id="uX6-wz-qbg"/>
                             <constraint firstItem="DUR-O8-WTg" firstAttribute="top" secondItem="Nae-Qf-sP9" secondAttribute="top" constant="50" id="vyP-fY-VLx"/>
                             <constraint firstItem="ouz-PE-xVV" firstAttribute="leading" secondItem="kPl-wp-qWl" secondAttribute="leading" constant="20" id="yEO-cP-ExX"/>
                         </constraints>
@@ -842,6 +846,7 @@
                         <outlet property="gridContainerView" destination="UaY-RP-5cg" id="3it-r1-Pip"/>
                         <outlet property="keywordTextField" destination="kdK-Gy-r6a" id="vGE-67-Vrs"/>
                         <outlet property="placeSegmentedControl" destination="qQj-md-bUh" id="Jhv-Jg-3IC"/>
+                        <outlet property="resetButton" destination="ZeQ-BW-v0a" id="CpF-uK-rm5"/>
                         <outlet property="termSegmentedControl" destination="ouz-PE-xVV" id="AXC-o5-fw6"/>
                         <outletCollection property="slotButtons" destination="3jh-Od-Uzi" collectionClass="NSMutableArray" id="4yh-go-wBp"/>
                         <outletCollection property="slotButtons" destination="u79-H2-eDJ" collectionClass="NSMutableArray" id="wFo-Lb-IVU"/>
@@ -1327,6 +1332,7 @@
         </scene>
     </scenes>
     <resources>
+        <image name="arrow.clockwise" catalog="system" width="110" height="128"/>
         <image name="bookmark" catalog="system" width="110" height="128"/>
         <image name="calendar" catalog="system" width="128" height="107"/>
         <image name="gear" catalog="system" width="128" height="122"/>

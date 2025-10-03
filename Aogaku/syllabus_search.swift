@@ -39,6 +39,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     @IBOutlet var slotButtons: [UIButton]!
     @IBOutlet weak var gridContainerView: UIView!
     @IBOutlet weak var detailFilterButton: UIButton!
+    @IBOutlet weak var resetButton: UIButton!
 
     // ===== 内部状態 =====
     private var selectedCategory: String?
@@ -47,7 +48,9 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     private var selectedPlace: String?
     private var selectedGrade: String?
     private var selectedTerm: String?    // ★ "前期" / "後期" / nil
-
+    //リセットボタン関連 ===
+    private weak var favoritesButtonDetected: UIButton?   // 既存の「ブックマーク」ボタンを自動検出
+    private var didInstallResetButton = false
     private var selectedStates = Array(repeating: false, count: 25)
     private let days = ["月","火","水","木","金"]
     private let periods = [1,2,3,4,5]
@@ -157,6 +160,73 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         applyInitialSelectionIfNeeded()
         loadBannerIfNeeded()
     }
+    
+    // === 追加ブロック: ボタン設置・検索条件の全リセット ===
+    private func installResetButtonIfPossible() {
+        // 既存の「ブックマーク」ボタンを再帰的に探す（didTapFavorites: が紐づく UIButton）
+        if favoritesButtonDetected == nil {
+            favoritesButtonDetected = findFavoritesButton(in: view)
+        }
+
+        // 見つからなければ安全に右上へ設置（サイズは適度に）
+        let anchorButton = favoritesButtonDetected
+
+        let btn = UIButton(type: .system)
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        // 見た目：ブックマークと同等サイズにするため、Configurationを真似る
+        if let cfg = (anchorButton?.configuration) {
+            var c = cfg
+            c.image = UIImage(systemName: "arrow.counterclockwise")
+            c.title = nil
+            btn.configuration = c
+        } else {
+            // フォールバック（同程度の見た目）
+            var c = UIButton.Configuration.filled()
+            c.image = UIImage(systemName: "arrow.counterclockwise")
+            c.baseBackgroundColor = .systemGray5
+            c.baseForegroundColor = .label
+            c.contentInsets = .init(top: 8, leading: 12, bottom: 8, trailing: 12)
+            btn.configuration = c
+        }
+        btn.accessibilityLabel = "条件をリセット"
+        btn.addTarget(self, action: #selector(didTapReset), for: .touchUpInside)
+        view.addSubview(btn)
+        self.resetButton = btn
+
+        // 位置: 「ブックマーク」ボタンの**左**に、同サイズで並べる
+        if let fav = anchorButton, let sv = fav.superview {
+            sv.addSubview(btn)   // 同じコンテナに入れる
+            NSLayoutConstraint.activate([
+                btn.centerYAnchor.constraint(equalTo: fav.centerYAnchor),
+                btn.trailingAnchor.constraint(equalTo: fav.leadingAnchor, constant: -8),
+                btn.widthAnchor.constraint(equalTo: fav.widthAnchor),
+                btn.heightAnchor.constraint(equalTo: fav.heightAnchor)
+            ])
+        } else {
+            // フォールバック配置（右上固定）
+            let sa = view.safeAreaLayoutGuide
+            NSLayoutConstraint.activate([
+                btn.topAnchor.constraint(equalTo: sa.topAnchor, constant: 12),
+                btn.trailingAnchor.constraint(equalTo: sa.trailingAnchor, constant: -12),
+                btn.widthAnchor.constraint(equalToConstant: 44),
+                btn.heightAnchor.constraint(equalToConstant: 44)
+            ])
+        }
+    }
+
+    // didTapFavorites: を action に持つ UIButton を探索
+    private func findFavoritesButton(in root: UIView) -> UIButton? {
+        if let b = root as? UIButton {
+            if b.allTargets.contains(self),
+               (b.actions(forTarget: self, forControlEvent: .touchUpInside) ?? []).contains("didTapFavorites:") {
+                return b
+            }
+        }
+        for v in root.subviews {
+            if let hit = findFavoritesButton(in: v) { return hit }
+        }
+        return nil
+    }
 
     // ===== Ad =====
     private func setupAdBanner() {
@@ -230,6 +300,37 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         additionalSafeAreaInsets.bottom = 0
         UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
         print("Ad failed:", error.localizedDescription)
+    }
+    
+    @IBAction func didTapReset(_ sender: Any) {
+        // 内部状態
+        selectedCategory = nil
+        selectedDepartment = nil
+        selectedCampus = nil
+        selectedPlace = nil
+        selectedGrade = nil
+        selectedTerm = nil
+        selectedStates = Array(repeating: false, count: selectedStates.count)
+
+        // UI
+        keywordTextField?.text = nil
+        setButtonTitleAndColor(facultyButton, title: "学部", color: .lightGray)
+        departmentButton.setTitle("学科", for: .normal)
+        setButtonTitleColor(departmentButton, .lightGray)
+        campusSegmentedControl.selectedSegmentIndex = 0
+        placeSegmentedControl.selectedSegmentIndex = 0
+        termSegmentedControl.selectedSegmentIndex = 0
+        slotButtons?.forEach { $0.isSelected = false }
+        view.endEditing(true)
+
+        // 親へ即時反映
+        let criteria = SyllabusSearchCriteria(
+            keyword: nil, category: nil, department: nil,
+            campus: nil, place: nil, grade: nil,
+            day: nil, periods: nil, timeSlots: nil,
+            term: nil, undecided: nil
+        )
+        onApply?(criteria)
     }
 
     // ===== Actions =====

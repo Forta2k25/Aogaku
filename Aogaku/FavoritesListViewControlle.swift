@@ -206,30 +206,45 @@ final class FavoritesListViewController: UITableViewController {
         let sb = UIStoryboard(name: "Main", bundle: nil)
         let anyVC = sb.instantiateViewController(withIdentifier: "SyllabusDetailViewController")
 
-        // ① そのまま Detail VC の場合
+        // ① 直接 Detail VC の場合
         if let vc = anyVC as? SyllabusDetailViewController {
             vc.docID = item.docID
             vc.initialTitle = item.name
             vc.initialTeacher = item.teacher
-            if let nav = navigationController {
-                nav.pushViewController(vc, animated: true)
-            } else {
-                present(UINavigationController(rootViewController: vc), animated: true)
+
+            let nav = UINavigationController(rootViewController: vc)
+            nav.setNavigationBarHidden(true, animated: false)          // ← ナビバーを隠す
+            nav.modalPresentationStyle = .pageSheet
+            if let sheet = nav.sheetPresentationController {
+                sheet.detents = [.large()]
+                sheet.selectedDetentIdentifier = .large
+                sheet.prefersGrabberVisible = true    // つまみも消したい場合は false
+                sheet.preferredCornerRadius = 16
             }
+            present(nav, animated: true)
             return
         }
 
-        // ② ナビでラップされている場合（ID が Nav に付いている）
+        // ② Storyboard 側で Nav に包まれている場合
         if let nav = anyVC as? UINavigationController,
            let vc = nav.viewControllers.first as? SyllabusDetailViewController {
             vc.docID = item.docID
             vc.initialTitle = item.name
             vc.initialTeacher = item.teacher
+
+            nav.setNavigationBarHidden(true, animated: false)          // ← ナビバーを隠す
+            nav.modalPresentationStyle = .pageSheet
+            if let sheet = nav.sheetPresentationController {
+                sheet.detents = [.large()]
+                sheet.selectedDetentIdentifier = .large
+                sheet.prefersGrabberVisible = true
+                sheet.preferredCornerRadius = 16
+            }
             present(nav, animated: true)
             return
         }
 
-        assertionFailure("Storyboard ID \"SyllabusDetailViewController\" の型が想定と違います。IDの付与先を確認してください。")
+        assertionFailure("Storyboard ID \"SyllabusDetailViewController\" の型を確認してください。")
     }
 
     // 左スワイプでブックマーク解除

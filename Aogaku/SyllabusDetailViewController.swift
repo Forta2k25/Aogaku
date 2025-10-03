@@ -179,17 +179,13 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     private func refreshButtons() {
         let fav = Set(UserDefaults.standard.stringArray(forKey: favoriteKey) ?? [])
 
-        // timetable 側の保存を優先し、plannedKey は保険として併用
+        // 「時間割に入っているか」だけで決める（planned は参照しない）
         let inTimetable = isAlreadyInTimetable()
-        let alsoPlanned: Bool = {
-            guard let s = docID else { return false }
-            let planned = Set(UserDefaults.standard.stringArray(forKey: plannedKey) ?? [])
-            return planned.contains(s)
-        }()
 
-        let addSymbol = (inTimetable || alsoPlanned) ? "checkmark.circle.fill" : "plus.circle"
+        let addSymbol = inTimetable ? "checkmark.circle.fill" : "plus.circle"
         addButton?.setImage(UIImage(systemName: addSymbol), for: .normal)
-        addButton?.tintColor = (inTimetable || alsoPlanned) ? .systemGreen : .label
+        addButton?.tintColor = inTimetable ? .systemGreen : .label
+
 
         let isFav: Bool = {
             guard let s = docID else { return false }
@@ -272,12 +268,10 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         ac.addAction(UIAlertAction(title: "登録", style: .default, handler: { [weak self] _ in
             guard let self = self, let id = self.docID, !id.isEmpty else { return }
 
-            // planned のトグル（既存仕様を踏襲）
-            var set = Set(UserDefaults.standard.stringArray(forKey: self.plannedKey) ?? [])
-            if set.contains(id) { set.remove(id) } else { set.insert(id) }
-            UserDefaults.standard.set(Array(set), forKey: self.plannedKey)
+            // planned は使わない。＋からの登録時だけチェックに「楽観更新」
+            self.addButton?.setImage(UIImage(systemName: "checkmark.circle.fill"), for: .normal)
+            self.addButton?.tintColor = .systemGreen
 
-            self.refreshButtons()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
             var info: [String: Any] = ["course": payload, "docID": id, "day": day, "period": period]

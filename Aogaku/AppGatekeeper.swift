@@ -30,12 +30,29 @@ final class AppGatekeeper {
         let settings = RemoteConfigSettings()
         settings.minimumFetchInterval = fetchInterval
         rc.configSettings = settings
+        
+        // ① まず“現在有効化済み”の値で即判定
+        evaluate(on: presenter)
 
         rc.fetchAndActivate { [weak self] _, _ in
             self?.evaluate(on: presenter)
         }
     }
+    
+    func forceRefreshAndPresentIfNeeded(on presenter: UIViewController) {
+        let prev = rc.configSettings                       // 退避
+        let tmp = RemoteConfigSettings()
+        tmp.minimumFetchInterval = 0                       // このリクエストだけ即時
+        rc.configSettings = tmp
 
+        rc.fetchAndActivate { [weak self] _, _ in
+            self?.evaluate(on: presenter)                  // 反映して判定
+            self?.rc.configSettings = prev                 // 元に戻す
+        }
+    }
+
+    private weak var maintenanceAlert: UIAlertController?
+    
     private func evaluate(on presenter: UIViewController) {
         let minV  = rc["rc_min_supported_version_ios"].stringValue ?? "0.0.0"
         let stop  = rc["rc_maintenance_mode"].boolValue
@@ -44,10 +61,11 @@ final class AppGatekeeper {
         let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
 
         if stop {
-            presentBlocking(on: presenter, title: "メンテナンス中",
-                            message: msg.isEmpty ? "現在一時的にご利用いただけません。" : msg,
-                            storeURL: nil)
-            return
+            let text = msg.isEmpty ? "現在メンテナンス中です。しばらくお待ちください。" : msg
+            showMaintenanceAlert(on: presenter, message: text)
+        return
+        } else {
+            hideMaintenanceAlert()
         }
         if current.isSemverLower(than: minV) {
             presentBlocking(on: presenter, title: "アップデートが必要です",
@@ -55,16 +73,60 @@ final class AppGatekeeper {
                             storeURL: URL(string: store))
         }
     }
-
-    private func presentBlocking(on presenter: UIViewController, title: String, message: String, storeURL: URL?) {
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        if let url = storeURL {
-            alert.addAction(UIAlertAction(title: "App Store を開く", style: .default) { _ in
-                UIApplication.shared.open(url)
-            })
+    private func showMaintenanceAlert(on presenter: UIViewController, message: String) {
+        DispatchQueue.main.async {
+            // すでに表示中なら文言だけ更新
+            if let alert = self.maintenanceAlert {
+                alert.message = message
+                return
+            }
+            let alert = UIAlertController(title: "メンテナンス中",
+                                          message: message,
+                                          preferredStyle: .alert)   // ← アクションを一切追加しない
+            presenter.present(alert, animated: true)
+            self.maintenanceAlert = alert
         }
-        presenter.present(alert, animated: true)
     }
+
+    private func hideMaintenanceAlert() {
+        DispatchQueue.main.async {
+            self.maintenanceAlert?.dismiss(animated: true)
+            self.maintenanceAlert = nil
+        }
+    }
+
+    private var isPresenting = false
+
+    private func presentBlocking(on presenter: UIViewController,
+                                 title: String, message: String, storeURL: URL?) {
+        DispatchQueue.main.async {
+            // すでに何かを表示中なら一旦閉じてから再帰的に提示（即時ブロック）
+            if let presented = presenter.presentedViewController {
+                presented.dismiss(animated: false) { [weak self] in
+                    self?.presentBlocking(on: presenter, title: title, message: message, storeURL: storeURL)
+                }
+                return
+            }
+            guard !self.isPresenting else { return }
+            self.isPresenting = true
+
+            let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+            if let url = storeURL {
+                alert.addAction(UIAlertAction(title: "App Store を開く", style: .default) { _ in
+                    UIApplication.shared.open(url)
+                })
+            } else {
+                // 完全停止したい場合は OK 押下でも再表示（閉じられない）
+                alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+                    guard let self else { return }
+                    self.isPresenting = false
+                    self.presentBlocking(on: presenter, title: title, message: message, storeURL: nil)
+                })
+            }
+            presenter.present(alert, animated: true) { self.isPresenting = false }
+        }
+    }
+
 }
 
 private extension String {

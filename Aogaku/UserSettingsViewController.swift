@@ -1221,11 +1221,16 @@ private extension UserSettingsViewController {
             if let nav = self.navigationController {
                 // UINavigationController 配下 → push
                 let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt)
+                vc.overrideUserInterfaceStyle = .light
+                vc.view.backgroundColor = .systemBackground
                 nav.pushViewController(vc, animated: true)
             } else {
                 // それ以外 → 全画面モーダル（閉じるボタン付き）
                 let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt, showsCloseButton: true)
+                vc.overrideUserInterfaceStyle = .light
+                vc.view.backgroundColor = .systemBackground
                 let nav = UINavigationController(rootViewController: vc)
+                nav.overrideUserInterfaceStyle = .light            // ← ナビもライト固定
                 nav.modalPresentationStyle = .fullScreen
                 self.present(nav, animated: true)
             }

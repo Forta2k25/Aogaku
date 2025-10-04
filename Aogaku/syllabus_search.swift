@@ -121,25 +121,29 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         campusSegmentedControl.removeAllSegments()
         for (i, t) in campuses.enumerated() { campusSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
         campusSegmentedControl.selectedSegmentIndex = indexFor(value: selectedCampus, in: campuses)
-        campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-        campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+        //campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
+        //campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+        restyleSegmented(campusSegmentedControl)
 
         // 形態
         let places = ["指定なし","対面","オンライン"]
         placeSegmentedControl.removeAllSegments()
         for (i, t) in places.enumerated() { placeSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
         placeSegmentedControl.selectedSegmentIndex = indexFor(value: selectedPlace, in: places)
-        placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-        placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+        //placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
+        //placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+        restyleSegmented(placeSegmentedControl)
 
+        
         // ★ 学期（前期/後期）
         let terms = ["指定なし","前期","後期"]
         termSegmentedControl.removeAllSegments()
         for (i, t) in terms.enumerated() { termSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
         termSegmentedControl.selectedSegmentIndex = indexFor(value: selectedTerm, in: terms)
-        termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-        termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-
+        //termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
+        //termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+        restyleSegmented(termSegmentedControl)
+        
         configureSlotButtons()
         // グリッド制約/タグ採番/初期選択は viewDidLayoutSubviews で
 
@@ -147,9 +151,46 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         NotificationCenter.default.addObserver(self,
             selector: #selector(onAdMobReady),
             name: .adMobReady, object: nil)
+        applySearchBackground()   // ← 背景だけグレーに
+        applyHeaderTitleColor()     // ← 見出しの色だけ動的に
+        applySearchFieldStyle()   // ← 検索窓だけグレー化
     }
     @objc private func onAdMobReady() {
         loadBannerIfNeeded()
+    }
+
+    // 画面上部あたりに追記
+    private func searchBGColor(for trait: UITraitCollection) -> UIColor {
+        // ライト…従来どおり淡いグレー、ダーク…少し暗めのグレー
+        return (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemGray6
+    }
+    // ★ 追加: モードに応じて薄いグレーを返す（ライト=systemGray6 / ダーク=systemGray5）
+    private func slotNormalBGColor(for trait: UITraitCollection) -> UIColor {
+        // 背景より“ほんの少しだけ”薄い
+        if trait.userInterfaceStyle == .dark {
+            return .systemGray3   // 背景(systemGray5)より1段明るい
+        } else {
+        return UIColor(white: 0.96, alpha: 1.0) // 背景(systemGray6)よりわずかに明るい薄グレー
+    }
+    }
+
+    // 画面上部あたり
+    private func restyleSegmented(_ sc: UISegmentedControl) {
+        let isDark = (traitCollection.userInterfaceStyle == .dark)
+        // トラック（未選択の地の色）を薄く
+        sc.backgroundColor = isDark ? .systemGray5 : UIColor(white: 0.95, alpha: 1.0)
+        // 選択部分も少し薄め
+        sc.selectedSegmentTintColor = isDark ? .systemGray2 : UIColor(white: 1.0, alpha: 1.0)
+        // 文字色は動的色
+        sc.setTitleTextAttributes([.foregroundColor: UIColor.secondaryLabel], for: .normal)
+        sc.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .selected)
+        sc.layer.masksToBounds = true
+    }
+
+    private func applySearchBackground() {
+        let bg = searchBGColor(for: traitCollection)
+        view.backgroundColor = bg
+        adContainer.backgroundColor = bg
     }
 
 
@@ -159,6 +200,18 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         buildGridConstraintsIfNeeded()
         applyInitialSelectionIfNeeded()
         loadBannerIfNeeded()
+        applySearchFieldStyle()
+    }
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applySearchBackground()
+            applyHeaderTitleColor()
+            applySearchFieldStyle()
+            restyleSegmented(campusSegmentedControl)
+            restyleSegmented(placeSegmentedControl)
+            restyleSegmented(termSegmentedControl)
+        }
     }
     
     // === 追加ブロック: ボタン設置・検索条件の全リセット ===
@@ -591,27 +644,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         }
     }
 
-    // ===== 見た目更新 =====
-  /*  private func configureSlotButtons() {
-        guard let slotButtons else { return }
-        for b in slotButtons {
-            var cfg = b.configuration ?? .plain()
-            cfg.baseBackgroundColor = .white
-            cfg.baseForegroundColor = .lightGray
-            b.configuration = cfg
-            b.configurationUpdateHandler = { btn in
-                var c = btn.configuration
-                if btn.isSelected {
-                    c?.baseBackgroundColor = .systemGreen
-                    c?.baseForegroundColor = .white
-                } else {
-                    c?.baseBackgroundColor = .white
-                    c?.baseForegroundColor = .lightGray
-                }
-                btn.configuration = c
-            }
-        }
-    }*/
+
     // 置換後：角丸なしで四角いマスに固定
     // 角丸なしで四角に固定（エラー修正版）
     private func configureSlotButtons() {
@@ -627,19 +660,20 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
 
             var bg = cfg.background ?? UIBackgroundConfiguration.clear()
             bg.cornerRadius = 0                   // ← 背景の角丸を物理的に 0
-            bg.backgroundColor = .white
+            bg.backgroundColor = slotNormalBGColor(for: traitCollection) // ← 薄いグレーに統一
             cfg.background = bg
 
             cfg.baseForegroundColor = .lightGray
             b.configuration = cfg
 
-            b.configurationUpdateHandler = { btn in
+            b.configurationUpdateHandler = { [weak self] btn in
+                guard let self = self else { return }
                 var c = btn.configuration ?? .plain()
                 c.cornerStyle = .fixed            // 毎回固定
 
                 var bg = c.background ?? UIBackgroundConfiguration.clear()
                 bg.cornerRadius = 0
-                bg.backgroundColor = btn.isSelected ? .systemGreen : .white
+                bg.backgroundColor = btn.isSelected ? .systemGreen : self.slotNormalBGColor(for: self.traitCollection)
                 c.background = bg
 
                 c.baseForegroundColor = btn.isSelected ? .white : .lightGray
@@ -648,7 +682,86 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         }
     }
 
+    // ★ 追加: 見出しの色を動的色(.label)に
+    private func applyHeaderTitleColor() {
+        // 既にアウトレットがある場合はそれを優先（任意）
+        // titleLabel?.textColor = .label
 
+        // フォールバック：テキストに「シラバス」を含む UILabel を探索
+        if let header = findHeaderLabel(in: view) {
+            header.textColor = .label   // ライト=黒 / ダーク=白
+        }
+    }
+
+    private func findHeaderLabel(in root: UIView) -> UILabel? {
+        if let l = root as? UILabel, (l.text ?? "").contains("シラバス") { return l }
+        for v in root.subviews {
+            if let hit = findHeaderLabel(in: v) { return hit }
+        }
+        return nil
+    }
+    // 画面上部あたりに追記
+    private func searchFieldBG(for trait: UITraitCollection) -> UIColor {
+        return (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemGray6
+    }
+
+    private func applySearchFieldStyle() {
+        guard let tf = keywordTextField else { return }
+
+        let isDark = (traitCollection.userInterfaceStyle == .dark)
+        let bg = searchFieldBG(for: traitCollection)
+
+        // ★ 外側の白ピル（角丸コンテナ）を確実にグレーに
+        if let container = findRoundedContainer(for: tf) {
+            container.backgroundColor = bg
+            container.layer.cornerRadius = 12
+            container.layer.masksToBounds = true
+        }
+
+        // TextField自体は透明（重ね角丸を避ける）
+        tf.backgroundColor = .clear
+        tf.borderStyle = .none
+        tf.layer.cornerRadius = 12
+        tf.layer.masksToBounds = true
+        tf.textColor = isDark ? .black : .label     // ← ダーク時は黒文字
+        tf.tintColor = isDark ? .black : .label     // ← キャレットも黒
+        if let ph = tf.placeholder, !ph.isEmpty {
+        // ダーク時は白背景なのでやや濃いグレーに
+        let phColor: UIColor = isDark ? .systemGray2 : .placeholderText
+            tf.attributedPlaceholder = NSAttributedString(
+            string: ph, attributes: [.foregroundColor: phColor]
+        )
+        }
+
+
+        let iconColor: UIColor = isDark ? .black : .secondaryLabel
+        tf.leftView?.tintColor = iconColor
+        if let iv = tf.leftView as? UIImageView {
+            iv.image = iv.image?.withRenderingMode(.alwaysTemplate)
+            iv.tintColor = iconColor
+        } else if let iv = tf.leftView?.subviews.compactMap({ $0 as? UIImageView }).first {
+            iv.image = iv.image?.withRenderingMode(.alwaysTemplate)
+            iv.tintColor = iconColor
+        }
+    }
+
+
+
+    // TextFieldの外側にある角丸コンテナ（白いピル）を探す
+    private func findRoundedContainer(for tf: UITextField) -> UIView? {
+        var v: UIView? = tf.superview
+        while let cur = v, cur !== self.view {
+            // 角丸 or 背景色あり → コンテナ候補
+            if cur.layer.cornerRadius > 0.5 ||
+               (cur.backgroundColor != nil && cur.backgroundColor != .clear) {
+                return cur
+            }
+            v = cur.superview
+        }
+        return tf.superview
+    }
+
+    
 
     // ===== ヘルパ =====
     private func setButtonTitleColor(_ button: UIButton, _ color: UIColor) {

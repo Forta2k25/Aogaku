@@ -70,9 +70,12 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         view.backgroundColor = bg
         adContainer.backgroundColor = bg
 
-        // ここを置換：常に白
+        // ▼ ここを置換：ダーク時は黒、ライト時は白
+        let inputBG: UIColor = (traitCollection.userInterfaceStyle == .dark) ? .black : .white
         [gradeField, facultyDeptField].forEach {
-            $0.backgroundColor = .white
+            $0.backgroundColor = inputBG
+            $0.textColor = .label           // 文字はモードに追従
+            // （placeholder は既に UIColor.placeholderText を使用しているのでOK）
         }
     }
 
@@ -544,10 +547,15 @@ private extension AuthViewController {
             guard let self = self else { return }
             if let nav = self.navigationController {
                 let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt)
+                vc.overrideUserInterfaceStyle = .light
+                vc.view.backgroundColor = .systemBackground
                 nav.pushViewController(vc, animated: true)
             } else {
                 let vc = TextPageViewController(title: title, bundled: fileName, ext: fileExt, showsCloseButton: true)
+                vc.overrideUserInterfaceStyle = .light
+                vc.view.backgroundColor = .systemBackground
                 let nav = UINavigationController(rootViewController: vc)
+                nav.overrideUserInterfaceStyle = .light
                 nav.modalPresentationStyle = .fullScreen
                 self.present(nav, animated: true)
             }

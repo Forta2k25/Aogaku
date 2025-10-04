@@ -58,13 +58,14 @@ final class ClassDayCalendarViewController: UIViewController,
     // MARK: - LifeCycle
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        
         title = "学事暦"
 
         setupTopArea()
         setupCollection()
         setupBottomArea()
         setupAdBanner()
+        applyCalendarBackground()
         NotificationCenter.default.addObserver(self,
             selector: #selector(onAdMobReady),
             name: .adMobReady, object: nil)
@@ -98,6 +99,27 @@ final class ClassDayCalendarViewController: UIViewController,
         }
         loadBannerIfNeeded()
     }
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyCalendarBackground()
+        }
+    }
+    
+    // ClassDayCalendarViewController.swift （クラス内どこか上の方）
+    private func calendarBGColor(for trait: UITraitCollection) -> UIColor {
+        // ダーク時のみ薄いグレーに。ライトは従来のシステム背景を維持
+        return (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemBackground
+    }
+
+    private func applyCalendarBackground() {
+        let bg = calendarBGColor(for: traitCollection)
+        view.backgroundColor = bg
+        collectionView?.backgroundColor = bg
+        adContainer.backgroundColor = bg
+    }
+
 
     // MARK: - Top
     private func setupTopArea() {
@@ -155,7 +177,7 @@ final class ClassDayCalendarViewController: UIViewController,
         layout.sectionInset = .zero
 
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
-        collectionView.backgroundColor = .systemBackground
+        collectionView.backgroundColor = calendarBGColor(for: traitCollection)
         collectionView.contentInset = .zero
         collectionView.dataSource = self
         collectionView.delegate = self

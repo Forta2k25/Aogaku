@@ -96,6 +96,11 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     private var filterGrade: Int? = nil           // 1..4 / nil=指定なし
     private var filterFaculty: String? = nil      // "" / nil=指定なし
     private var filterDepartment: String? = nil   // "" / nil=未指定
+    
+    // === Paging ===
+    private let pageSize = 15
+    private var loadedCount = 0
+    private var isLoadingMore = false
 
     private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
         traits.userInterfaceStyle == .dark ? UIColor(white: 0.2, alpha: 1.0) : .systemBackground
@@ -171,7 +176,7 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         group.enter()
         db.collection("users")
             .order(by: "createdAt", descending: true)
-            .limit(to: 50)
+            .limit(to: 100)
             .getDocuments { [weak self] snap, _ in
                 guard let self = self else { return }
                 var newUsers: [UserPublic] = []
@@ -255,6 +260,28 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             tableView.reloadData()
         }
     }
+    private func resetPaging() {
+        isLoadingMore = false
+        loadedCount = min(pageSize, results.count)
+        tableView.reloadData()
+    }
+
+    private func loadMore() {
+        guard !isLoadingMore, loadedCount < results.count else { return }
+        isLoadingMore = true
+
+        let start = loadedCount
+        let end   = min(loadedCount + pageSize, results.count)
+        let newIndexPaths = (start..<end).map { IndexPath(row: $0, section: 0) }
+        loadedCount = end
+
+        tableView.performBatchUpdates({
+            tableView.insertRows(at: newIndexPaths, with: .automatic)
+        }, completion: { _ in
+            self.isLoadingMore = false
+        })
+    }
+
     
     private func applyActiveFilter() {
         // フィルタに必要な追加情報が無い行を補完取得
@@ -275,7 +302,7 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         if filterGrade == nil && filterFaculty == nil && (filterDepartment == nil || filterDepartment?.isEmpty == true) {
             results = rawResults
         }
-        tableView.reloadData()
+        resetPaging()
     }
 
     @objc private func didTapFilter() {
@@ -357,7 +384,7 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
     // TableView
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        results.count
+        return min(loadedCount, results.count)
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -442,6 +469,21 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
         return cell
     }
+    override func tableView(_ tableView: UITableView,
+                            willDisplay cell: UITableViewCell,
+                            forRowAt indexPath: IndexPath) {
+        if indexPath.row >= loadedCount - 3 { loadMore() }
+    }
+
+    override func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard !isLoadingMore, loadedCount < results.count else { return }
+        let offsetY = scrollView.contentOffset.y
+        let contentH = scrollView.contentSize.height
+        let visibleH = scrollView.bounds.height
+        // 下端から約240pt手前で追加ロード
+        if offsetY > contentH - visibleH - 240 { loadMore() }
+    }
+
 
     // --- AdMob ---
     private func setupAdBanner() {

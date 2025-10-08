@@ -198,11 +198,21 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         loginButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
         loginButton.addTarget(self, action: #selector(login), for: .touchUpInside)
 
-        noteLabel.text = "※一度作成したアカウントのIDを変更することはできません。"
+        noteLabel.text = "※一度作成したアカウントのIDを変更することはできません。\n※登録する「ID」は、学内システムで使う学生番号とは異なります。"
         noteLabel.textColor = .secondaryLabel
         noteLabel.font = .systemFont(ofSize: 12)
         noteLabel.numberOfLines = 0
         noteLabel.textAlignment = .center
+        
+        let ps = NSMutableParagraphStyle()
+        ps.lineSpacing = 8
+        ps.alignment = .center
+        noteLabel.attributedText = NSAttributedString(
+            string: noteLabel.text ?? "",
+            attributes: [.paragraphStyle: ps,
+                         .foregroundColor: UIColor.secondaryLabel,
+                         .font: UIFont.systemFont(ofSize: 12)]
+        )
 
         // スタック：上下に広げる（中央寄せをやめる）
         stack.axis = .vertical

@@ -233,32 +233,14 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     }
 
     // 検索
+
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
-        let keyword = searchBar.text ?? ""
-        FriendService.shared.searchUsers(keyword: keyword) { [weak self] result in
-            guard let self = self else { return }
-            switch result {
-            case .success(let users):
-                self.results = users
-                self.tableView.reloadData()
-                self.rawResults = users
-                self.applyActiveFilter()
-                self.enrichProfiles(for: users)
-            case .failure:
-                self.results = []
-                self.tableView.reloadData()
-            }
-        }
+        applySearch(text: searchBar.text)
         view.endEditing(true)
     }
 
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
-        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            results = allUsers
-            rawResults = allUsers
-            applyActiveFilter()
-            tableView.reloadData()
-        }
+        applySearch(text: searchText)   // 逐次フィルタ（空文字なら全件に戻す）
     }
     private func resetPaging() {
         isLoadingMore = false
@@ -280,6 +262,38 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         }, completion: { _ in
             self.isLoadingMore = false
         })
+    }
+    // 全角/半角や大文字小文字の違いを吸収
+    private func normalizeQuery(_ s: String?) -> String {
+        let trimmed = (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let half = trimmed.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? trimmed
+        return half.lowercased()
+    }
+
+    // 検索キーワードを results/rawResults に反映
+    private func applySearch(text: String?) {
+        let q = normalizeQuery(text)
+        // 空なら全件に戻す
+        guard !q.isEmpty else {
+            results = allUsers
+            rawResults = allUsers
+            applyActiveFilter() // ページング初期化も含む
+            return
+        }
+
+        if q.hasPrefix("@") {
+            // @検索 → ID部分で部分一致（@は外す）
+            let key = String(q.dropFirst())
+            rawResults = allUsers.filter { $0.idString.lowercased().contains(key) }
+        } else {
+            // それ以外 → ユーザー名 or （@付き/無しの）IDで部分一致
+            rawResults = allUsers.filter { u in
+                let name = u.name.lowercased()
+                let id   = u.idString.lowercased()
+                return name.contains(q) || id.contains(q) || ("@"+id).contains(q)
+            }
+        }
+        applyActiveFilter() // profile補完→フィルタ→ページング初期化
     }
 
     

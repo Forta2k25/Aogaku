@@ -44,6 +44,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let top = (window?.rootViewController?.presentedViewController)
                  ?? window?.rootViewController
         if let top { AppGatekeeper.shared.forceRefreshAndPresentIfNeeded(on: top) }
+        FirstLaunchAlertService.maybeShow()
+        BroadcastAlertService.maybeShow()     // ← ：全員に一度だけ（内容が変わるたび再表示）
     }
     func sceneWillResignActive(_ scene: UIScene) {
         // Called when the scene will move from an active state to an inactive state.

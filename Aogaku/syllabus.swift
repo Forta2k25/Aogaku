@@ -197,6 +197,8 @@ final class syllabus: UIViewController,
             selector: #selector(onAdMobReady),
             name: .adMobReady, object: nil)
         applyBackgroundStyle()
+        
+        LocalSyllabusIndex.shared.prepare()
     }
     @objc private func onAdMobReady() {
         loadBannerIfNeeded()
@@ -808,6 +810,29 @@ final class syllabus: UIViewController,
             return
         }
 
+        // ★ ここを追加：ローカルインデックスがあれば即時ローカル検索
+            if LocalSyllabusIndex.shared.isReady {
+                let criteria = SyllabusSearchCriteria(
+                    keyword: text,
+                    category: selectedCategory,
+                    department: filterDepartment,
+                    campus: filterCampus,
+                    place: filterPlace,
+                    grade: filterGrade,
+                    day: filterDay,
+                    periods: filterPeriods,
+                    timeSlots: filterTimeSlots,
+                    term: filterTerm,
+                    undecided: filterUndecided
+                )
+                let models = LocalSyllabusIndex.shared.search(text: text, criteria: criteria)
+                self.filteredData = models
+                self.syllabus_table.reloadData()
+                self.scrollToTop()
+                self.setSearching(false)   // 結果確定（0件でも消灯）
+                return
+            }
+        
         // 1文字は prefix 検索（2クエリ）…軽量で十分
         if text.count == 1 {
             let startKey = text, endKey = text + "\u{f8ff}"

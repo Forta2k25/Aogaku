@@ -120,7 +120,7 @@
                                 </prototypes>
                             </tableView>
                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text=" " textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="Est-uD-lV5">
-                                <rect key="frame" x="217.66666666666663" y="183" width="5" height="40"/>
+                                <rect key="frame" x="217.66666666666666" y="183" width="5" height="40"/>
                                 <constraints>
                                     <constraint firstAttribute="height" constant="40" id="Idh-cc-XLR"/>
                                 </constraints>
@@ -908,7 +908,7 @@
                                 <textInputTraits key="textInputTraits" autocapitalizationType="sentences"/>
                             </textView>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Jgu-za-cKH">
-                                <rect key="frame" x="319.66666666666674" y="167" width="49" height="34.333333333333343"/>
+                                <rect key="frame" x="319.66666666666669" y="167" width="49" height="34.333333333333343"/>
                                 <color key="tintColor" red="0.33333334329999997" green="0.33333334329999997" blue="0.33333334329999997" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                                 <state key="normal" title="Button"/>
                                 <buttonConfiguration key="configuration" style="plain" image="plus.app" catalog="system" title=""/>
@@ -918,7 +918,7 @@
                                 </connections>
                             </button>
                             <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="czd-yd-kUu">
-                                <rect key="frame" x="378.66666666666674" y="167" width="46.333333333333258" height="34.333333333333343"/>
+                                <rect key="frame" x="378.66666666666669" y="167" width="46.333333333333314" height="34.333333333333343"/>
                                 <color key="tintColor" red="0.33333334329999997" green="0.33333334329999997" blue="0.33333334329999997" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                                 <state key="normal" title="Button"/>
                                 <buttonConfiguration key="configuration" style="plain" image="bookmark" catalog="system" title=""/>

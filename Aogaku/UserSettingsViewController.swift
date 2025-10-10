@@ -143,6 +143,13 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
 
     // 設定タブのインデックス（必要なら調整）
     private let settingsTabIndex = 4
+    
+    // 初回アバタープロンプト用キー
+    private let kShouldPromptInitialAvatar = "ShouldPromptInitialAvatarV1"
+
+    // この画面での一時フラグ
+    private var pendingShowPostUploadTip = false       // 「はい」→設定完了後に案内を出すか
+    private var didCheckInitialAvatarPrompt = false    // viewDidAppearでの多重表示ガード
 
     // MARK: UI（アイコンのみ・カメラボタン削除）
     private let avatarView = UIImageView()
@@ -173,6 +180,8 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     private var didLoadBannerOnce = false
     private var stackBottomToSafeArea: NSLayoutConstraint?
     private var stackBottomToAdTop: NSLayoutConstraint?
+    private var initialPromptQueued = false
+
 
     // Faculty data
     private let FACULTY_DATA: [String: [String]] = [
@@ -361,7 +370,8 @@ view.addGestureRecognizer(tripleTap)
         super.viewDidAppear(animated)
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
         reloadAllProfileFieldsIfIDMissing()
-
+        
+        presentInitialAvatarPromptIfNeeded()
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -370,6 +380,102 @@ view.addGestureRecognizer(tripleTap)
             applyBackgroundStyle()
         }
     }
+    // ▼ 追加：UID別に「初回アラートは既に表示済みか？」を保持
+    private func hasShownInitialAvatarPrompt(uid: String) -> Bool {
+        UserDefaults.standard.bool(forKey: "InitialAvatarPromptShown.\(uid)")
+    }
+
+    private func markShownInitialAvatarPrompt(uid: String) {
+        UserDefaults.standard.set(true, forKey: "InitialAvatarPromptShown.\(uid)")
+        // 任意：サーバー側にも刻んでおくと端末を跨いでも二重表示しない
+        if !uid.isEmpty {
+            db.collection("users").document(uid)
+                .setData(["initialAvatarPromptShown": true], merge: true)
+        }
+    }
+
+    // 置換：既存メソッド全体をこれに差し替え
+    private func presentInitialAvatarPromptIfNeeded() {
+        // すでに提示準備中なら二重起動しない
+        guard !initialPromptQueued else { return }
+
+        // サインアップ直後フラグ & UID別の未表示チェック
+        guard let uid = self.uid, !uid.isEmpty else { return }
+        let shouldGlobal = UserDefaults.standard.bool(forKey: kShouldPromptInitialAvatar)
+        guard shouldGlobal, !hasShownInitialAvatarPrompt(uid: uid) else { return }
+
+        // UIAlertController を先に組む
+        let ac = UIAlertController(
+            title: "アイコンを設定しますか？",
+            message: "設定された画像は他の人にも表示されます。",
+            preferredStyle: .alert
+        )
+        ac.addAction(UIAlertAction(title: "いいえ", style: .cancel, handler: { [weak self] _ in
+            self?.showLaterTipSafely()
+        }))
+        ac.addAction(UIAlertAction(title: "はい", style: .default, handler: { [weak self] _ in
+            self?.pendingShowPostUploadTip = true
+            self?.selectAvatar()
+        }))
+
+        // キュー済みにして、安全提示を試行
+        initialPromptQueued = true
+        presentSafely(ac,
+            // ★ 出せた“瞬間”にだけ既読化（これで1回きりを担保）
+            onPresented: { [weak self] in
+                guard let self, let uid = self.uid else { return }
+                UserDefaults.standard.set(false, forKey: self.kShouldPromptInitialAvatar)
+                self.markShownInitialAvatarPrompt(uid: uid)
+                self.initialPromptQueued = false
+                self.didCheckInitialAvatarPrompt = true
+            },
+            // ★ 出せなかった（Gatekeeper等が長時間出ていた）場合は、少し待って再挑戦
+            onFailed: { [weak self] in
+                guard let self else { return }
+                self.initialPromptQueued = false      // 次回の再挑戦を許可
+                // 次の viewDidAppear まで待たず、少し遅らせて再試行（まだ塞がっていれば再度 presentSafely が待つ）
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    self.presentInitialAvatarPromptIfNeeded()
+                }
+            }
+        )
+    }
+
+
+    // 置換：既存の presentSafely を以下で差し替え
+    private func presentSafely(
+        _ alert: UIAlertController,
+        attempts: Int = 80,                      // ← 約16秒（80回×0.2秒）
+        interval: TimeInterval = 0.2,
+        onPresented: (() -> Void)? = nil,
+        onFailed: (() -> Void)? = nil
+    ) {
+        var tries = 0
+        func canPresent() -> Bool {
+            return self.isViewLoaded && self.view.window != nil && self.presentedViewController == nil
+        }
+        func tick() {
+            if canPresent() {
+                self.present(alert, animated: true, completion: onPresented)
+            } else if tries < attempts {
+                tries += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: tick)
+            } else {
+                onFailed?()   // ← 規定回数超えでもう一度チャンスを作る
+            }
+        }
+        tick()
+    }
+
+
+    private func showLaterTipSafely() {
+        let tip = UIAlertController(title: nil,
+                                    message: "アイコンをタッチするといつでも設定することができます。",
+                                    preferredStyle: .alert)
+        tip.addAction(UIAlertAction(title: "OK", style: .default))
+        presentSafely(tip)
+    }
+
     
     private func applyLocalProfileDraftIfAny() {
         guard let raw = UserDefaults.standard.dictionary(forKey: kLocalProfileDraft) else { return }
@@ -815,7 +921,7 @@ view.addGestureRecognizer(tripleTap)
         // 即時UI反映
         self.avatarView.image = image
 
-        // 転送量削減（保険のダブルチェック：最大辺512pxに）
+        // 転送量削減（最大辺512px）
         let resized = image.resized(maxEdge: 512)
 
         // Storage
@@ -859,7 +965,8 @@ view.addGestureRecognizer(tripleTap)
                 ], merge: true)
 
                 // 予測版（現行 + 1）でキャッシュ保存して即時反映
-                let newVersion = (self.currentAvatarVersion ?? (SelfAvatarCache.shared.latestVersion(for: uid) ?? 0)) + 1
+                let newVersion = (self.currentAvatarVersion
+                                  ?? (SelfAvatarCache.shared.latestVersion(for: uid) ?? 0)) + 1
                 SelfAvatarCache.shared.store(resized, uid: uid, version: newVersion)
                 self.currentAvatarVersion = newVersion
 
@@ -869,9 +976,20 @@ view.addGestureRecognizer(tripleTap)
                     change.photoURL = url
                     change.commitChanges(completion: nil)
                 }
+
+                // ★「はい」経由のときだけ、完了後に案内を出す（安全present）
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    if self.pendingShowPostUploadTip {
+                        self.pendingShowPostUploadTip = false
+                        self.showLaterTipSafely()
+                    }
+                }
             }
         }
     }
+
+
 
     // MARK: - SideMenuDrawerDelegate
     func sideMenuDidSelectLogout() {

@@ -22,6 +22,7 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     private let noteLabel = UILabel()
     private let stack = UIStackView()
     private let kLocalProfileDraft = "LocalProfileDraftV1"
+    private let kShouldPromptInitialAvatar = "ShouldPromptInitialAvatarV1"
 
     // MARK: - Pickers
     private let gradePicker = UIPickerView()
@@ -490,7 +491,7 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
                         id: id, password: pw,
                         grade: grade, faculty: faculty, department: department
                     )
-
+                    UserDefaults.standard.set(true, forKey: kShouldPromptInitialAvatar)
                     // ★ 追加：ローカル即時キャッシュ（表示用）
                     UserDefaults.standard.set([
                         "id": id,

@@ -101,6 +101,12 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     private let pageSize = 15
     private var loadedCount = 0
     private var isLoadingMore = false
+    
+    // === Server-side paging ===
+    private let serverPageSize = 15
+    private var lastUserDoc: DocumentSnapshot?
+    private var hasMoreOnServer = true
+    private var isFetchingPage = false
 
     private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
         traits.userInterfaceStyle == .dark ? UIColor(white: 0.2, alpha: 1.0) : .systemBackground
@@ -170,13 +176,51 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     // 初期ロード
     @objc private func reloadAll() {
         guard let me = Auth.auth().currentUser?.uid else { return }
+
+        // 初期化
+        lastUserDoc = nil
+        hasMoreOnServer = true
+        isFetchingPage = false
+        loadedCount = 0
+        allUsers.removeAll()
+        results.removeAll()
+        rawResults.removeAll()
+        tableView.reloadData()
+
+        // 自分の申請済み / 友だち は従来どおり並行取得
+        let group = DispatchGroup()
+
+        group.enter()
+        db.collection("users").document(me).collection("requestsOutgoing").getDocuments { [weak self] snap, _ in
+            self?.outgoing = Set(snap?.documents.map { $0.documentID } ?? [])
+            group.leave()
+        }
+
+        group.enter()
+        db.collection("users").document(me).collection("friends").getDocuments { [weak self] snap, _ in
+            self?.friends = Set(snap?.documents.map { $0.documentID } ?? [])
+            group.leave()
+        }
+
+        // ユーザー一覧はサーバページングで最初の15件だけ取得
+        fetchNextPage(me: me)
+
+        group.notify(queue: .main) {
+            // 友だち/申請状態が届いたら見た目反映
+            self.tableView.reloadData()
+        }
+    }
+
+    
+   /* @objc private func reloadAll() {
+        guard let me = Auth.auth().currentUser?.uid else { return }
         let group = DispatchGroup()
 
         // users 取得（自分以外）
         group.enter()
         db.collection("users")
             .order(by: "createdAt", descending: true)
-            .limit(to: 100)
+            //.limit(to: 100)
             .getDocuments { [weak self] snap, _ in
                 guard let self = self else { return }
                 var newUsers: [UserPublic] = []
@@ -230,7 +274,7 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             self.rawResults = self.allUsers
             self.applyActiveFilter()
         }
-    }
+    }*/
 
     // 検索
 
@@ -244,25 +288,118 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     }
     private func resetPaging() {
         isLoadingMore = false
-        loadedCount = min(pageSize, results.count)
+        loadedCount = results.count
         tableView.reloadData()
     }
 
     private func loadMore() {
-        guard !isLoadingMore, loadedCount < results.count else { return }
+        guard !isLoadingMore else { return }
+        // 取得済みを全て表示済みなら、サーバから次ページを取得
+        if loadedCount >= results.count {
+            fetchNextPage()
+            return
+        }
+        // 万一、未表示分が残っていれば従来どおり追加
         isLoadingMore = true
-
         let start = loadedCount
         let end   = min(loadedCount + pageSize, results.count)
         let newIndexPaths = (start..<end).map { IndexPath(row: $0, section: 0) }
         loadedCount = end
-
         tableView.performBatchUpdates({
             tableView.insertRows(at: newIndexPaths, with: .automatic)
         }, completion: { _ in
             self.isLoadingMore = false
         })
     }
+    
+    
+    private func baseUsersQuery() -> Query {
+        db.collection("users").order(by: "createdAt", descending: true)
+    }
+
+    private func fetchNextPage(me: String? = nil) {
+        guard !isFetchingPage, hasMoreOnServer else { return }
+        isFetchingPage = true
+
+        let my = me ?? Auth.auth().currentUser?.uid
+        var q: Query = baseUsersQuery().limit(to: serverPageSize)
+        if let last = lastUserDoc { q = q.start(afterDocument: last) }
+
+        q.getDocuments { [weak self] snap, _ in
+            guard let self = self else { return }
+            self.isFetchingPage = false
+            guard let snap = snap else { self.hasMoreOnServer = false; return }
+
+            let docs = snap.documents
+            if docs.isEmpty { self.hasMoreOnServer = false; return }
+            self.lastUserDoc = docs.last
+
+            var appended: [UserPublic] = []
+            var newInfo: [String: ProfileInfo] = [:]
+
+            for doc in docs {
+                if let my = my, doc.documentID == my { continue }   // 自分は除外
+                let d = doc.data()
+                let idStr = (d["id"] as? String) ?? ""
+                guard !idStr.isEmpty else { continue }
+                let name = (d["name"] as? String) ?? ""
+                let display = name.isEmpty ? "@\(idStr)" : name
+
+                let u = UserPublic(uid: doc.documentID,
+                                   idString: idStr,
+                                   name: display,
+                                   photoURL: d["photoURL"] as? String)
+                appended.append(u)
+
+                let grade = d["grade"] as? Int
+                let faculty = d["faculty"] as? String
+                let dept    = d["department"] as? String
+                newInfo[u.uid] = ProfileInfo(faculty: faculty, department: dept, grade: grade)
+            }
+
+            if appended.isEmpty {
+                // （自分だけ除外された等で空になった場合は次を取りにいく）
+                self.fetchNextPage(me: my)
+                return
+            }
+
+            let prevCount = self.results.count
+
+            self.allUsers.append(contentsOf: appended)
+            self.profileInfo.merge(newInfo, uniquingKeysWith: { _, new in new })
+
+            // 検索/フィルタ中は再評価、それ以外はそのまま追加表示
+            let hasActiveFilter = self.filterGrade != nil
+                || self.filterFaculty != nil
+                || ((self.filterDepartment ?? "").isEmpty == false)
+            let hasActiveSearch = !(self.normalizeQuery(self.searchBar.text).isEmpty)
+
+            if hasActiveFilter || hasActiveSearch {
+                self.rawResults = self.allUsers
+                self.applyActiveFilter()   // 内部で resetPaging() が走り全件（＝取得済み分）を表示
+            } else {
+                self.results = self.allUsers
+                let newCount = self.results.count
+                self.loadedCount = newCount
+                if prevCount == 0 {
+                    self.tableView.reloadData()
+                } else {
+                    let indexPaths = (prevCount..<newCount).map { IndexPath(row: $0, section: 0) }
+                    self.tableView.insertRows(at: indexPaths, with: .automatic)
+                }
+            }
+
+            if self.refreshControl?.isRefreshing == true {
+                self.refreshControl?.endRefreshing()
+            }
+            // 検索が有効で表示件数がまだ少ないときは、次ページを連続で先読み
+            if hasActiveSearch, self.hasMoreOnServer, !self.isFetchingPage, self.results.count < self.pageSize {
+                self.fetchNextPage(me: my)
+            }
+        }
+    }
+
+
     // 全角/半角や大文字小文字の違いを吸収
     private func normalizeQuery(_ s: String?) -> String {
         let trimmed = (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -294,6 +431,9 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             }
         }
         applyActiveFilter() // profile補完→フィルタ→ページング初期化
+        if !q.isEmpty, hasMoreOnServer, !isFetchingPage, results.count < pageSize {
+            fetchNextPage()
+        }
     }
 
     

@@ -43,14 +43,14 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     private var savedTint: UIColor?
 
     // MARK: - New UI
-    // 「教室番号：xxx」を登録番号の直下に出すための新規ラベル
     private let roomInfoLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
         l.textAlignment = .left
         l.font = .boldSystemFont(ofSize: 17)
-        l.textColor = .black
+        l.textColor = .label            // ← 動的色：ダークで白、ライトで黒
         l.numberOfLines = 1
+        l.backgroundColor = .clear      // 念のため
         l.setContentCompressionResistancePriority(.required, for: .vertical)
         l.setContentHuggingPriority(.required, for: .vertical)
         return l

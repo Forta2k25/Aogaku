@@ -361,6 +361,35 @@ final class LocalSyllabusIndex {
         ]
         return expansion[cat] ?? [cat]
     }
+    
+    // 追加: 条件にマッチするローカル一覧を offset/limit で返す
+    func page(criteria c: SyllabusSearchCriteria, offset: Int, limit: Int) -> [syllabus.SyllabusData] {
+        var out: [syllabus.SyllabusData] = []
+        var skipped = 0
+        var taken = 0
+        for e in entries {
+            if !matchesFilters(entry: e, criteria: c) { continue }
+            if skipped < offset { skipped += 1; continue }
+            out.append(toModel(e))
+            taken += 1
+            if taken >= limit { break }
+        }
+        // 必要なら並びを軽めに整える
+        out.sort { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
+        return out
+    }
+
+    // 追加：条件に合う全件を返す（limit指定可）
+    func all(criteria c: SyllabusSearchCriteria, limit: Int? = nil) -> [syllabus.SyllabusData] {
+        var out: [syllabus.SyllabusData] = []
+        out.reserveCapacity( min(limit ?? entries.count, entries.count) )
+        for e in entries {
+            if !matchesFilters(entry: e, criteria: c) { continue }
+            out.append(toModel(e))
+            if let lim = limit, out.count >= lim { break }
+        }
+        return out.sorted { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
+    }
 
     // UI表示用へ変換（syllabus.swift の toModel と同等）
     private func toModel(_ e: SyllabusEntry) -> syllabus.SyllabusData {

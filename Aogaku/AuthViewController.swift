@@ -508,9 +508,15 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
                 } else {
                     try await AuthManager.shared.login(id: id, password: pw)
                 }
-                // ★ 置換：少し待ってから「設定」タブへ（index=4）
+                // 設定タブへ切り替え
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5秒
-                await MainActor.run { self?.tabBarController?.selectedIndex = 4 }
+                await MainActor.run {
+                    self?.tabBarController?.selectedIndex = 4
+                    // 0.8秒後に「初回アバター促し」通知を送る（設定VC側で1.2秒ディレイして提示）
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        NotificationCenter.default.post(name: .shouldPromptInitialAvatar, object: nil)
+                    }
+                }
             } catch let e as AuthError {
                 await MainActor.run { self?.showAlert(title: "エラー", message: e.localizedDescription) }
             } catch {

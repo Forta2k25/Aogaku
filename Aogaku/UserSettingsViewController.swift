@@ -48,9 +48,13 @@ enum AdsConfig {
     }
 }
 
+extension Notification.Name {
+    static let shouldPromptInitialAvatar = Notification.Name("ShouldPromptInitialAvatar")
+}
 
 // ===== 自分用アイコンキャッシュ（メモリ＋ディスク、バージョン管理） =====
 private final class SelfAvatarCache {
+
     static let shared = SelfAvatarCache()
     private let mem = NSCache<NSString, UIImage>()
     private let fm = FileManager.default
@@ -181,7 +185,8 @@ final class UserSettingsViewController: UIViewController, SideMenuDrawerDelegate
     private var stackBottomToSafeArea: NSLayoutConstraint?
     private var stackBottomToAdTop: NSLayoutConstraint?
     private var initialPromptQueued = false
-
+    private var authListenerHandle: AuthStateDidChangeListenerHandle?
+    private var initialPromptNotBefore = Date.distantPast
 
     // Faculty data
     private let FACULTY_DATA: [String: [String]] = [
@@ -323,9 +328,19 @@ view.addGestureRecognizer(tripleTap)
             object: nil
         )
         applyBackgroundStyle()
+        
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onShouldPromptInitialAvatar),
+            name: .shouldPromptInitialAvatar,
+            object: nil)
 
     }
     
+    @objc private func onShouldPromptInitialAvatar() {
+        // 遷移直後はUIや認証がまだ動いているので、0.0秒後に再評価して出す
+        initialPromptNotBefore = Date().addingTimeInterval(0.0)
+        presentInitialAvatarPromptIfNeeded()
+    }
     
 #if DEBUG
 @objc private func openAdInspector() {
@@ -370,8 +385,14 @@ view.addGestureRecognizer(tripleTap)
         super.viewDidAppear(animated)
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
         reloadAllProfileFieldsIfIDMissing()
-        
-        presentInitialAvatarPromptIfNeeded()
+
+        // 画面安定まで待つ（例：0.0秒）
+        initialPromptNotBefore = Date().addingTimeInterval(0.0)
+
+        // 次のランループでキック（以降の判定はメソッド内）
+        DispatchQueue.main.async { [weak self] in
+            self?.presentInitialAvatarPromptIfNeeded()
+        }
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -394,17 +415,41 @@ view.addGestureRecognizer(tripleTap)
         }
     }
 
-    // 置換：既存メソッド全体をこれに差し替え
     private func presentInitialAvatarPromptIfNeeded() {
-        // すでに提示準備中なら二重起動しない
+        // 二重起動ガード
         guard !initialPromptQueued else { return }
 
-        // サインアップ直後フラグ & UID別の未表示チェック
-        guard let uid = self.uid, !uid.isEmpty else { return }
+        // サインアップ直後に立てたグローバルフラグが OFF なら出さない
         let shouldGlobal = UserDefaults.standard.bool(forKey: kShouldPromptInitialAvatar)
-        guard shouldGlobal, !hasShownInitialAvatarPrompt(uid: uid) else { return }
+        guard shouldGlobal else { return }
 
-        // UIAlertController を先に組む
+        // 画面安定まで待つ（viewDidAppear で設定した時刻を尊重）
+        let now = Date()
+        if now < initialPromptNotBefore {
+            let delay = initialPromptNotBefore.timeIntervalSince(now) + 0.05
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.presentInitialAvatarPromptIfNeeded()
+            }
+            return
+        }
+
+        // uid がまだ取得できていない場合は、認証状態変化を待って再試行
+        guard let uid = self.uid, !uid.isEmpty else {
+            if authListenerHandle == nil {
+                authListenerHandle = Auth.auth().addStateDidChangeListener { [weak self] _, _ in
+                    self?.presentInitialAvatarPromptIfNeeded()
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.presentInitialAvatarPromptIfNeeded()
+            }
+            return
+        }
+
+        // 既にこの uid で提示済みなら出さない
+        guard !hasShownInitialAvatarPrompt(uid: uid) else { return }
+
+        // UIAlertController を組み立て
         let ac = UIAlertController(
             title: "アイコンを設定しますか？",
             message: "設定された画像は他の人にも表示されます。",
@@ -418,22 +463,25 @@ view.addGestureRecognizer(tripleTap)
             self?.selectAvatar()
         }))
 
-        // キュー済みにして、安全提示を試行
+        // 提示を試行
         initialPromptQueued = true
         presentSafely(ac,
-            // ★ 出せた“瞬間”にだけ既読化（これで1回きりを担保）
             onPresented: { [weak self] in
-                guard let self, let uid = self.uid else { return }
+                guard let self = self else { return }
+                // 一度提示できたらフラグを倒す（今後は出さない）
                 UserDefaults.standard.set(false, forKey: self.kShouldPromptInitialAvatar)
                 self.markShownInitialAvatarPrompt(uid: uid)
                 self.initialPromptQueued = false
-                self.didCheckInitialAvatarPrompt = true
+                // 認証リスナーを解除
+                if let h = self.authListenerHandle {
+                    Auth.auth().removeStateDidChangeListener(h)
+                    self.authListenerHandle = nil
+                }
             },
-            // ★ 出せなかった（Gatekeeper等が長時間出ていた）場合は、少し待って再挑戦
             onFailed: { [weak self] in
-                guard let self else { return }
-                self.initialPromptQueued = false      // 次回の再挑戦を許可
-                // 次の viewDidAppear まで待たず、少し遅らせて再試行（まだ塞がっていれば再度 presentSafely が待つ）
+                // まだ他のモーダル等で塞がっている → 少し遅らせて再挑戦
+                guard let self = self else { return }
+                self.initialPromptQueued = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     self.presentInitialAvatarPromptIfNeeded()
                 }
@@ -1242,6 +1290,14 @@ view.addGestureRecognizer(tripleTap)
         }
     }
 
+    deinit {
+        if let h = authListenerHandle {
+            Auth.auth().removeStateDidChangeListener(h)
+        }
+        NotificationCenter.default.removeObserver(self, name: .shouldPromptInitialAvatar, object: nil)
+    }
+
+    
 
 }
 

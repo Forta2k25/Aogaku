@@ -7,39 +7,34 @@ final class syllabusTableViewCell: UITableViewCell {
     @IBOutlet weak var campus: UILabel!
     @IBOutlet weak var grade: UILabel!
     @IBOutlet weak var category: UILabel!
-    @IBOutlet weak var credit: UILabel!
+    @IBOutlet weak var credit: UILabel!      // ← ここに eval_method を出す
     @IBOutlet weak var termLabel: UILabel!
+    @IBOutlet weak var eval_method: UILabel!
 
-    // 重複追加防止
     private var didAddSafetyConstraints = false
     private var minHeightConstraint: NSLayoutConstraint?
 
     override func awakeFromNib() {
         super.awakeFromNib()
 
-        // ─ 表示設定
+        // タイトルと評価方法は複数行OK
         class_name.numberOfLines = 0
         class_name.lineBreakMode = .byWordWrapping
+        eval_method.numberOfLines = 0
+        eval_method.lineBreakMode = .byWordWrapping
 
-        // 横の優先度（右「◯単位」を守る）
-        credit.setContentCompressionResistancePriority(.required, for: .horizontal)
-        credit.setContentHuggingPriority(.required, for: .horizontal)
-        class_name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        class_name.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        // 縦の優先度（タイトルは潰さず伸びる）
-        class_name.setContentCompressionResistancePriority(.required, for: .vertical)
-        class_name.setContentHuggingPriority(.defaultHigh, for: .vertical)
-
-        // サブ行は1行
-        [teacher_name, time, campus, grade, category, termLabel].forEach { $0?.numberOfLines = 1 }
-
-        addSafetyConstraintsIfNeeded()
+        // === 追加：どのラベルが最下段になっても高さが伸びる安全ネット ===
+        let bottoms: [UIView?] = [class_name, teacher_name, time, campus, grade, category, termLabel, credit, eval_method]
+        for v in bottoms.compactMap({ $0 }) {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            let c = contentView.bottomAnchor.constraint(greaterThanOrEqualTo: v.bottomAnchor, constant: 12)
+            c.priority = .required
+            c.isActive = true
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // 折り返し幅を更新（自己サイズ計算の安定化）
         class_name.preferredMaxLayoutWidth = class_name.bounds.width
     }
 
@@ -53,6 +48,7 @@ final class syllabusTableViewCell: UITableViewCell {
         category.text = nil
         credit.text = nil
         termLabel.text = nil
+        eval_method.text = nil
     }
 
     private func addSafetyConstraintsIfNeeded() {
@@ -62,51 +58,38 @@ final class syllabusTableViewCell: UITableViewCell {
         class_name.translatesAutoresizingMaskIntoConstraints = false
         credit.translatesAutoresizingMaskIntoConstraints = false
 
-        // ① タイトルTop ≥ contentView.Top（最低余白）
+        // ① タイトルTop ≥ contentView.Top
         let top = class_name.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 12)
-        top.priority = .required
         top.isActive = true
 
-        // ② タイトル右端 ≤ 「◯単位」左端 − 8（横の重なり防止）
+        // ② タイトル右端 ≤ 右ラベル左端 − 8
         let titleToCredit = class_name.trailingAnchor.constraint(lessThanOrEqualTo: credit.leadingAnchor, constant: -8)
-        titleToCredit.priority = .required
         titleToCredit.isActive = true
 
-        // ③ ――ここを置き換え――
-        // サブ行の共通の天井ガイド。タイトルの「最後のベースライン」から一定距離だけ下げる
+        // ③ タイトル最終行の下にサブ行の天井ガイド
         let subTopGuide = UILayoutGuide()
         contentView.addLayoutGuide(subTopGuide)
         NSLayoutConstraint.activate([
             subTopGuide.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             subTopGuide.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            // ★ lastBaselineAnchor を使うのがコツ。字下がり(アセンダ/ディセンダ)分まで考慮して確実に離す
             subTopGuide.topAnchor.constraint(equalTo: class_name.lastBaselineAnchor, constant: 12)
         ])
 
-        // 画面に存在するサブラベルを列挙
         let subLabels: [UIView] = [termLabel, teacher_name, time, campus, grade, category].compactMap { $0 }
-
-        // 先頭の1個はガイドに“ぴったり”合わせる（= で固定）
         if let first = subLabels.first {
             first.translatesAutoresizingMaskIntoConstraints = false
-            let eq = first.topAnchor.constraint(equalTo: subTopGuide.topAnchor)
-            eq.priority = .required
-            eq.isActive = true
+            first.topAnchor.constraint(equalTo: subTopGuide.topAnchor).isActive = true
         }
-        // 残りは“ガイド以上”に（≥）。ずり上がりを防止
         for v in subLabels.dropFirst() {
             v.translatesAutoresizingMaskIntoConstraints = false
-            let ge = v.topAnchor.constraint(greaterThanOrEqualTo: subTopGuide.topAnchor)
-            ge.priority = .required
-            ge.isActive = true
+            v.topAnchor.constraint(greaterThanOrEqualTo: subTopGuide.topAnchor).isActive = true
         }
 
-        // ④ 最下段ビューのBottom ≥ contentView.Bottom（下を閉じる）
-        if let bottomView = ( [category, grade, campus, time, teacher_name, termLabel, class_name].compactMap { $0 } ).first {
-            let bottom = contentView.bottomAnchor.constraint(greaterThanOrEqualTo: bottomView.bottomAnchor, constant: 12)
-            bottom.priority = .required
-            bottom.isActive = true
-        }
+        // ④ 下端の確保：サブラベル群 と 右ラベル（eval_method）の両方を守る
+        let bottom1 = contentView.bottomAnchor.constraint(greaterThanOrEqualTo: ( [category, grade, campus, time, teacher_name, termLabel, class_name].compactMap { $0 } ).last!.bottomAnchor, constant: 12)
+        bottom1.isActive = true
+        let bottom2 = contentView.bottomAnchor.constraint(greaterThanOrEqualTo: credit.bottomAnchor, constant: 12)
+        bottom2.isActive = true
 
         // ⑤ 最小高さ（保険）
         if minHeightConstraint == nil {
@@ -114,6 +97,10 @@ final class syllabusTableViewCell: UITableViewCell {
             minHeightConstraint?.priority = .defaultHigh
             minHeightConstraint?.isActive = true
         }
+        let bottomEval = contentView.bottomAnchor.constraint(
+                greaterThanOrEqualTo: eval_method.bottomAnchor, constant: 12
+            )
+            bottomEval.priority = .required
+            bottomEval.isActive = true
     }
-
 }

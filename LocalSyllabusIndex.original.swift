@@ -12,8 +12,8 @@ struct SyllabusRaw: Codable {
     let campus: [String]    // 文字列 or 配列でも良いが、配列に寄せる
     let time: Time?
     let term: String
+    let eval_method: String
     let credit: Int?
-    let eval_method: String?
     struct Time: Codable {
         let day: String?
         let periods: [Int]?
@@ -403,21 +403,9 @@ final class LocalSyllabusIndex {
         }()
         let campusStr = e.raw.campus.joined(separator: ",")
 
-        // 追加：syllabus.swift の安定キー規則と同じにする
-        let stableKey = [
-            normalizeForSearch(e.raw.class_name),
-            normalizeForSearch(e.raw.teacher_name),
-            timeStr.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression),
-            campusStr.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression).lowercased(),
-            e.raw.grade.lowercased(),
-            normalizeForSearch(e.raw.category),
-            normalizeTerm(e.raw.term)
-        ].joined(separator: "|")
-
         return syllabus.SyllabusData(
             docID: e.raw.id,
-            stableKey: stableKey,
-            class_name: e.raw.class_name,
+            class_name: e.raw.class_name,        // ← e.raw.raw ではなく e.raw
             teacher_name: e.raw.teacher_name,
             time: timeStr,
             campus: campusStr,
@@ -425,7 +413,7 @@ final class LocalSyllabusIndex {
             category: e.raw.category,
             credit: String(e.raw.credit ?? 0),
             term: e.termNorm,
-            eval_method: e.raw.eval_method ?? ""    // ★ 追加
+            eval_method: e.raw.eval_method ?? ""
         )
     }
 

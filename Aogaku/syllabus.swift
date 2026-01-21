@@ -80,10 +80,12 @@ final class syllabus: UIViewController,
     private let localPrefetchBatch = 120
     private var loadingOverlay: SyllabusLoadingOverlay?
     private var listSessionId = UUID()
+    private var evalMethodCacheByStableKey: [String: String] = [:]
     
     // ===== データ =====
     struct SyllabusData {
-        let docID: String
+        let docID: String                // ソース依存（自動ID / 行番号ID）
+        let stableKey: String            // ソースをまたいで同一授業を識別するキー
         let class_name: String
         let teacher_name: String
         let time: String
@@ -92,9 +94,12 @@ final class syllabus: UIViewController,
         let category: String
         let credit: String
         let term: String
+        let eval_method: String
     }
+
     private var data: [SyllabusData] = []
     private var filteredData: [SyllabusData] = []
+    private var evalMethodCache: [String: String] = [:]
 
     // ===== 検索バー =====
     private let searchController = UISearchController(searchResultsController: nil)
@@ -301,13 +306,16 @@ final class syllabus: UIViewController,
 
                 DispatchQueue.main.async {
                     self.usingLocalList = true
-                    self.localOffset = first.count
-                    self.data = first
-                    self.filteredData = first
+                    let old = self.data                                   // ★ 旧表示を退避
+                    let mergedFirst = self.preserveEvalMethod(from: old, into: first)
+                    self.localOffset = mergedFirst.count
+                    self.data = mergedFirst
+                    self.filteredData = mergedFirst
                     self.syllabus_table.reloadData()
-                    self.hideLoadingOverlay()                       // ← ここで閉じる
-                    self.kickoffBackgroundLocalFill(criteria: criteria) // 残りはBGで追記
+                    self.hideLoadingOverlay()
+                    self.kickoffBackgroundLocalFill(criteria: criteria)   // 残りはBG追記（この中も preserve 済）
                 }
+
             } else {
                 // まだローカルが無い端末は既存のリモート初期化（ロード画面は出しっぱなし）
                 DispatchQueue.main.async { self.loadNextPage() }    // loadNextPage 内で初回表示後に hide 済み
@@ -454,6 +462,24 @@ final class syllabus: UIViewController,
         return s
     }
     
+    // 異なるソース（Firestore自動ID / ローカル行番号ID）でも一致する安定キー
+    private func makeStableKey(className: String,
+                               teacher: String,
+                               time: String,
+                               campus: String,
+                               grade: String,
+                               category: String,
+                               term: String) -> String {
+        let cn = normalizeForSearch(className)
+        let tn = normalizeForSearch(teacher)
+        let cat = normalizeForSearch(category)
+        let tm = time.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+        let cp = campus.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression).lowercased()
+        let gr = grade.lowercased()
+        let tr = normalizeTerm(term)
+        return [cn, tn, tm, cp, gr, cat, tr].joined(separator: "|")
+    }
+    
     // 授業名＋教員名を検索用に正規化して結合
     private func aggregateDocText(_ x: [String: Any]) -> String {
         let name = (x["class_name"] as? String) ?? ""
@@ -559,16 +585,19 @@ final class syllabus: UIViewController,
                     undecided: filterUndecided
                 )
 
-                // ★ まずは 20 件だけで表示
+                // ★ ここで first を作る
                 let first = LocalSyllabusIndex.shared.page(criteria: criteria, offset: localOffset, limit: localPageSize)
-                self.data = first
-                self.filteredData = first
+
+                // ★ 旧表示の eval_method を温存して差し替え
+                let old = self.data
+                let safeFirst = self.preserveEvalMethod(from: old, into: first)
+                self.data = safeFirst
+                self.filteredData = safeFirst
                 self.syllabus_table.reloadData()
-                self.scrollToTop()
-                localOffset += first.count
+                self.localOffset = safeFirst.count
                 setSearching(false)
 
-                // ★ 残りはBGで順次追記
+                // ★ 残りはBGで追記
                 kickoffBackgroundLocalFill(criteria: criteria)
                 return
             } else {
@@ -750,6 +779,24 @@ final class syllabus: UIViewController,
             self.lastDoc = snap.documents.last
             if snap.documents.count < self.pageSizeBase { self.reachedEnd = true }
 
+            // ▼ ここを置換：温存したチャンクを追加
+            let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)
+            self.data.append(contentsOf: safeChunk)
+
+            // ▼ ここを追加：時間系フィルタで orderBy を外しているケースのブレを吸収
+            if hasTimeFilter {
+                self.data.sort { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
+            }
+
+            self.filteredData = self.data
+            DispatchQueue.main.async {
+                self.syllabus_table.reloadData()
+                self.hideLoadingOverlay()
+            }
+
+            self.lastDoc = snap.documents.last
+            if snap.documents.count < self.pageSizeBase { self.reachedEnd = true }
+
             self.data.append(contentsOf: chunk)
             self.filteredData = self.data
             DispatchQueue.main.async {
@@ -766,29 +813,68 @@ final class syllabus: UIViewController,
 
             print("📦 page:", snap.documents.count, "added:", chunk.count, "total:", self.data.count,
                   "last:", self.lastDoc?.documentID ?? "nil")
-            
-            // chunk を埋めた直後あたりに追記
-            if hasTimeFilter {
-                chunk.sort { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
-            }
+
         }
     }
 
     // ===== TableView =====
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { filteredData.count }
+
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let subject = filteredData[indexPath.row]
         let cell = syllabus_table.dequeueReusableCell(withIdentifier: "class", for: indexPath) as! syllabusTableViewCell
-        cell.class_name.text = subject.class_name
+
+        // 左側
+        cell.class_name.text   = subject.class_name
         cell.teacher_name.text = subject.teacher_name
-        cell.time.text = subject.time
-        cell.campus.text = subject.campus
-        cell.grade.text = subject.grade
-        cell.category.text = subject.category
-        cell.credit.text = subject.credit.isEmpty ? "-" : "\(subject.credit)単位"
-        cell.termLabel.text = subject.term.isEmpty ? "-" : subject.term
+        cell.time.text         = subject.time
+        cell.campus.text       = subject.campus
+        cell.grade.text        = subject.grade
+        cell.category.text     = subject.category
+
+        // 右上：単位/学期（従来どおり）
+        cell.credit.text    = subject.credit.isEmpty ? "-" : "\(subject.credit)単位"
+        cell.termLabel.text = subject.term.isEmpty   ? "-" : subject.term
+
+        // 右側：評価方法（stableKey → docID → "-" の順にフォールバック）
+        let evalText = subject.eval_method.isEmpty
+            ? (evalMethodCacheByStableKey[subject.stableKey]
+                ?? evalMethodCache[subject.docID]
+                ?? "-")
+            : subject.eval_method
+        cell.eval_method.text = evalText
         
-        // ★ 追加：セル背景＆選択色
+        // === 追加：表示できた評価方法をキャッシュ＆モデルへ書き戻す ===
+        if evalText != "-" {
+            // 安定キー/DocID 両方でキャッシュ
+            evalMethodCacheByStableKey[subject.stableKey] = evalText
+            evalMethodCache[subject.docID] = evalText
+
+            // もしモデル側が空なら、その場で書き戻して今後のリロードでも消えないようにする
+            if subject.eval_method.isEmpty {
+                let updated = SyllabusData(
+                    docID: subject.docID,
+                    stableKey: subject.stableKey,
+                    class_name: subject.class_name,
+                    teacher_name: subject.teacher_name,
+                    time: subject.time,
+                    campus: subject.campus,
+                    grade: subject.grade,
+                    category: subject.category,
+                    credit: subject.credit,
+                    term: subject.term,
+                    eval_method: evalText
+                )
+                // filteredData を更新
+                filteredData[indexPath.row] = updated
+                // data も該当行を更新（stableKey優先で一致）
+                if let i = data.firstIndex(where: { $0.stableKey == subject.stableKey || $0.docID == subject.docID }) {
+                    data[i] = updated
+                }
+            }
+        }
+
+        // 見た目
         let cbg = cellBackgroundColor(for: traitCollection)
         cell.backgroundColor = cbg
         cell.contentView.backgroundColor = cbg
@@ -797,9 +883,11 @@ final class syllabus: UIViewController,
             ? UIColor(white: 0.22, alpha: 1.0)
             : UIColor.systemFill
         cell.selectedBackgroundView = selected
-        
+
         return cell
     }
+
+
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let item = filteredData[indexPath.row]
@@ -856,10 +944,11 @@ final class syllabus: UIViewController,
                 )
                 let chunk = LocalSyllabusIndex.shared.page(criteria: criteria, offset: localOffset, limit: localPageSize)
                 if !chunk.isEmpty {
-                    self.data.append(contentsOf: chunk)
+                    let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)  // ← 温存
+                    self.data.append(contentsOf: safeChunk)
                     self.filteredData = self.data
                     self.syllabus_table.reloadData()
-                    self.localOffset += chunk.count
+                    self.localOffset += safeChunk.count
                 }
             }
             return
@@ -907,12 +996,15 @@ final class syllabus: UIViewController,
                     guard let self = self,
                           self.usingLocalList,
                           (self.activeKeyword?.isEmpty ?? true),
-                          self.listSessionId == session  // ★ 反映直前も照合
+                          self.listSessionId == session
                     else { return }
-                    self.data.append(contentsOf: chunk)
+
+                    // ★ ここで既存の eval_method を温存
+                    let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)
+                    self.data.append(contentsOf: safeChunk)
                     self.filteredData = self.data
                     self.syllabus_table.reloadData()
-                    self.localOffset += chunk.count
+                    self.localOffset += safeChunk.count
                 }
                 usleep(80_000)
             }
@@ -943,9 +1035,20 @@ final class syllabus: UIViewController,
 
         let termRaw = (x["term"] as? String) ?? ""
         let term = normalizeTerm(termRaw)
+        let eval = (x["eval_method"] as? String) ?? ""
 
-        return SyllabusData(
+        // ★ 安定キー
+        let key = makeStableKey(className: x["class_name"] as? String ?? "",
+                                teacher: x["teacher_name"] as? String ?? "",
+                                time: timeStr,
+                                campus: campusStr,
+                                grade: x["grade"] as? String ?? "",
+                                category: x["category"] as? String ?? "",
+                                term: term)
+
+        let model = SyllabusData(
             docID: docID,
+            stableKey: key,
             class_name: x["class_name"] as? String ?? "",
             teacher_name: x["teacher_name"] as? String ?? "",
             time: timeStr,
@@ -953,8 +1056,16 @@ final class syllabus: UIViewController,
             grade: x["grade"] as? String ?? "",
             category: x["category"] as? String ?? "",
             credit: String(x["credit"] as? Int ?? 0),
-            term: term
+            term: term,
+            eval_method: eval
         )
+
+        // ★ キャッシュ：docID と stableKey の両方で保存
+        if !eval.isEmpty {
+            self.evalMethodCache[docID] = eval
+            self.evalMethodCacheByStableKey[key] = eval
+        }
+        return model
     }
 
     // ===== 検索バーの更新 =====
@@ -1098,6 +1209,48 @@ final class syllabus: UIViewController,
             print("🔍 ngram fetched:", docs.count, "final:", models.count)
         }
     }
+    
+    // 既存表示/キャッシュの eval_method を温存（docIDが変わっても保持）
+    private func preserveEvalMethod(from old: [SyllabusData], into new: [SyllabusData]) -> [SyllabusData] {
+        // old → keep（非空を優先）
+        var keepById  = Dictionary(old.map { ($0.docID,     $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
+        var keepByKey = Dictionary(old.map { ($0.stableKey, $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
+
+        // キャッシュも併用
+        for (id, v) in evalMethodCache where !v.isEmpty {
+            if let cur = keepById[id], cur.isEmpty { keepById[id] = v }
+            else if keepById[id] == nil { keepById[id] = v }
+        }
+        for (k, v) in evalMethodCacheByStableKey where !v.isEmpty {
+            if let cur = keepByKey[k], cur.isEmpty { keepByKey[k] = v }
+            else if keepByKey[k] == nil { keepByKey[k] = v }
+        }
+
+        // new 側が空のときだけ keep を適用（stableKey を最優先）
+        return new.map { n in
+            if !n.eval_method.isEmpty { return n }
+            let val = keepByKey[n.stableKey]
+                ?? keepById[n.docID]
+                ?? evalMethodCacheByStableKey[n.stableKey]
+                ?? evalMethodCache[n.docID]
+                ?? ""
+            if val.isEmpty { return n }
+            return SyllabusData(
+                docID: n.docID,
+                stableKey: n.stableKey,
+                class_name: n.class_name,
+                teacher_name: n.teacher_name,
+                time: n.time,
+                campus: n.campus,
+                grade: n.grade,
+                category: n.category,
+                credit: n.credit,
+                term: n.term,
+                eval_method: val
+            )
+        }
+    }
+
 
     // 足りない時だけのフォールバック（prefix）…“追記”ではなく“置換”
     private func fallbackPrefixSearch(text: String,

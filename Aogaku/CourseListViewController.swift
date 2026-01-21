@@ -33,7 +33,7 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
     // MARK: - Currently displayed list (検索の有無で変わる)
     private var courses: [Course] = []
     
-    
+    private var isOnlineList: Bool { location.period == 0 }
 
     // MARK: - UI (Search)
     private let searchField: UITextField = {
@@ -77,9 +77,24 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
     // MARK: - LifeCycle
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        /*
         title = "\(location.dayName) \(location.period)限"
-        navigationItem.largeTitleDisplayMode = .never
-
+        navigationItem.largeTitleDisplayMode = .never */
+        
+ /*       let isOnlineMode = (location.period == 0) // period=0 を OD 行の合図に
+        if isOnlineMode {
+            title = "\(location.dayName) オンライン"
+            navigationItem.largeTitleDisplayMode = .never
+        } else {
+            title = "\(location.dayName) \(location.period)限"
+            navigationItem.largeTitleDisplayMode = .never
+        }
+*/
+        title = isOnlineList ? "\(location.dayName) オンライン"   // 例: 金 オンライン
+                             : "\(location.dayName) \(location.period)限"
+        
+        
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             title: "戻る",
             style: .plain,
@@ -107,9 +122,17 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         // フッター（さらに読み込む）
         setupFooter()
 
+        // ▼ 初回ロード
+        if isOnlineList {
+            loadFirstPageOnline()
+        } else {
+            loadFirstPage()
+        }
         // 初回 10 件取得
-        loadFirstPage()
+        /*loadFirstPage()*/
     }
+    
+    
     
     // [ADDED] term のカッコだけを外して返す
     private func termDisplay(_ raw: String?) -> String? {
@@ -284,6 +307,151 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         }
         return [s] // それ以外（通年/集中など）はそのまま
     }
+
+
+    // 最大 n 個ずつに分割
+    private func chunk<T>(_ xs: [T], by n: Int) -> [[T]] {
+        guard n > 0 else { return [xs] }
+        var out: [[T]] = []
+        var i = 0
+        while i < xs.count { out.append(Array(xs[i..<min(i+n, xs.count)])); i += n }
+        return out.isEmpty ? [[]] : out
+    }
+
+    // 検索ボックスを分かち
+    private func splitQuery(_ q: String?) -> [String] {
+        let s = (q ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return [] }
+        return s.components(separatedBy: .whitespaces).filter{ !$0.isEmpty }
+    }
+
+    // 「オンライン」を拾う n-gram（Firestore の ngrams2 に入れてある想定）
+    private let onlineNGrams = ["オン","ンラ","ライ","イン"]
+    // オンライン一覧（曜日タブの最下段）初回ロード
+    // 取得条件：room/campus が “ONLINE授業” 系の候補をサーバで緩く取得
+    // ローカルで (1) 曜日一致（time.day / day / weekday の順）
+    //           (2) 学期一致（後期→後期系＋通年系 / 前期→前期系＋通年系）
+    //           (3) 可能なら period=0 を含む（無ければ通す）
+    // を満たすものだけに絞る
+    // オンライン一覧（曜日タブの最下段）初回ロード
+    // ─────────────────────────────────────────────────────────────
+    // オンライン一覧（曜日タブの最下段）初回ロード（全件取得版）
+    // 条件：room/campus が ONLINE 系 → ローカルで 学期＋曜日 を厳密絞り込み
+    // ─────────────────────────────────────────────────────────────
+    private func loadFirstPageOnline() {
+        guard !isLoading else { return }
+        isLoading = true
+        setLoadingFooter(false)
+        courses.removeAll()
+        tableView.reloadData()
+
+        let db  = Firestore.firestore()
+        let col = db.collection("classes")
+
+        // 1) サーバ側：ONLINE 系候補を2系統で全件取得（ページング）
+        let roomCandidates   = ["ONLINE授業", "オンライン授業", "Online", "online"]
+        let campusCandidates = ["ONLINE授業", "オンライン授業", "ONLINE", "オンライン"]
+        let pageSize = 500   // 1ページあたり。必要に応じて増減可
+
+        func fetchAll(_ base: Query, label: String, completion: @escaping ([QueryDocumentSnapshot]) -> Void) {
+            var out: [QueryDocumentSnapshot] = []
+            func step(_ cursor: DocumentSnapshot?) {
+                var q = base.limit(to: pageSize)
+                if let c = cursor { q = q.start(afterDocument: c) }
+                q.getDocuments { snap, err in
+                    if let err = err {
+                        self.dlog("query(\(label)) error: \(err.localizedDescription)")
+                        completion(out)
+                        return
+                    }
+                    let docs = snap?.documents ?? []
+                    out.append(contentsOf: docs)
+                    self.dlog("query(\(label)) fetched so far: \(out.count)")
+                    if docs.count < pageSize { completion(out) }
+                    else { step(docs.last) }
+                }
+            }
+            step(nil)
+        }
+
+        let g = DispatchGroup()
+        var byRoom:   [QueryDocumentSnapshot] = []
+        var byCampus: [QueryDocumentSnapshot] = []
+
+        g.enter()
+        fetchAll(col.whereField("room",   in: roomCandidates),   label: "room in")   { byRoom   = $0; g.leave() }
+        g.enter()
+        fetchAll(col.whereField("campus", in: campusCandidates), label: "campus in") { byCampus = $0; g.leave() }
+
+        // 2) ユーティリティ（曜日・学期の正規化）
+        let targetDay = location.dayName                          // "月" など
+        let expanded = expandedTerms(for: termRaw) ?? []          // ["（後期）","（通年）",…] / 無指定なら []
+
+        func normDay(_ raw: String?) -> String? {
+            guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+            if let r = s.range(of: "曜") { return String(s[..<r.lowerBound]) } // "火曜日" → "火"
+            return String(s.prefix(1))                                        // "火" / "水" など
+        }
+        func dayFromMap(_ m: [String: Any]) -> String? {
+            if let t = m["time"] as? [String: Any], let d = t["day"] as? String { return normDay(d) }
+            if let d = m["day"]     as? String { return normDay(d) }
+            if let d = m["weekday"] as? String { return normDay(d) }
+            return nil
+        }
+        func termAllow(_ s: String?) -> Bool {
+            guard !expanded.isEmpty else { return true } // 学期未指定時は通す
+            let t = (s ?? "")
+            return expanded.contains { t.contains($0) }
+        }
+        let isOnlineDoc: ([String: Any]) -> Bool = { m in
+            let room   = (m["room"] as? String) ?? ""
+            let campus = (m["campus"] as? String) ?? ""
+            let byR = roomCandidates.contains { room.localizedCaseInsensitiveContains($0) }
+            let byC = campusCandidates.contains { campus.localizedCaseInsensitiveContains($0) }
+            return byR || byC
+        }
+
+        // 3) 取得完了後にローカル絞り込み → Course 化 → 表示
+        g.notify(queue: .main) {
+            self.isLoading = false
+
+            // 重複排除（documentID 基準）
+            var uniq: [String: QueryDocumentSnapshot] = [:]
+            for d in byRoom   { uniq[d.documentID] = d }
+            for d in byCampus { uniq[d.documentID] = d }
+
+            self.dlog("online fetched raw: room=\(byRoom.count), campus=\(byCampus.count), unique=\(uniq.count)")
+
+            var picked: [Course] = []
+            picked.reserveCapacity(uniq.count)
+
+            for d in uniq.values {
+                let m = d.data()
+                guard isOnlineDoc(m) else { continue }                   // 念のため最終確認
+                guard let day = dayFromMap(m), day == targetDay else { continue } // 曜日一致
+                guard termAllow(m["term"] as? String) else { continue }  // 学期一致（前期⇄通年 / 後期⇄通年）
+
+                if let c = Course(doc: d) {
+                    picked.append(c)
+                }
+            }
+
+            picked.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+
+            self.remote  = picked
+            self.courses = picked
+            self.tableView.reloadData()
+            self.tableView.tableFooterView = UIView(frame: .zero)
+
+            self.dlog("displayed rows: \(picked.count), day=\(targetDay), term=\(self.termRaw ?? "nil")")
+            if picked.isEmpty {
+                self.dlog("empty. check fields: time.day/day/weekday, term 文字列, room/campus 値")
+            }
+        }
+    }
+
+
+
 
 
     // MARK: - 「さらに読み込む」（検索中のみ可）
@@ -483,21 +651,69 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         return cell
     }
 
+
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let course = courses[indexPath.row]
+
         let title = "登録しますか？"
-        let message = "\(location.dayName) \(location.period)限に\n「\(course.title)」を登録します。"
+        // period==0（OD 行）は「オンライン授業」、それ以外は「n限」
+        let slotCaption = (location.period == 0) ? "オンライン授業" : "\(location.period)限"
+        let message = "\(location.dayName) \(slotCaption)に\n「\(course.title)」を登録します。"
 
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+
         alert.addAction(UIAlertAction(title: "登録", style: .default, handler: { [weak self] _ in
             guard let self = self else { return }
+
+            // 既存の経路（通常コマはこれで反映される）
             self.delegate?.courseList(self, didSelect: course, at: self.location)
+
+            // ===== オンライン行（period==0）のときだけ、時間割へ通知を飛ばす =====
+            if self.location.period == 0 {
+                var dict: [String: Any] = [
+                    "code":         course.id,
+                    "class_name":   course.title,
+                    "teacher_name": course.teacher,
+                    "room":         course.room
+                ]
+                if let v = course.credits     { dict["credit"]   = v }
+                if let v = course.campus      { dict["campus"]   = v }
+                if let v = course.category    { dict["category"] = v }
+                if let v = course.syllabusURL { dict["url"]      = v }
+                if let v = course.term        { dict["term"]     = v }  // Firestoreの term 生文字列
+
+                let payload: [String: Any] = [
+                    "course": dict,               // ← 時間割側が期待する辞書
+                    "docID":  course.id,
+                    "day":    self.location.day,  // 0 始まり
+                    "period": self.location.period
+                ]
+
+                NotificationCenter.default.post(
+                    name: .registerCourseToTimetable,
+                    object: self,
+                    userInfo: payload
+                )
+                self.dlog("post register: day=\(self.location.day), period=\(self.location.period), id=\(course.id)")
+            }
+
+            // 画面を戻す
             self.backToTimetable()
         }))
+
         present(alert, animated: true)
     }
+
+
+    // MARK: - Debug log (DEBUGビルドのみ)
+    #if DEBUG
+    private func dlog(_ msg: String) { print("[OnlineList] \(msg)") }
+    #else
+    private func dlog(_ msg: String) { /* no-op on Release */ }
+    #endif
+
 
     // MARK: - Helpers
     private func showError(_ err: Error) {
@@ -519,3 +735,4 @@ final class CourseListViewController: UITableViewController, AddCourseViewContro
         return tail.isEmpty ? line1 : line1 + "\n" + tail.joined(separator: " ・ ")
     }
 }
+

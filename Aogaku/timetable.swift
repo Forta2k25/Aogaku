@@ -410,55 +410,71 @@ final class timetable: UIViewController,
 
         let list = onlineSlots[day] ?? []
 
+        // ボタン外観は「通常セル」と同じ（＋の位置・枠線・角丸）
+        btn.backgroundColor = .clear
+        btn.layer.borderWidth = 0
+        btn.layer.cornerRadius = 0
+
         if list.isEmpty {
-            // 何も無い時は「＋」ゴーストを置いておく（通常の時間割に近い見た目）
-            let ghost = ghostPlusView()
-            stack.addArrangedSubview(ghost)
-            stack.distribution = .fillEqually
+            stack.isHidden = true
+
+            var cfg = baseCellConfig(bg: .secondarySystemBackground,
+                                     fg: .tertiaryLabel,
+                                     stroke: UIColor.separator,
+                                     strokeWidth: 1)
+            cfg.title = viewOnly ? " " : "＋"
+            cfg.titleAlignment = .center
+            cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { inAttr in
+                var out = inAttr
+                out.font = .systemFont(ofSize: 22, weight: .semibold)
+                let p = NSMutableParagraphStyle()
+                p.alignment = .center
+                out.paragraphStyle = p
+                return out
+            }
+            btn.configuration = cfg
             return
         }
 
         // 複数あれば上下に等分して全部並べる
+        stack.isHidden = false
+        var cfg = baseCellConfig(bg: .secondarySystemBackground,
+                                 fg: .label,
+                                 stroke: UIColor.separator,
+                                 strokeWidth: 1)
+        cfg.title = " " // タイトル領域は使わず、上に載せるスタックで描画
+        btn.configuration = cfg
+
         stack.distribution = .fillEqually
         for c in list {
-            stack.addArrangedSubview(makeOnlineChip(for: c))
+            stack.addArrangedSubview(makeOnlineChip(for: c, day: day))
         }
     }
-    private func makeOnlineChip(for course: Course) -> UIView {
+    private func makeOnlineChip(for course: Course, day: Int) -> UIView {
+        // 1〜5限のセルと同じ「色の作り方」「角丸」「フォント」に寄せる
+        let loc = SlotLocation(day: day, period: 0)
+        let colorKey = SlotColorStore.color(for: loc) ?? .teal
+        let pastel = colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
+
         let v = UIView()
-        v.backgroundColor = SlotColorKey.teal.uiColor  // 既存の色キーに合わせてください
-        v.layer.cornerRadius = 12
+        v.backgroundColor = pastel
+        v.layer.cornerRadius = 5
         v.layer.masksToBounds = true
 
-        // 科目名は 3 行まで、文字が多いときは自動でやや小さく
-        let title = UILabel()
-        title.textColor = .white
-        title.numberOfLines = 3
-        title.lineBreakMode = .byWordWrapping
-        title.font = .systemFont(ofSize: 16, weight: .semibold)
-        title.adjustsFontSizeToFitWidth = true
-        title.minimumScaleFactor = 0.75
-        title.text = course.title
-
-        // 下に登録番号を薄く
-        let code = UILabel()
-        code.textColor = UIColor.white.withAlphaComponent(0.9)
-        code.font = .systemFont(ofSize: 13, weight: .semibold)
-        code.text = course.id
-
-        let inner = UIStackView(arrangedSubviews: [title, code])
-        inner.axis = .vertical
-        inner.alignment = .center
-        inner.distribution = .fill
-        inner.spacing = 4
-
-        inner.translatesAutoresizingMaskIntoConstraints = false
-        v.addSubview(inner)
+        // 通常セルと同じビュー（フォント/行数/余白）を流用
+        let content = TimetableCellContentView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.titleLabel.text = course.title
+        content.titleLabel.textColor = .white
+        // オンデマは教室（登録番号も）不要なので非表示
+        content.roomLabel.isHidden = true
+        content.roomLabel.text = ""
+        v.addSubview(content)
         NSLayoutConstraint.activate([
-            inner.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            inner.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
-            inner.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
-            inner.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8)
+            content.leadingAnchor.constraint(equalTo: v.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: v.trailingAnchor),
+            content.topAnchor.constraint(equalTo: v.topAnchor),
+            content.bottomAnchor.constraint(equalTo: v.bottomAnchor)
         ])
 
         return v
@@ -499,7 +515,10 @@ final class timetable: UIViewController,
     // OD マーカー（左の「OD」ラベル）を作成
     private func makeODMarker() -> UILabel {
         let lb = UILabel()
-        lb.text = "OD"
+        lb.text = "オン\nデマ"
+        lb.numberOfLines = 2
+        lb.adjustsFontSizeToFitWidth = true
+        lb.minimumScaleFactor = 0.7
         lb.textAlignment = .center
         lb.textColor = .white
         lb.backgroundColor = UIColor.systemRed
@@ -516,7 +535,10 @@ final class timetable: UIViewController,
 
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.text = "OD"
+        label.text = "オン\nデマ"
+        label.numberOfLines = 2
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.7
         label.font = .systemFont(ofSize: 14, weight: .semibold)
         label.textColor = .secondaryLabel
         label.textAlignment = .center
@@ -530,79 +552,58 @@ final class timetable: UIViewController,
         return v
     }
 
-    // OD 行（オンライン用セル）を並べる
-    private func placeOnlineRow() {
-        // 既存のオンライン行があれば一旦クリア
-        onlineRowButtons.forEach { $0.removeFromSuperview() }
-        onlineRowStacks.forEach { $0.removeFromSuperview() }
-        onlineRowButtons.removeAll()
-        onlineRowStacks.removeAll()
+    // OD 行（オンライン用セル）を並べる（通常セルと同じ枠・サイズ）
+private func placeOnlineRow() {
+    // 既存のオンライン行があれば一旦クリア
+    onlineRowButtons.forEach { $0.removeFromSuperview() }
+    onlineRowStacks.forEach { $0.removeFromSuperview() }
+    onlineRowButtons.removeAll()
+    onlineRowStacks.removeAll()
 
-        // 「OD」行の1週間ぶんのセル領域（既存の計算をそのまま利用）
-        // dayLabels.count == 曜日列数（例: 5）
-        for day in 0..<dayLabels.count {
-            // 1) ボタン（透明、タップで一覧を出す）
-            let button = UIButton(type: .custom)
-            button.backgroundColor = .clear
-            button.tag = day            // tapOnlineCell で day を特定
-            button.addTarget(self, action: #selector(tapOnlineCell(_:)), for: .touchUpInside)
-            view.addSubview(button)
-            onlineRowButtons.append(button)
+    guard rowGuides.indices.contains(odRowIndex) else { return }
+    let rowG = rowGuides[odRowIndex]
 
-            // 2) 表示用の縦スタック（オンライン科目の見た目を上下積みにする）
-            let stack = UIStackView()
-            stack.axis = .vertical
-            stack.alignment = .fill
-            stack.distribution = .fillEqually  // 科目数で高さを等分
-            stack.spacing = 8
-            stack.isUserInteractionEnabled = false // タップは上の透明ボタンに委ねる
-            view.addSubview(stack)
-            onlineRowStacks.append(stack)
+    for day in 0..<dayLabels.count {
+        // 1) セル（通常の時間割セルと同じ制約で配置）
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        gridContainerView.addSubview(button)
 
-            // 3) AutoLayout — 既存の「OD行のセル領域」に合わせて配置
-            button.translatesAutoresizingMaskIntoConstraints = false
-            stack.translatesAutoresizingMaskIntoConstraints = false
-            let rect = rectForOnlineCell(day: day) // 既存: OD行の day 列のフレームを返す補助（無ければあなたの既存実装に合わせて）
-            NSLayoutConstraint.activate([
-                button.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: rect.minX),
-                button.topAnchor.constraint(equalTo: view.topAnchor, constant: rect.minY),
-                button.widthAnchor.constraint(equalToConstant: rect.width),
-                button.heightAnchor.constraint(equalToConstant: rect.height),
+        let colG = colGuides[day + 1]
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: rowG.topAnchor, constant: cellPadding),
+            button.bottomAnchor.constraint(equalTo: rowG.bottomAnchor, constant: -cellPadding),
+            button.leadingAnchor.constraint(equalTo: colG.leadingAnchor, constant: cellPadding),
+            button.trailingAnchor.constraint(equalTo: colG.trailingAnchor, constant: -cellPadding)
+        ])
 
-                stack.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 6),
-                stack.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -6),
-                stack.topAnchor.constraint(equalTo: button.topAnchor, constant: 6),
-                stack.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -6)
-            ])
-        }
+        button.tag = day
+        button.addTarget(self, action: #selector(tapOnlineCell(_:)), for: .touchUpInside)
+        onlineRowButtons.append(button)
 
-        // 初期UI反映
-        for d in 0..<dayLabels.count { updateOnlineUI(for: d) }
+        // 2) 表示用スタック（科目がある時だけ使う。空の時は＋をボタン側で出す）
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.alignment = .fill
+        stack.distribution = .fillEqually
+        // 通常セル（1〜5限）と同じ見え方に寄せるため、余白/間隔を最小に
+        stack.spacing = 1
+        stack.isUserInteractionEnabled = false
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: button.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: button.bottomAnchor)
+        ])
+        onlineRowStacks.append(stack)
     }
 
-    /// 0行（オンライン行）の「その曜日のセル」矩形（画面座標）を返す
-    private func rectForOnlineCell(day: Int) -> CGRect {
-        // day: 0(月) ... 4(金)
-        gridContainerView.layoutIfNeeded()
+    // 初期UI反映
+    for d in 0..<dayLabels.count { updateOnlineUI(for: d) }
+}
 
-        // ガイドの存在チェック
-        guard colGuides.indices.contains(day), rowGuides.count >= 2 else { return .zero }
-
-        // グリッド座標系での矩形
-        let col = colGuides[day].layoutFrame
-        let topY = rowGuides[0].layoutFrame.minY      // オンライン行の上端
-        let nextY = rowGuides[1].layoutFrame.minY     // 1限の上端（= オンライン行の下端）
-        var rectInGrid = CGRect(x: col.minX,
-                                y: topY,
-                                width: col.width,
-                                height: nextY - topY)
-
-        // 既存セルと同じ余白
-        rectInGrid = rectInGrid.insetBy(dx: 6, dy: 6)
-
-        // 画面座標へ変換（AutoLayout 定数として使うため）
-        return gridContainerView.convert(rectInGrid, to: view)
-    }
 
  
     
@@ -617,7 +618,7 @@ final class timetable: UIViewController,
         let list = onlineSlots[day] ?? []
 
         let ac = UIAlertController(
-            title: "\(dayName(for: day)) のオンライン",
+            title: "\(dayName(for: day))曜日のオンライン授業を追加",
             message: nil,
             preferredStyle: .actionSheet
         )
@@ -1072,7 +1073,7 @@ final class timetable: UIViewController,
         lastDaysCount = dayLabels.count
         lastPeriodsCount = periodLabels.count
         saveAssigned()   // ★ 追加
-        mirrorForWidget() 
+        mirrorForWidget()
     }
     private func remapAssigned(old: [Course?], oldDays: Int, oldPeriods: Int,
                                newDays: Int, newPeriods: Int) -> [Course?] {
@@ -1318,7 +1319,9 @@ final class timetable: UIViewController,
             rowGuides[i].topAnchor.constraint(equalTo: rowGuides[i-1].bottomAnchor, constant: spacing).isActive = true
             if i >= 2 { rowGuides[i].heightAnchor.constraint(equalTo: rowGuides[1].heightAnchor).isActive = true }
         }
-        rowGuides[1].heightAnchor.constraint(greaterThanOrEqualToConstant: periodRowMinHeight).isActive = true
+        // 各コマの高さを固定（OD 行を追加しても 1-5 限の枠サイズが縮まないようにする）
+        // 以前は >= で最小値だけ保証していたため、制約の組み合わせによって全体が詰まって見えることがあった。
+        rowGuides[1].heightAnchor.constraint(equalToConstant: periodRowMinHeight).isActive = true
     }
 
     // MARK: - Headers / Time markers
@@ -2240,4 +2243,5 @@ extension timetable {
     
     
 }
+
 

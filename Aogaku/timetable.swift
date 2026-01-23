@@ -47,7 +47,7 @@ private func encodeCourseMap(_ c: Course, colorKey: String?) -> [String: Any] {
     return m
 }
 private func decodeCourseMap(_ m: [String: Any]) -> Course {
-    let id      = (m["id"] as? String) ?? ""
+    var id      = (m["id"] as? String) ?? ""
     let title   = (m["title"] as? String) ?? "（無題）"
     let room    = (m["room"] as? String) ?? ""
     let teacher = (m["teacher"] as? String) ?? ""
@@ -59,6 +59,9 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
     let campus   = m["campus"] as? String
     let category = m["category"] as? String
     let url      = m["syllabusURL"] as? String
+    if id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        id = [title, teacher, room, campus ?? "", ""].joined(separator: "|")
+    }
     return Course(id: id, title: title, room: room, teacher: teacher,
                   credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
 }
@@ -216,6 +219,15 @@ final class timetable: UIViewController,
         // 出欠カウントはこの画面では未使用のため、特に処理なしでOK
     }
 
+    //フォント追加
+    private func debugPrintAllFontNames() {
+        for family in UIFont.familyNames.sorted() {
+            print("▼ \(family)")
+            for name in UIFont.fontNames(forFamilyName: family).sorted() {
+                print("   - \(name)")
+            }
+        }
+    }
     
     // 現在のハイライト（曜日・時限）を描画するかどうか
     private var highlightEnabled = true
@@ -646,9 +658,12 @@ private func placeOnlineRow() {
             if let nav = self.navigationController {
                 nav.pushViewController(vc, animated: true)
             } else {
-                vc.modalPresentationStyle = .fullScreen      // ← 基底を明示
-                self.present(vc, animated: true)
+                // ナビゲーションバーが無いと「戻る」が出ないため、必ず UINavigationController で包んで出す
+                let nav = UINavigationController(rootViewController: vc)
+                nav.modalPresentationStyle = .fullScreen
+                self.present(nav, animated: true)
             }
+
         }))
 
         ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
@@ -943,6 +958,7 @@ private func placeOnlineRow() {
         publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
         startNowTicker()                     // 追加
         updateNowHighlight()                 // 追加（すぐ反映）
+        debugPrintAllFontNames()
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
     }
     override func viewWillDisappear(_ animated: Bool) {
@@ -975,7 +991,24 @@ private func placeOnlineRow() {
     private func dlog(_ msg: String) { }
     #endif
 
-    @objc private func onRegisterFromDetail(_ note: Notification) {
+    // MARK: - Online (OD) key helpers
+    /// オンライン(OD)は登録番号が空/重複（例: ++++++）しうるため、
+    /// **同じ授業名(title)だけを重複判定キー**として扱う。
+    /// - 要件: 「同じ授業名じゃなければ追加できるように」
+    private func onlineCourseKey(_ c: Course) -> String {
+        normalizeTitleKey(c.title)
+    }
+
+    /// 表記ゆれ（全角スペース/連続スペース/改行）を吸収して「授業名キー」を作る
+    private func normalizeTitleKey(_ s: String) -> String {
+        let replaced = s.replacingOccurrences(of: "\u{3000}", with: " ")
+        let parts = replaced
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        return parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+@objc private func onRegisterFromDetail(_ note: Notification) {
         guard let info = note.userInfo,
               let dict = info["course"] as? [String: Any] else { return }
 
@@ -991,7 +1024,7 @@ private func placeOnlineRow() {
             course = c
         } else if let dict = info["course"] as? [String: Any] {
             // 辞書から Course を復元（キーは実データに合わせてフォールバック）
-            let id   = (dict["id"] as? String)
+            var id   = (dict["id"] as? String)
                     ?? (dict["code"] as? String)
                     ?? (info["docID"] as? String)
                     ?? "unknown"
@@ -1003,6 +1036,10 @@ private func placeOnlineRow() {
             let category = dict["category"] as? String
             let url     = (dict["url"] as? String) ?? (dict["syllabusURL"] as? String)
             let term    = dict["term"] as? String
+
+            if id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || id == "unknown" {
+                id = [title, teacher, room, campus ?? "", term ?? ""].joined(separator: "|")
+            }
 
             course = Course(id: id, title: title, room: room, teacher: teacher,
                             credits: credits, campus: campus, category: category,
@@ -1017,12 +1054,16 @@ private func placeOnlineRow() {
         // === オンライン行（OD：period == 0） ===
         if period == 0 {
             var arr = onlineSlots[day] ?? []
-            if !arr.contains(where: { $0.id == course.id }) {
+            let key = onlineCourseKey(course)
+
+            // ここでの重複判定は「授業名(title)」のみ。
+            // 登録番号（course.id）が ++++++ などで重複しても、授業名が違えば追加できる。
+            if !arr.contains(where: { onlineCourseKey($0) == key }) {
                 arr.append(course)
                 onlineSlots[day] = arr
                 saveOnline(for: day)            // 永続化
             }
-            dlog("online added day=\(day), count=\(onlineSlots[day]?.count ?? 0), id=\(course.id)")
+            dlog("online added day=\(day), count=\(onlineSlots[day]?.count ?? 0), id=\(course.id), title=\(course.title)")
             updateOnlineUI(for: day)            // 行の UI を更新
             reloadAllButtons()                  // 念のため全体も更新
             return
@@ -1377,6 +1418,8 @@ private func placeOnlineRow() {
 
         
     }
+
+
     
     // どこか private メソッド群の末尾に追加
     private func currentDayAndPeriod() -> (day: Int?, period: Int?) {
@@ -1695,7 +1738,8 @@ private func placeOnlineRow() {
         if location.period == 0 {
             // オンライン（OD 行）に追加
             var arr = onlineSlots[location.day] ?? []
-            if !arr.contains(where: { $0.id == course.id }) {
+            let key = onlineCourseKey(course)
+            if !arr.contains(where: { onlineCourseKey($0) == key }) {
                 arr.append(course)
                 onlineSlots[location.day] = arr
                 saveOnline(for: location.day)
@@ -1783,7 +1827,8 @@ private func placeOnlineRow() {
         if location.period == 0 {
             let day = location.day
             if var arr = onlineSlots[day] {
-                if let i = arr.firstIndex(where: { $0.id == course.id }) {
+                let key = onlineCourseKey(course)
+                if let i = arr.firstIndex(where: { onlineCourseKey($0) == key }) {
                     arr.remove(at: i)
                     onlineSlots[day] = arr
                     saveOnline(for: day)       // 既存の永続化関数
@@ -1987,6 +2032,101 @@ private func placeOnlineRow() {
     }
 
     // MARK: - Share / Save
+    // MARK: - Share / Save (Branding)
+
+    private func makeTimetableImageBrandedNeutral() -> UIImage {
+        let base = makeTimetableImageNeutral()
+        return addBrandingFooter(to: base)
+    }
+
+    /// タイムテーブル画像の下にフッターを追加して、アイコン＋アプリ名を描画する
+    private func addBrandingFooter(to image: UIImage) -> UIImage {
+        let footerHeight: CGFloat = 90
+        let iconSize: CGFloat = 44
+        let gap: CGFloat = 12
+
+        let appName = "青学ハック"
+
+        let width = image.size.width
+        let totalHeight = image.size.height + footerHeight
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = image.scale   // 画質を落とさない
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: width, height: totalHeight),
+            format: format
+        )
+
+        // 背景色（今のテーマに合わせる）
+        let bg = appBGColor().resolvedColor(with: traitCollection)
+        let fg = UIColor.label.resolvedColor(with: traitCollection)
+
+        // アプリのアイコン（取得できなければ Assets の "AppLogo" を使う想定）
+        let icon = appIconImage() ?? UIImage(named: "AppLogo")
+
+        // ✅ JKゴシックL（PostScript名）
+        let fontName = "JK-Gothic-L"
+        let fontSize: CGFloat = 28
+        let font = UIFont(name: fontName, size: fontSize)
+            ?? UIFont.systemFont(ofSize: fontSize, weight: .semibold)
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: fg,
+            .kern: 0.6 // 字間：0.0〜1.2くらいで好みに調整
+        ]
+
+        let textSize = (appName as NSString).size(withAttributes: attrs)
+
+        let groupWidth = (icon != nil ? (iconSize + gap) : 0) + textSize.width
+        let startX = (width - groupWidth) / 2
+        let centerY = image.size.height + footerHeight / 2
+
+        return renderer.image { ctx in
+            // 背景
+            bg.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: width, height: totalHeight))
+
+            // もとの時間割画像
+            image.draw(in: CGRect(x: 0, y: 0, width: width, height: image.size.height))
+
+            // アイコン + 文字
+            var x = startX
+            if let icon {
+                let y = centerY - iconSize / 2
+                let rect = CGRect(x: x, y: y, width: iconSize, height: iconSize)
+
+                
+                let cornerRadius: CGFloat = iconSize * 0.23
+
+                // 角丸でクリップしてから描画
+                let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+                ctx.cgContext.saveGState()
+                path.addClip()
+                icon.draw(in: rect)
+                ctx.cgContext.restoreGState()
+
+                x += iconSize + gap
+            }
+
+
+            let textY = centerY - textSize.height / 2
+            (appName as NSString).draw(at: CGPoint(x: x, y: textY), withAttributes: attrs)
+        }
+    }
+
+    /// Info.plist から「アプリのアイコン画像名」を引いて UIImage にする
+    private func appIconImage() -> UIImage? {
+        guard
+            let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+            let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+            let files = primary["CFBundleIconFiles"] as? [String],
+            let iconName = files.last
+        else { return nil }
+
+        return UIImage(named: iconName)
+    }
+
     private func makeTimetableImage() -> UIImage {
         gridContainerView.layoutIfNeeded()
         let targetView = gridContainerView
@@ -1996,6 +2136,7 @@ private func placeOnlineRow() {
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
         return renderer.image { ctx in targetView.layer.render(in: ctx.cgContext) }
     }
+
     // ハイライトを消した状態でグリッドを撮影し、直後に元へ戻す
     private func makeTimetableImageNeutral() -> UIImage {
         let prev = highlightEnabled
@@ -2012,19 +2153,28 @@ private func placeOnlineRow() {
         UIView.performWithoutAnimation { self.updateNowHighlight() }
         return img
     }
+
     private func shareCurrentTimetable() {
-        let image = makeTimetableImageNeutral()
+        let image = makeTimetableImageBrandedNeutral()
         let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
         if let sheet = activityVC.sheetPresentationController {
-            if #available(iOS 16.0, *) { sheet.detents = [.medium(), .large()]; sheet.selectedDetentIdentifier = .medium }
+            if #available(iOS 16.0, *) {
+                sheet.detents = [.medium(), .large()]
+                sheet.selectedDetentIdentifier = .medium
+            }
             sheet.prefersGrabberVisible = true
             sheet.preferredCornerRadius = 16
         }
-        if let pop = activityVC.popoverPresentationController { pop.sourceView = rightB; pop.sourceRect = rightB.bounds }
+        if let pop = activityVC.popoverPresentationController {
+            pop.sourceView = rightB
+            pop.sourceRect = rightB.bounds
+        }
         present(activityVC, animated: true)
     }
+
     private func saveCurrentTimetableToPhotos() {
-        let image = makeTimetableImageNeutral()
+        let image = makeTimetableImageBrandedNeutral()
+
         func finish(_ ok: Bool, _ error: Error?) {
             let title = ok ? "保存しました" : "保存に失敗しました"
             let msg   = ok ? "写真アプリに保存されました" : (error?.localizedDescription ?? "写真への保存権限をご確認ください")
@@ -2032,35 +2182,53 @@ private func placeOnlineRow() {
             ac.addAction(UIAlertAction(title: "OK", style: .default))
             present(ac, animated: true)
         }
+
         if #available(iOS 14, *) {
             let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
             switch status {
             case .notDetermined:
                 PHPhotoLibrary.requestAuthorization(for: .addOnly) { s in
                     DispatchQueue.main.async {
-                        if s == .authorized || s == .limited { self.performSaveToPhotos(image, completion: finish) }
-                        else { finish(false, nil) }
+                        if s == .authorized || s == .limited {
+                            self.performSaveToPhotos(image, completion: finish)
+                        } else {
+                            finish(false, nil)
+                        }
                     }
                 }
-            case .authorized, .limited: performSaveToPhotos(image, completion: finish)
-            default: finish(false, nil)
+            case .authorized, .limited:
+                performSaveToPhotos(image, completion: finish)
+            default:
+                finish(false, nil)
             }
         } else {
             let status = PHPhotoLibrary.authorizationStatus()
             if status == .notDetermined {
                 PHPhotoLibrary.requestAuthorization { s in
-                    DispatchQueue.main.async { (s == .authorized) ? self.performSaveToPhotos(image, completion: finish) : finish(false, nil) }
+                    DispatchQueue.main.async {
+                        (s == .authorized) ? self.performSaveToPhotos(image, completion: finish) : finish(false, nil)
+                    }
                 }
-            } else if status == .authorized { performSaveToPhotos(image, completion: finish) }
-            else { finish(false, nil) }
+            } else if status == .authorized {
+                performSaveToPhotos(image, completion: finish)
+            } else {
+                finish(false, nil)
+            }
         }
     }
+
     private func performSaveToPhotos(_ image: UIImage, completion: @escaping (Bool, Error?) -> Void) {
         PHPhotoLibrary.shared().performChanges({
             PHAssetChangeRequest.creationRequestForAsset(from: image)
-        }) { ok, err in DispatchQueue.main.async { completion(ok, err) } }
+        }) { ok, err in
+            DispatchQueue.main.async { completion(ok, err) }
+        }
     }
+
+
 }
+
+
 
 // MARK: - コマ内容ビュー（タッチ無効）
 final class TimetableCellContentView: UIView {

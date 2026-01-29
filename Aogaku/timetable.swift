@@ -47,7 +47,7 @@ private func encodeCourseMap(_ c: Course, colorKey: String?) -> [String: Any] {
     return m
 }
 private func decodeCourseMap(_ m: [String: Any]) -> Course {
-    let id      = (m["id"] as? String) ?? ""
+    var id      = (m["id"] as? String) ?? ""
     let title   = (m["title"] as? String) ?? "（無題）"
     let room    = (m["room"] as? String) ?? ""
     let teacher = (m["teacher"] as? String) ?? ""
@@ -59,6 +59,9 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
     let campus   = m["campus"] as? String
     let category = m["category"] as? String
     let url      = m["syllabusURL"] as? String
+    if id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        id = [title, teacher, room, campus ?? "", ""].joined(separator: "|")
+    }
     return Course(id: id, title: title, room: room, teacher: teacher,
                   credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
 }
@@ -91,12 +94,49 @@ private struct TimetableRemoteStore {
                       let h = m["h"] as? String else { continue }
                 out[k] = h
             }
+
+
+    /// ドキュメント内の "cells.dXpY" / "cells.dXp0_<hash>" をフラットに返す（value は map）
+    /// - Returns: ["cells.d0p1": ["title":..., ...], ...]
+    func fetchCellMapsFlat() async -> [String:[String:Any]] {
+        do {
+            let snap = try await doc.getDocument()
+            let data = snap.data() ?? [:]
+            var out: [String:[String:Any]] = [:]
+            for (k, v) in data {
+                guard k.hasPrefix("cells.d"),
+                      let m = v as? [String: Any] else { continue }
+                out[k] = m
+            }
+            return out
+        } catch {
+            return [:]
+        }
+    }
             return out
         } catch { return [:] }
     }
 
 
-    func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> ListenerRegistration {
+    
+    /// Firestore ドキュメント直下にある `cells.dXpY...` フィールドをフラットに取得する
+    /// - Returns: ["cells.d0p1": ["title":..., ...], "cells.d0p0_xxx": [...], ...]
+    func fetchCellMapsFlat() async -> [String:[String:Any]] {
+        do {
+            let snap = try await doc.getDocument()
+            let data = snap.data() ?? [:]
+            var out: [String:[String:Any]] = [:]
+            for (k, v) in data {
+                guard k.hasPrefix("cells.d"), let m = v as? [String: Any] else { continue }
+                out[k] = m
+            }
+            return out
+        } catch {
+            return [:]
+        }
+    }
+
+func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> ListenerRegistration {
         return doc.addSnapshotListener { snap, _ in
             //guard let data = snap?.data(), let cells = data["cells"] as? [String: Any] else { return }
             guard let data = snap?.data() else { return }
@@ -120,9 +160,31 @@ private struct TimetableRemoteStore {
         try? await doc.setData(payload, merge: true)
     }
 
+    /// 任意の field key（例: "cells.d0p0_abcd"）で upsert したい場合に使う
+    /// - Note: key は **"cells." から始まる**ことを想定
+    func upsert(course: Course, colorKey: String?, fieldKey key: String) async {
+        var base = encodeCourseMap(course, colorKey: colorKey)
+        base["h"] = slotHash(course, colorKey: colorKey)
+        var payload: [String: Any] = [
+            key: base,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        payload["\(key).u"] = FieldValue.serverTimestamp()
+        try? await doc.setData(payload, merge: true)
+    }
+
     func delete(day: Int, period: Int) async {
         let payload: [String: Any] = [
             fieldKey(day: day, period: period): FieldValue.delete(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        try? await doc.setData(payload, merge: true)
+    }
+
+    /// 任意の field key（例: "cells.d0p0_abcd"）を削除したい場合に使う
+    func delete(fieldKey key: String) async {
+        let payload: [String: Any] = [
+            key: FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp()
         ]
         try? await doc.setData(payload, merge: true)
@@ -216,6 +278,15 @@ final class timetable: UIViewController,
         // 出欠カウントはこの画面では未使用のため、特に処理なしでOK
     }
 
+    //フォント追加
+    private func debugPrintAllFontNames() {
+        for family in UIFont.familyNames.sorted() {
+            print("▼ \(family)")
+            for name in UIFont.fontNames(forFamilyName: family).sorted() {
+                print("   - \(name)")
+            }
+        }
+    }
     
     // 現在のハイライト（曜日・時限）を描画するかどうか
     private var highlightEnabled = true
@@ -396,6 +467,54 @@ final class timetable: UIViewController,
         let k = "\(onlineKeyPrefix).d\(day)"
         if let data = try? JSONEncoder().encode(onlineSlots[day] ?? []) {
             UserDefaults.standard.set(data, forKey: k)
+        }
+    }
+
+    /// "cells.dXpY" / "cells.dXp0_<hash>" から day/period を抜き出す
+    private func parseCellKey(_ key: String) -> (day: Int, period: Int)? {
+        guard let r = key.range(of: #"cells\.d(\d+)p(\d+)"#, options: .regularExpression) else { return nil }
+        let tag = String(key[r]).dropFirst(6) // "dXpY"
+        let comps = tag.dropFirst().split(separator: "p")
+        guard comps.count == 2,
+              let day = Int(comps[0]),
+              let period = Int(comps[1]) else { return nil }
+        return (day, period)
+    }
+
+    /// Firestore から取ってきたフラットな cells マップから、オンデマンド（period==0）を onlineSlots に反映する
+    private func mergeRemoteOnlineCells(_ cells: [String:[String:Any]]) {
+        var changedDays = Set<Int>()
+
+        for (absKey, m) in cells {
+            guard absKey.hasPrefix("cells.d"),
+                  let parsed = parseCellKey(absKey),
+                  parsed.period == 0 else { continue }
+
+            let course = decodeCourseMap(m)
+            var arr = onlineSlots[parsed.day] ?? []
+            let k = onlineCourseKey(course)
+            if let i = arr.firstIndex(where: { onlineCourseKey($0) == k }) {
+                arr[i] = course
+            } else {
+                arr.append(course)
+            }
+            onlineSlots[parsed.day] = arr
+
+            if let c = m["colorKey"] as? String, let key = SlotColorKey(rawValue: c) {
+                SlotColorStore.set(key, for: SlotLocation(day: parsed.day, period: 0))
+            }
+            changedDays.insert(parsed.day)
+
+            // ハッシュも持っておく（次回の差分検出用）
+            if let h = m["h"] as? String {
+                remoteHashes[absKey] = h
+            }
+        }
+
+        guard !changedDays.isEmpty else { return }
+        for d in changedDays {
+            if !viewOnly, overrideUID == nil { saveOnline(for: d) }
+            updateOnlineUI(for: d)
         }
     }
 
@@ -646,9 +765,12 @@ private func placeOnlineRow() {
             if let nav = self.navigationController {
                 nav.pushViewController(vc, animated: true)
             } else {
-                vc.modalPresentationStyle = .fullScreen      // ← 基底を明示
-                self.present(vc, animated: true)
+                // ナビゲーションバーが無いと「戻る」が出ないため、必ず UINavigationController で包んで出す
+                let nav = UINavigationController(rootViewController: vc)
+                nav.modalPresentationStyle = .fullScreen
+                self.present(nav, animated: true)
             }
+
         }))
 
         ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
@@ -775,6 +897,24 @@ private func placeOnlineRow() {
     }
 
     // MARK: - Sync
+
+    /// ローカルにしか存在しないオンデマンド（period==0）を Firestore に反映する
+    /// - Note: 友だち表示のために `cells.dXp0_<hash>` 形式で保存する
+    private func backfillOnlineSlots(to store: TimetableRemoteStore, existingHashes: [String: String]) async {
+        // onlineSlots は [day: [Course]]
+        for (day, list) in onlineSlots {
+            for course in list {
+                let fKey = onlineFieldKey(day: day, course: course)
+                // 既に同キーがあるならスキップ
+                if existingHashes[fKey] != nil { continue }
+
+                let loc = SlotLocation(day: day, period: 0)
+                let color = SlotColorStore.color(for: loc)?.rawValue
+                await store.upsert(course: course, colorKey: color, fieldKey: fKey)
+            }
+        }
+    }
+
     private func startTermSync() {
         termListener?.remove(); termListener = nil
         guard let store = remoteStore else { return }
@@ -792,68 +932,130 @@ private func placeOnlineRow() {
             // 差分監視
             self.remoteHashes = await store.fetchHashes()
 
+            // リモートにあるオンデマンド（OD）も取り込んで表示/永続化
+            let remoteCells = await store.fetchCellMapsFlat()
+            await MainActor.run {
+                self.mergeRemoteOnlineCells(remoteCells)
+            }
+
+            // 既存のオンデマンド（OD）を Firestore にバックフィル（自分の時間割のみ）
+            if !self.viewOnly, self.overrideUID == nil {
+                await self.backfillOnlineSlots(to: store, existingHashes: self.remoteHashes)
+                // バックフィル後にハッシュを取り直す
+                self.remoteHashes = await store.fetchHashes()
+            }
+
             self.termListener = store.startListener { [weak self] cells in
                 guard let self else { return }
-                
-                // --- ① まず削除検出（前回はあって今回は無いキー） ---      // [FIX] 追加
+
                 let currentKeys = Set(cells.keys)
                 let prevKeys    = Set(self.remoteHashes.keys)
                 let deletedKeys = prevKeys.subtracting(currentKeys).filter { $0.hasPrefix("cells.d") }
 
-                var didAnyChange = false
+                // 変更点を収集（スレッド安全のため、UI更新は MainActor でまとめて行う）
+                var regularDeleted: [SlotLocation] = []
+                var onlineDeleted: [(day: Int, fieldKey: String)] = []
 
                 for key in deletedKeys {
-                    // "cells.dXpY" -> day, period を取り出す
-                    guard let r = key.range(of: #"cells\.d(\d+)p(\d+)"#, options: .regularExpression) else { continue }
-                    let tag = String(key[r]).dropFirst(6) // dXpY
-                    let comps = tag.dropFirst().split(separator: "p")
-                    guard comps.count == 2,
-                          let day = Int(comps[0]),
-                          let period = Int(comps[1]) else { continue }
-
-                    let idx = (period - 1) * self.dayLabels.count + day
-                    if self.assigned.indices.contains(idx) {
-                        self.assigned[idx] = nil
-                        if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
-                            self.configureButton(btn, at: idx)
-                        }
-                        didAnyChange = true
+                    guard let parsed = self.parseCellKey(key) else { continue }
+                    if parsed.period == 0 {
+                        onlineDeleted.append((day: parsed.day, fieldKey: key))
+                    } else {
+                        regularDeleted.append(SlotLocation(day: parsed.day, period: parsed.period))
                     }
-                    // ★ 追加：該当コマの出席カウンターをリセット
-                    self.clearAttendance(for: SlotLocation(day: day, period: period))
-                    self.remoteHashes.removeValue(forKey: key)     // [FIX] ハッシュも消す
+                    self.remoteHashes.removeValue(forKey: key)
                 }
-                // --- ② 更新/追加（既存ロジック） ---
-                var patches: [(Int, Int, Course, String?)] = []
+
+                var slotPatches: [(day: Int, period: Int, course: Course, color: String?)] = []
+                var onlinePatches: [(day: Int, course: Course, color: String?)] = []
+
                 for (absKey, m) in cells {
-                    guard let r = absKey.range(of: #"cells\.d(\d+)p(\d+)"#, options: .regularExpression) else { continue }
-                    let tag = String(absKey[r]).dropFirst(6)
-                    let comps = tag.dropFirst().split(separator: "p")
-                    guard comps.count == 2, let day = Int(comps[0]), let period = Int(comps[1]) else { continue }
+                    guard absKey.hasPrefix("cells.d"),
+                          let parsed = self.parseCellKey(absKey) else { continue }
 
                     let remoteH = m["h"] as? String ?? ""
                     if self.remoteHashes[absKey] == remoteH { continue } // 変化なしはスキップ
                     self.remoteHashes[absKey] = remoteH
-                    patches.append((day, period, decodeCourseMap(m), m["colorKey"] as? String))
+
+                    let course = decodeCourseMap(m)
+                    let color  = m["colorKey"] as? String
+
+                    if parsed.period == 0 {
+                        onlinePatches.append((day: parsed.day, course: course, color: color))
+                    } else {
+                        slotPatches.append((day: parsed.day, period: parsed.period, course: course, color: color))
+                    }
                 }
-                
-                // --- ③ UI反映 ---
-                if !patches.isEmpty || didAnyChange {
-                    Task { @MainActor in
-                        let cols = self.dayLabels.count
-                        for (day, period, course, color) in patches {
-                            let idx = (period - 1) * cols + day
-                            if self.assigned.indices.contains(idx) {
-                                self.assigned[idx] = course
-                                if let c = color, let key = SlotColorKey(rawValue: c) {
-                                    SlotColorStore.set(key, for: SlotLocation(day: day, period: period))
-                                }
-                                if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
-                                    self.configureButton(btn, at: idx)
-                                }
+
+                if regularDeleted.isEmpty && onlineDeleted.isEmpty && slotPatches.isEmpty && onlinePatches.isEmpty {
+                    return
+                }
+
+                Task { @MainActor in
+                    let cols = self.dayLabels.count
+                    var changedOnlineDays = Set<Int>()
+
+                    // --- 削除（通常コマ） ---
+                    for loc in regularDeleted {
+                        let idx = (loc.period - 1) * cols + loc.day
+                        if self.assigned.indices.contains(idx) {
+                            self.assigned[idx] = nil
+                            if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
+                                self.configureButton(btn, at: idx)
                             }
                         }
-                        self.reloadAllButtons()
+                        self.clearAttendance(for: loc)
+                    }
+
+                    // --- 削除（オンデマンド/OD） ---
+                    for item in onlineDeleted {
+                        let day = item.day
+                        if var arr = self.onlineSlots[day] {
+                            arr.removeAll { self.onlineFieldKey(day: day, course: $0) == item.fieldKey }
+                            self.onlineSlots[day] = arr
+                            changedOnlineDays.insert(day)
+                        }
+                    }
+
+                    // --- 更新/追加（通常コマ） ---
+                    for p in slotPatches {
+                        let idx = (p.period - 1) * cols + p.day
+                        if self.assigned.indices.contains(idx) {
+                            self.assigned[idx] = p.course
+                            if let c = p.color, let key = SlotColorKey(rawValue: c) {
+                                SlotColorStore.set(key, for: SlotLocation(day: p.day, period: p.period))
+                            }
+                            if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
+                                self.configureButton(btn, at: idx)
+                            }
+                        }
+                    }
+
+                    // --- 更新/追加（オンデマンド/OD） ---
+                    for p in onlinePatches {
+                        var arr = self.onlineSlots[p.day] ?? []
+                        let k = self.onlineCourseKey(p.course)
+                        if let i = arr.firstIndex(where: { self.onlineCourseKey($0) == k }) {
+                            arr[i] = p.course
+                        } else {
+                            arr.append(p.course)
+                        }
+                        self.onlineSlots[p.day] = arr
+                        if let c = p.color, let key = SlotColorKey(rawValue: c) {
+                            SlotColorStore.set(key, for: SlotLocation(day: p.day, period: 0))
+                        }
+                        changedOnlineDays.insert(p.day)
+                    }
+
+                    // UI反映
+                    self.reloadAllButtons()
+                    for d in changedOnlineDays {
+                        if !self.viewOnly, self.overrideUID == nil { self.saveOnline(for: d) }
+                        self.updateOnlineUI(for: d)
+                    }
+
+                    // 自分の時間割だけローカル永続化（友だち表示では上書きしない）
+                    if !self.viewOnly, self.overrideUID == nil {
                         self.saveAssigned()
                     }
                 }
@@ -943,6 +1145,7 @@ private func placeOnlineRow() {
         publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
         startNowTicker()                     // 追加
         updateNowHighlight()                 // 追加（すぐ反映）
+        debugPrintAllFontNames()
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
     }
     override func viewWillDisappear(_ animated: Bool) {
@@ -975,7 +1178,42 @@ private func placeOnlineRow() {
     private func dlog(_ msg: String) { }
     #endif
 
-    @objc private func onRegisterFromDetail(_ note: Notification) {
+    // MARK: - Online (OD) key helpers
+    /// オンライン(OD)は登録番号が空/重複（例: ++++++）しうるため、
+    /// **同じ授業名(title)だけを重複判定キー**として扱う。
+    /// - 要件: 「同じ授業名じゃなければ追加できるように」
+    private func onlineCourseKey(_ c: Course) -> String {
+        normalizeTitleKey(c.title)
+    }
+
+    /// 表記ゆれ（全角スペース/連続スペース/改行）を吸収して「授業名キー」を作る
+    private func normalizeTitleKey(_ s: String) -> String {
+        let replaced = s.replacingOccurrences(of: "\u{3000}", with: " ")
+        let parts = replaced
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        return parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// オンライン(OD)授業を Firestore の cells マップに保存するための field key
+    /// - Note: 同じ曜日に複数の OD を持てるよう、授業名キーを安定ハッシュ化して suffix にする
+    private func onlineFieldKey(day: Int, course: Course) -> String {
+        let suffix = fnv1a64Hex(onlineCourseKey(course))
+        return "cells.d\(day)p0_\(suffix)"
+    }
+
+    /// 安定ハッシュ（FNV-1a 64bit）を16進で返す
+    private func fnv1a64Hex(_ s: String) -> String {
+        let bytes = Array(s.utf8)
+        var hash: UInt64 = 14695981039346656037
+        for b in bytes {
+            hash ^= UInt64(b)
+            hash = hash &* 1099511628211
+        }
+        return String(format: "%016llx", hash)
+    }
+
+@objc private func onRegisterFromDetail(_ note: Notification) {
         guard let info = note.userInfo,
               let dict = info["course"] as? [String: Any] else { return }
 
@@ -991,7 +1229,7 @@ private func placeOnlineRow() {
             course = c
         } else if let dict = info["course"] as? [String: Any] {
             // 辞書から Course を復元（キーは実データに合わせてフォールバック）
-            let id   = (dict["id"] as? String)
+            var id   = (dict["id"] as? String)
                     ?? (dict["code"] as? String)
                     ?? (info["docID"] as? String)
                     ?? "unknown"
@@ -1003,6 +1241,10 @@ private func placeOnlineRow() {
             let category = dict["category"] as? String
             let url     = (dict["url"] as? String) ?? (dict["syllabusURL"] as? String)
             let term    = dict["term"] as? String
+
+            if id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || id == "unknown" {
+                id = [title, teacher, room, campus ?? "", term ?? ""].joined(separator: "|")
+            }
 
             course = Course(id: id, title: title, room: room, teacher: teacher,
                             credits: credits, campus: campus, category: category,
@@ -1017,12 +1259,23 @@ private func placeOnlineRow() {
         // === オンライン行（OD：period == 0） ===
         if period == 0 {
             var arr = onlineSlots[day] ?? []
-            if !arr.contains(where: { $0.id == course.id }) {
+            let key = onlineCourseKey(course)
+
+            // ここでの重複判定は「授業名(title)」のみ。
+            // 登録番号（course.id）が ++++++ などで重複しても、授業名が違えば追加できる。
+            if !arr.contains(where: { onlineCourseKey($0) == key }) {
                 arr.append(course)
                 onlineSlots[day] = arr
                 saveOnline(for: day)            // 永続化
+
+                // Firestore にも登録（友だち表示用）
+                let loc = SlotLocation(day: day, period: 0)
+                let color = SlotColorStore.color(for: loc)?.rawValue
+                let fKey = onlineFieldKey(day: day, course: course)
+                remoteHashes[fKey] = slotHash(course, colorKey: color)
+                Task { await remoteStore?.upsert(course: course, colorKey: color, fieldKey: fKey) }
             }
-            dlog("online added day=\(day), count=\(onlineSlots[day]?.count ?? 0), id=\(course.id)")
+            dlog("online added day=\(day), count=\(onlineSlots[day]?.count ?? 0), id=\(course.id), title=\(course.title)")
             updateOnlineUI(for: day)            // 行の UI を更新
             reloadAllButtons()                  // 念のため全体も更新
             return
@@ -1377,6 +1630,8 @@ private func placeOnlineRow() {
 
         
     }
+
+
     
     // どこか private メソッド群の末尾に追加
     private func currentDayAndPeriod() -> (day: Int?, period: Int?) {
@@ -1695,7 +1950,8 @@ private func placeOnlineRow() {
         if location.period == 0 {
             // オンライン（OD 行）に追加
             var arr = onlineSlots[location.day] ?? []
-            if !arr.contains(where: { $0.id == course.id }) {
+            let key = onlineCourseKey(course)
+            if !arr.contains(where: { onlineCourseKey($0) == key }) {
                 arr.append(course)
                 onlineSlots[location.day] = arr
                 saveOnline(for: location.day)
@@ -1783,11 +2039,17 @@ private func placeOnlineRow() {
         if location.period == 0 {
             let day = location.day
             if var arr = onlineSlots[day] {
-                if let i = arr.firstIndex(where: { $0.id == course.id }) {
+                let key = onlineCourseKey(course)
+                if let i = arr.firstIndex(where: { onlineCourseKey($0) == key }) {
                     arr.remove(at: i)
                     onlineSlots[day] = arr
                     saveOnline(for: day)       // 既存の永続化関数
                     updateOnlineUI(for: day)   // 見た目を更新
+
+                    // Firestore 上の OD も削除（友だち表示用）
+                    let fKey = onlineFieldKey(day: day, course: course)
+                    remoteHashes.removeValue(forKey: fKey)
+                    Task { await remoteStore?.delete(fieldKey: fKey) }
                 }
             }
             // 画面を閉じる
@@ -1949,6 +2211,8 @@ private func placeOnlineRow() {
         // 3) ローカルの割当を読み込んで UI を即反映
         loadAssigned(for: newTerm)   // UserDefaults → assigned を切替
         normalizeAssigned()          // 念のためサイズを整える
+        // 3.5) オンデマンド(OD)も学期ごとに読み直す
+        loadSavedOnlineSlots()
         reloadAllButtons()           // ← ★ 重要：ボタン内容を更新
         updateNowHighlight()         // ← （任意）見出しのハイライトも更新
 
@@ -1987,6 +2251,101 @@ private func placeOnlineRow() {
     }
 
     // MARK: - Share / Save
+    // MARK: - Share / Save (Branding)
+
+    private func makeTimetableImageBrandedNeutral() -> UIImage {
+        let base = makeTimetableImageNeutral()
+        return addBrandingFooter(to: base)
+    }
+
+    /// タイムテーブル画像の下にフッターを追加して、アイコン＋アプリ名を描画する
+    private func addBrandingFooter(to image: UIImage) -> UIImage {
+        let footerHeight: CGFloat = 90
+        let iconSize: CGFloat = 44
+        let gap: CGFloat = 12
+
+        let appName = "青学ハック"
+
+        let width = image.size.width
+        let totalHeight = image.size.height + footerHeight
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = image.scale   // 画質を落とさない
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: width, height: totalHeight),
+            format: format
+        )
+
+        // 背景色（今のテーマに合わせる）
+        let bg = appBGColor().resolvedColor(with: traitCollection)
+        let fg = UIColor.label.resolvedColor(with: traitCollection)
+
+        // アプリのアイコン（取得できなければ Assets の "AppLogo" を使う想定）
+        let icon = appIconImage() ?? UIImage(named: "AppLogo")
+
+        // ✅ JKゴシックL（PostScript名）
+        let fontName = "JK-Gothic-L"
+        let fontSize: CGFloat = 28
+        let font = UIFont(name: fontName, size: fontSize)
+            ?? UIFont.systemFont(ofSize: fontSize, weight: .semibold)
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: fg,
+            .kern: 0.6 // 字間：0.0〜1.2くらいで好みに調整
+        ]
+
+        let textSize = (appName as NSString).size(withAttributes: attrs)
+
+        let groupWidth = (icon != nil ? (iconSize + gap) : 0) + textSize.width
+        let startX = (width - groupWidth) / 2
+        let centerY = image.size.height + footerHeight / 2
+
+        return renderer.image { ctx in
+            // 背景
+            bg.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: width, height: totalHeight))
+
+            // もとの時間割画像
+            image.draw(in: CGRect(x: 0, y: 0, width: width, height: image.size.height))
+
+            // アイコン + 文字
+            var x = startX
+            if let icon {
+                let y = centerY - iconSize / 2
+                let rect = CGRect(x: x, y: y, width: iconSize, height: iconSize)
+
+                
+                let cornerRadius: CGFloat = iconSize * 0.23
+
+                // 角丸でクリップしてから描画
+                let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+                ctx.cgContext.saveGState()
+                path.addClip()
+                icon.draw(in: rect)
+                ctx.cgContext.restoreGState()
+
+                x += iconSize + gap
+            }
+
+
+            let textY = centerY - textSize.height / 2
+            (appName as NSString).draw(at: CGPoint(x: x, y: textY), withAttributes: attrs)
+        }
+    }
+
+    /// Info.plist から「アプリのアイコン画像名」を引いて UIImage にする
+    private func appIconImage() -> UIImage? {
+        guard
+            let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+            let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+            let files = primary["CFBundleIconFiles"] as? [String],
+            let iconName = files.last
+        else { return nil }
+
+        return UIImage(named: iconName)
+    }
+
     private func makeTimetableImage() -> UIImage {
         gridContainerView.layoutIfNeeded()
         let targetView = gridContainerView
@@ -1996,6 +2355,7 @@ private func placeOnlineRow() {
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
         return renderer.image { ctx in targetView.layer.render(in: ctx.cgContext) }
     }
+
     // ハイライトを消した状態でグリッドを撮影し、直後に元へ戻す
     private func makeTimetableImageNeutral() -> UIImage {
         let prev = highlightEnabled
@@ -2012,19 +2372,28 @@ private func placeOnlineRow() {
         UIView.performWithoutAnimation { self.updateNowHighlight() }
         return img
     }
+
     private func shareCurrentTimetable() {
-        let image = makeTimetableImageNeutral()
+        let image = makeTimetableImageBrandedNeutral()
         let activityVC = UIActivityViewController(activityItems: [image], applicationActivities: nil)
         if let sheet = activityVC.sheetPresentationController {
-            if #available(iOS 16.0, *) { sheet.detents = [.medium(), .large()]; sheet.selectedDetentIdentifier = .medium }
+            if #available(iOS 16.0, *) {
+                sheet.detents = [.medium(), .large()]
+                sheet.selectedDetentIdentifier = .medium
+            }
             sheet.prefersGrabberVisible = true
             sheet.preferredCornerRadius = 16
         }
-        if let pop = activityVC.popoverPresentationController { pop.sourceView = rightB; pop.sourceRect = rightB.bounds }
+        if let pop = activityVC.popoverPresentationController {
+            pop.sourceView = rightB
+            pop.sourceRect = rightB.bounds
+        }
         present(activityVC, animated: true)
     }
+
     private func saveCurrentTimetableToPhotos() {
-        let image = makeTimetableImageNeutral()
+        let image = makeTimetableImageBrandedNeutral()
+
         func finish(_ ok: Bool, _ error: Error?) {
             let title = ok ? "保存しました" : "保存に失敗しました"
             let msg   = ok ? "写真アプリに保存されました" : (error?.localizedDescription ?? "写真への保存権限をご確認ください")
@@ -2032,35 +2401,53 @@ private func placeOnlineRow() {
             ac.addAction(UIAlertAction(title: "OK", style: .default))
             present(ac, animated: true)
         }
+
         if #available(iOS 14, *) {
             let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
             switch status {
             case .notDetermined:
                 PHPhotoLibrary.requestAuthorization(for: .addOnly) { s in
                     DispatchQueue.main.async {
-                        if s == .authorized || s == .limited { self.performSaveToPhotos(image, completion: finish) }
-                        else { finish(false, nil) }
+                        if s == .authorized || s == .limited {
+                            self.performSaveToPhotos(image, completion: finish)
+                        } else {
+                            finish(false, nil)
+                        }
                     }
                 }
-            case .authorized, .limited: performSaveToPhotos(image, completion: finish)
-            default: finish(false, nil)
+            case .authorized, .limited:
+                performSaveToPhotos(image, completion: finish)
+            default:
+                finish(false, nil)
             }
         } else {
             let status = PHPhotoLibrary.authorizationStatus()
             if status == .notDetermined {
                 PHPhotoLibrary.requestAuthorization { s in
-                    DispatchQueue.main.async { (s == .authorized) ? self.performSaveToPhotos(image, completion: finish) : finish(false, nil) }
+                    DispatchQueue.main.async {
+                        (s == .authorized) ? self.performSaveToPhotos(image, completion: finish) : finish(false, nil)
+                    }
                 }
-            } else if status == .authorized { performSaveToPhotos(image, completion: finish) }
-            else { finish(false, nil) }
+            } else if status == .authorized {
+                performSaveToPhotos(image, completion: finish)
+            } else {
+                finish(false, nil)
+            }
         }
     }
+
     private func performSaveToPhotos(_ image: UIImage, completion: @escaping (Bool, Error?) -> Void) {
         PHPhotoLibrary.shared().performChanges({
             PHAssetChangeRequest.creationRequestForAsset(from: image)
-        }) { ok, err in DispatchQueue.main.async { completion(ok, err) } }
+        }) { ok, err in
+            DispatchQueue.main.async { completion(ok, err) }
+        }
     }
+
+
 }
+
+
 
 // MARK: - コマ内容ビュー（タッチ無効）
 final class TimetableCellContentView: UIView {

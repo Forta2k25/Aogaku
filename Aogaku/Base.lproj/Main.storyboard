@@ -1105,6 +1105,7 @@
                         <segue destination="L6K-4w-hUC" kind="relationship" relationship="viewControllers" id="Oxi-yP-R2H"/>
                         <segue destination="47C-D0-pTL" kind="relationship" relationship="viewControllers" id="tdf-8Y-cIO"/>
                         <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="dn2-Cy-w1S"/>
+                        <segue destination="gfZ-Fw-sJx" kind="relationship" relationship="viewControllers" id="fVK-Wh-cWB"/>
                     </connections>
                 </tabBarController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="A0p-Uc-iZb" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
@@ -1203,7 +1204,7 @@
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="x7T-0Q-K1J" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
-            <point key="canvasLocation" x="-1550" y="2315"/>
+            <point key="canvasLocation" x="-1620" y="2323"/>
         </scene>
         <!--友だち-->
         <scene sceneID="Uq4-DX-hdD">
@@ -1339,11 +1340,45 @@
             </objects>
             <point key="canvasLocation" x="-779" y="2315"/>
         </scene>
+        <!--サークル-->
+        <scene sceneID="usA-QH-2t0">
+            <objects>
+                <navigationController id="gfZ-Fw-sJx" sceneMemberID="viewController">
+                    <tabBarItem key="tabBarItem" title="サークル" image="figure.archery" catalog="system" id="ZEZ-J8-ziG"/>
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" id="4SI-Z8-FdQ">
+                        <rect key="frame" x="0.0" y="124" width="440" height="54"/>
+                        <autoresizingMask key="autoresizingMask"/>
+                    </navigationBar>
+                    <connections>
+                        <segue destination="MMU-xx-MNz" kind="relationship" relationship="rootViewController" id="z0k-aY-yb9"/>
+                    </connections>
+                </navigationController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="m3w-5H-5SJ" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="-1571" y="3067"/>
+        </scene>
+        <!--Circles View Controller-->
+        <scene sceneID="CrI-RH-aXq">
+            <objects>
+                <viewController id="MMU-xx-MNz" customClass="CirclesViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="OUJ-gW-NGN">
+                        <rect key="frame" x="0.0" y="0.0" width="440" height="956"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <viewLayoutGuide key="safeArea" id="PM3-rb-BD9"/>
+                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                    </view>
+                    <navigationItem key="navigationItem" id="qhs-A6-g7a"/>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="HXj-hZ-LNz" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="-780" y="3067"/>
+        </scene>
     </scenes>
     <resources>
         <image name="arrow.clockwise" catalog="system" width="110" height="128"/>
         <image name="bookmark" catalog="system" width="110" height="128"/>
         <image name="calendar" catalog="system" width="128" height="107"/>
+        <image name="figure.archery" catalog="system" width="118" height="128"/>
         <image name="gear" catalog="system" width="128" height="122"/>
         <image name="gearshape" catalog="system" width="128" height="123"/>
         <image name="line.3.horizontal.decrease" catalog="system" width="128" height="73"/>

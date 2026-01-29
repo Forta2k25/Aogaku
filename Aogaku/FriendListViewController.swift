@@ -45,6 +45,7 @@ private final class FriendOpenOrderStore {
     private let mapKey = "friend_open_order_map"          // [uid: seq]
     private let counterKey = "friend_open_order_counter"  // Int
     private let ud = UserDefaults.standard
+    private let bottomLine = UIView()
     private var map: [String: Int]
     private var counter: Int
     private init() {
@@ -160,10 +161,12 @@ private enum ImageFetcher {
 final class FriendListCell: UITableViewCell {
     static let reuseID = "FriendListCell"
 
+    private let cardView = UIView()
     private let avatarView = UIImageView()
     private let nameLabel = UILabel()
     private let idLabel = UILabel()
     private let pinBadge = UIImageView(image: UIImage(systemName: "pin.fill"))
+    private let chevron = UIImageView(image: UIImage(systemName: "chevron.right"))
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -172,18 +175,28 @@ final class FriendListCell: UITableViewCell {
     required init?(coder: NSCoder) { super.init(coder: coder); setupUI() }
 
     private func setupUI() {
-        selectionStyle = .none
-        accessoryType = .disclosureIndicator
+        selectionStyle = .default
         backgroundColor = .clear
+        contentView.backgroundColor = .clear
 
+        // Card
+        cardView.translatesAutoresizingMaskIntoConstraints = false
+        cardView.backgroundColor = .secondarySystemBackground
+        cardView.layer.cornerRadius = 16
+//        cardView.layer.borderWidth = 1
+//        cardView.layer.borderColor = UIColor.systemGray5.cgColor
+        cardView.clipsToBounds = true
+
+        // Avatar
         avatarView.translatesAutoresizingMaskIntoConstraints = false
         avatarView.contentMode = .scaleAspectFill
         avatarView.clipsToBounds = true
         avatarView.layer.cornerRadius = 28
         avatarView.backgroundColor = .secondarySystemFill
 
+        // Labels
         nameLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        idLabel.font   = .systemFont(ofSize: 13)
+        idLabel.font = .systemFont(ofSize: 13)
         idLabel.textColor = .secondaryLabel
 
         let vStack = UIStackView(arrangedSubviews: [nameLabel, idLabel])
@@ -191,42 +204,60 @@ final class FriendListCell: UITableViewCell {
         vStack.spacing = 2
         vStack.translatesAutoresizingMaskIntoConstraints = false
 
+        // Pin
         pinBadge.translatesAutoresizingMaskIntoConstraints = false
         pinBadge.tintColor = .systemYellow
         pinBadge.isHidden = true
 
-        contentView.addSubview(avatarView)
-        contentView.addSubview(vStack)
-        contentView.addSubview(pinBadge)
+        // Chevron
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.tintColor = .tertiaryLabel
+
+        contentView.addSubview(cardView)
+        cardView.addSubview(avatarView)
+        cardView.addSubview(vStack)
+        cardView.addSubview(pinBadge)
+        cardView.addSubview(chevron)
 
         NSLayoutConstraint.activate([
-            avatarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            avatarView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            cardView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            cardView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            cardView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
+            cardView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+
+            avatarView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 16),
+            avatarView.centerYAnchor.constraint(equalTo: cardView.centerYAnchor),
             avatarView.widthAnchor.constraint(equalToConstant: 56),
             avatarView.heightAnchor.constraint(equalToConstant: 56),
 
-            vStack.leadingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 12),
-            vStack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            vStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
+            chevron.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -14),
+            chevron.centerYAnchor.constraint(equalTo: cardView.centerYAnchor),
 
-            // ピンはアバター右下
+            vStack.leadingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 12),
+            vStack.centerYAnchor.constraint(equalTo: cardView.centerYAnchor),
+            vStack.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -10),
+
             pinBadge.widthAnchor.constraint(equalToConstant: 16),
             pinBadge.heightAnchor.constraint(equalToConstant: 16),
             pinBadge.trailingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 4),
             pinBadge.bottomAnchor.constraint(equalTo: avatarView.bottomAnchor, constant: 4)
         ])
+
+        let sel = UIView()
+        sel.backgroundColor = UIColor.secondarySystemFill
+        sel.layer.cornerRadius = 16
+        selectedBackgroundView = sel
     }
 
     func configure(name: String, id: String, image: UIImage?, pinned: Bool, extraText: String? = nil) {
         nameLabel.text = name
         var sub = "@\(id)"
-        if let t = extraText, !t.isEmpty { sub += "    \(t)" } // ← @id の右に表示
+        if let t = extraText, !t.isEmpty { sub += "    \(t)" }
         idLabel.text = sub
 
         pinBadge.isHidden = !pinned
         avatarView.image = image ?? UIImage(systemName: "person.crop.circle.fill")
     }
-
 }
 
 // ===== FriendList VC =====

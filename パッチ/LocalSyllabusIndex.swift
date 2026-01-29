@@ -402,14 +402,12 @@ final class LocalSyllabusIndex {
             return "\(day)\(ps.first!)-\(ps.last!)"
         }()
         let campusStr: String = {
-            let normalized = e.raw.campus
-                .map { canonicalizeCampusString($0) ?? $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            let uniqSorted = Array(Set(normalized)).sorted()
-            return uniqSorted.joined(separator: ",")
-        }()
-
-        // 追加：syllabus.swift の安定キー規則と同じにする
+    let normalized = e.raw.campus
+        .map { canonicalizeCampusString($0) ?? $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    let uniqSorted = Array(Set(normalized)).sorted()
+    return uniqSorted.joined(separator: ",")
+}()// 追加：syllabus.swift の安定キー規則と同じにする
         let stableKey = [
             normalizeForSearch(e.raw.class_name),
             normalizeForSearch(e.raw.teacher_name),

@@ -7,7 +7,7 @@ final class SettingsHostViewController: UIViewController {
 
     private var current: UIViewController?
     private var authListener: AuthStateDidChangeListenerHandle?
-    private let settingsTabIndex = 4   // 3つ目のタブ（0始まり）
+    private let settingsTabIndex = 3   // 3つ目のタブ（0始まり）
 
     override func viewDidLoad() {
         super.viewDidLoad()

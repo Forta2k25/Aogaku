@@ -125,6 +125,9 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "友だちを探す"
+        
+        setupCloseButtonIfNeeded()
+        
         tableView.register(UserListCell.self, forCellReuseIdentifier: UserListCell.reuseID)
         tableView.rowHeight = 68
 
@@ -149,6 +152,26 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             name: .adMobReady, object: nil)
         applyBackgroundStyle()
     }
+    
+    private func setupCloseButtonIfNeeded() {
+        // Nav付きmodalの「root」で開かれた時だけ「戻る」を出す
+        let isModalRoot = (presentingViewController != nil) &&
+                          (navigationController?.viewControllers.first === self)
+        guard isModalRoot else { return }
+
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "戻る",
+            style: .plain,
+            target: self,
+            action: #selector(closeSelf)
+        )
+    }
+
+    @objc private func closeSelf() {
+        dismiss(animated: true)
+    }
+
+    
     @objc private func onAdMobReady() {
         loadBannerIfNeeded()
     }

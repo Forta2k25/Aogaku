@@ -2,6 +2,7 @@ import UIKit
 import GoogleMobileAds
 import SafariServices
 import FirebaseAuth
+import FirebaseFirestore
 
 @inline(__always)
 private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
@@ -21,8 +22,10 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     private let loginButton = UIButton(type: .system)
     private let noteLabel = UILabel()
     private let stack = UIStackView()
-    private let kLocalProfileDraft = "LocalProfileDraftV1"
-    private let kShouldPromptInitialAvatar = "ShouldPromptInitialAvatarV1"
+    private enum Keys {
+        static let localProfileDraft = "LocalProfileDraftV1"
+        static let shouldPromptInitialAvatar = "ShouldPromptInitialAvatarV1"
+    }
 
     // MARK: - Pickers
     private let gradePicker = UIPickerView()
@@ -486,28 +489,69 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
                 }
             }
             do {
+                
                 if isSignup {
                     try await AuthManager.shared.signUp(
                         id: id, password: pw,
                         grade: grade, faculty: faculty, department: department
                     )
-                    UserDefaults.standard.set(true, forKey: kShouldPromptInitialAvatar)
-                    // ★ 追加：ローカル即時キャッシュ（表示用）
+
+                    UserDefaults.standard.set(true, forKey: Keys.shouldPromptInitialAvatar)
+
+                    // ローカル即時キャッシュ（プロフィール即反映用）
                     UserDefaults.standard.set([
                         "id": id,
                         "grade": grade,
                         "faculty": faculty,
                         "department": department
-                    ], forKey: kLocalProfileDraft)
-                    // ★ ここに追記（kLocalProfileDraft を保存した直後）
+                    ], forKey: Keys.localProfileDraft)
+
+                    // ✅ Firestore保存を「完了まで待つ」
+                    if let user = Auth.auth().currentUser {
+                        try await Firestore.firestore()
+                            .collection("users")
+                            .document(user.uid)
+                            .setData([
+                                "id": id,
+                                "name": id,                 // ← 未入力ならIDを仮名にする（表示が空になりにくい）
+                                "grade": grade,
+                                "faculty": faculty,
+                                "department": department
+                            ], merge: true)
+                    }
+
+                    // AuthのdisplayNameにも反映（任意）
                     if let user = Auth.auth().currentUser {
                         let req = user.createProfileChangeRequest()
                         req.displayName = id
-                        req.commitChanges(completion: nil) // 非同期OK（待たなくてよい）
+                        req.commitChanges(completion: nil)
                     }
+
                 } else {
                     try await AuthManager.shared.login(id: id, password: pw)
+
+                    // ✅ login後も profile を upsert（これで再ログイン後も確実に反映）
+                    if let user = Auth.auth().currentUser {
+                        try await Firestore.firestore()
+                            .collection("users")
+                            .document(user.uid)
+                            .setData([
+                                "id": id,
+                                "grade": grade,
+                                "faculty": faculty,
+                                "department": department
+                            ], merge: true)
+                    }
+
+                    // ローカルも更新（ProfileEditの即反映に効く）
+                    UserDefaults.standard.set([
+                        "id": id,
+                        "grade": grade,
+                        "faculty": faculty,
+                        "department": department
+                    ], forKey: Keys.localProfileDraft)
                 }
+
                 // 設定タブへ切り替え
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5秒
                 await MainActor.run {

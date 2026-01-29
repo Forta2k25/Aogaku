@@ -81,8 +81,6 @@ final class syllabus: UIViewController,
     private var loadingOverlay: SyllabusLoadingOverlay?
     private var listSessionId = UUID()
     private var evalMethodCacheByStableKey: [String: String] = [:]
-    private var evalMethodCacheByEvalKey: [String: String] = [:]
-
     
     // ===== データ =====
     struct SyllabusData {
@@ -464,12 +462,6 @@ final class syllabus: UIViewController,
         return s
     }
     
-    private func makeEvalKey(className: String, teacher: String) -> String {
-        let cn = normalizeForSearch(className)
-        let tn = normalizeForSearch(teacher)
-        return cn + "|" + tn
-    }
-
     // 異なるソース（Firestore自動ID / ローカル行番号ID）でも一致する安定キー
     private func makeStableKey(className: String,
                                teacher: String,
@@ -763,11 +755,9 @@ final class syllabus: UIViewController,
 
         let qBase = baseQuery()
         let hasTimeFilter = (filterDay?.isEmpty == false) || ((filterPeriods?.count ?? 0) == 1)
-
         var q: Query = hasTimeFilter
-            ? qBase.limit(to: pageSizeBase)                 // orderBy無し
+            ? qBase.limit(to: pageSizeBase)                 // ← orderBy を外す（インデックス不要に）
             : qBase.order(by: "class_name").limit(to: pageSizeBase)
-
         if let last = lastDoc { q = q.start(afterDocument: last) }
 
         q.getDocuments { [weak self] snap, err in
@@ -776,10 +766,7 @@ final class syllabus: UIViewController,
             if let err = err { print("Firestore error:", err); return }
             guard let snap = snap else { return }
 
-            if snap.documents.isEmpty {
-                self.reachedEnd = true
-                return
-            }
+            if snap.documents.isEmpty { self.reachedEnd = true; return }
 
             var chunk: [SyllabusData] = []
             for d in snap.documents {
@@ -792,31 +779,42 @@ final class syllabus: UIViewController,
             self.lastDoc = snap.documents.last
             if snap.documents.count < self.pageSizeBase { self.reachedEnd = true }
 
-            // ★ eval_method 温存して追加（ここだけでOK）
+            // ▼ ここを置換：温存したチャンクを追加
             let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)
             self.data.append(contentsOf: safeChunk)
 
+            // ▼ ここを追加：時間系フィルタで orderBy を外しているケースのブレを吸収
             if hasTimeFilter {
                 self.data.sort { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
             }
 
             self.filteredData = self.data
-            
             DispatchQueue.main.async {
-                print("STATE usingLocalList:", self.usingLocalList,
-                      "isReady:", LocalSyllabusIndex.shared.isReady,
-                      "dataCount:", self.data.count,
-                      "filtered:", self.filteredData.count)
-
                 self.syllabus_table.reloadData()
                 self.hideLoadingOverlay()
             }
 
+            self.lastDoc = snap.documents.last
+            if snap.documents.count < self.pageSizeBase { self.reachedEnd = true }
 
-            print("📦 page:", snap.documents.count, "added:", safeChunk.count, "total:", self.data.count,
+            self.data.append(contentsOf: chunk)
+            self.filteredData = self.data
+            DispatchQueue.main.async {
+                self.syllabus_table.reloadData()
+                self.hideLoadingOverlay()
+            }
+
+            // 必要なときだけ次ページ先読み（通信量を抑える）
+            if self.filteredData.isEmpty,
+               !self.reachedEnd,
+               (self.filterPlace?.isEmpty == false || self.filterTimeSlots?.isEmpty == false) {
+                self.loadNextPage()
+            }
+
+            print("📦 page:", snap.documents.count, "added:", chunk.count, "total:", self.data.count,
                   "last:", self.lastDoc?.documentID ?? "nil")
-        }
 
+        }
     }
 
     // ===== TableView =====
@@ -838,21 +836,17 @@ final class syllabus: UIViewController,
         cell.credit.text    = subject.credit.isEmpty ? "-" : "\(subject.credit)単位"
         cell.termLabel.text = subject.term.isEmpty   ? "-" : subject.term
 
-        let ekey = makeEvalKey(className: subject.class_name, teacher: subject.teacher_name)
-
+        // 右側：評価方法（stableKey → docID → "-" の順にフォールバック）
         let evalText = subject.eval_method.isEmpty
-            ? (evalMethodCacheByEvalKey[ekey]
-                ?? evalMethodCacheByStableKey[subject.stableKey]
+            ? (evalMethodCacheByStableKey[subject.stableKey]
                 ?? evalMethodCache[subject.docID]
                 ?? "-")
             : subject.eval_method
-
         cell.eval_method.text = evalText
         
         // === 追加：表示できた評価方法をキャッシュ＆モデルへ書き戻す ===
         if evalText != "-" {
             // 安定キー/DocID 両方でキャッシュ
-            evalMethodCacheByEvalKey[ekey] = evalText
             evalMethodCacheByStableKey[subject.stableKey] = evalText
             evalMethodCache[subject.docID] = evalText
 
@@ -1034,20 +1028,20 @@ final class syllabus: UIViewController,
             }
         }
         let campusStr: String = {
-            // String/配列どっちでも「キャンパス名を正規化 → 重複除去 → ソート → join」
-            var parts: [String] = []
-            if let s = x["campus"] as? String {
-                parts = s.split(separator: ",").map { String($0) }
-            } else if let arr = x["campus"] as? [String] {
-                parts = arr
-            }
-            let normalized = parts
-                .map { canonicalizeCampusString($0) ?? $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+    // String/配列どっちでも「キャンパス名を正規化 → 重複除去 → ソート → join」
+    var parts: [String] = []
+    if let s = x["campus"] as? String {
+        parts = s.split(separator: ",").map { String($0) }
+    } else if let arr = x["campus"] as? [String] {
+        parts = arr
+    }
+    let normalized = parts
+        .map { canonicalizeCampusString($0) ?? $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
 
-            let uniqSorted = Array(Set(normalized)).sorted()
-            return uniqSorted.joined(separator: ",")
-        }()
+    let uniqSorted = Array(Set(normalized)).sorted()
+    return uniqSorted.joined(separator: ",")
+}()
 
         let termRaw = (x["term"] as? String) ?? ""
         let term = normalizeTerm(termRaw)
@@ -1076,14 +1070,11 @@ final class syllabus: UIViewController,
             eval_method: eval
         )
 
+        // ★ キャッシュ：docID と stableKey の両方で保存
         if !eval.isEmpty {
             self.evalMethodCache[docID] = eval
             self.evalMethodCacheByStableKey[key] = eval
-
-            let ekey = makeEvalKey(className: model.class_name, teacher: model.teacher_name)
-            self.evalMethodCacheByEvalKey[ekey] = eval
         }
-
         return model
     }
 
@@ -1229,57 +1220,46 @@ final class syllabus: UIViewController,
         }
     }
     
+    // 既存表示/キャッシュの eval_method を温存（docIDが変わっても保持）
     private func preserveEvalMethod(from old: [SyllabusData], into new: [SyllabusData]) -> [SyllabusData] {
-            // old → keep（非空を優先）
-            var keepById  = Dictionary(old.map { ($0.docID,     $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
-            var keepByKey = Dictionary(old.map { ($0.stableKey, $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
+        // old → keep（非空を優先）
+        var keepById  = Dictionary(old.map { ($0.docID,     $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
+        var keepByKey = Dictionary(old.map { ($0.stableKey, $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
 
-            // ★ stableKey がズレても拾えるように「授業名+教員名」のキーを用意
-            func evalKey(_ s: SyllabusData) -> String {
-                return normalizeForSearch(s.class_name) + "|" + normalizeForSearch(s.teacher_name)
-            }
-            var keepByEval = Dictionary(old.map { (evalKey($0), $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
-
-            // キャッシュも併用
-            for (id, v) in evalMethodCache where !v.isEmpty {
-                if let cur = keepById[id], cur.isEmpty { keepById[id] = v }
-                else if keepById[id] == nil { keepById[id] = v }
-            }
-            for (k, v) in evalMethodCacheByStableKey where !v.isEmpty {
-                if let cur = keepByKey[k], cur.isEmpty { keepByKey[k] = v }
-                else if keepByKey[k] == nil { keepByKey[k] = v }
-            }
-
-            // new 側が空のときだけ keep を適用（evalKey → stableKey → docID の順で参照）
-            return new.map { n in
-                if !n.eval_method.isEmpty { return n }
-
-                let ekey = normalizeForSearch(n.class_name) + "|" + normalizeForSearch(n.teacher_name)
-                let val = keepByEval[ekey]
-                    ?? keepByKey[n.stableKey]
-                    ?? keepById[n.docID]
-                    ?? evalMethodCacheByStableKey[n.stableKey]
-                    ?? evalMethodCache[n.docID]
-                    ?? ""
-
-                if val.isEmpty { return n }
-
-                return SyllabusData(
-                    docID: n.docID,
-                    stableKey: n.stableKey,
-                    class_name: n.class_name,
-                    teacher_name: n.teacher_name,
-                    time: n.time,
-                    campus: n.campus,
-                    grade: n.grade,
-                    category: n.category,
-                    credit: n.credit,
-                    term: n.term,
-                    eval_method: val
-                )
-            }
+        // キャッシュも併用
+        for (id, v) in evalMethodCache where !v.isEmpty {
+            if let cur = keepById[id], cur.isEmpty { keepById[id] = v }
+            else if keepById[id] == nil { keepById[id] = v }
+        }
+        for (k, v) in evalMethodCacheByStableKey where !v.isEmpty {
+            if let cur = keepByKey[k], cur.isEmpty { keepByKey[k] = v }
+            else if keepByKey[k] == nil { keepByKey[k] = v }
         }
 
+        // new 側が空のときだけ keep を適用（stableKey を最優先）
+        return new.map { n in
+            if !n.eval_method.isEmpty { return n }
+            let val = keepByKey[n.stableKey]
+                ?? keepById[n.docID]
+                ?? evalMethodCacheByStableKey[n.stableKey]
+                ?? evalMethodCache[n.docID]
+                ?? ""
+            if val.isEmpty { return n }
+            return SyllabusData(
+                docID: n.docID,
+                stableKey: n.stableKey,
+                class_name: n.class_name,
+                teacher_name: n.teacher_name,
+                time: n.time,
+                campus: n.campus,
+                grade: n.grade,
+                category: n.category,
+                credit: n.credit,
+                term: n.term,
+                eval_method: val
+            )
+        }
+    }
 
 
     // 足りない時だけのフォールバック（prefix）…“追記”ではなく“置換”

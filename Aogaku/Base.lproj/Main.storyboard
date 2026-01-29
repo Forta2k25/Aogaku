@@ -1103,9 +1103,8 @@
                         <segue destination="grd-V5-3ap" kind="relationship" relationship="viewControllers" id="3nb-MB-67I"/>
                         <segue destination="C4X-cj-t5t" kind="relationship" relationship="viewControllers" id="lW0-0l-yaJ"/>
                         <segue destination="L6K-4w-hUC" kind="relationship" relationship="viewControllers" id="Oxi-yP-R2H"/>
-                        <segue destination="47C-D0-pTL" kind="relationship" relationship="viewControllers" id="tdf-8Y-cIO"/>
-                        <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="dn2-Cy-w1S"/>
-                        <segue destination="gfZ-Fw-sJx" kind="relationship" relationship="viewControllers" id="fVK-Wh-cWB"/>
+                        <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="vVN-td-rlW"/>
+                        <segue destination="gfZ-Fw-sJx" kind="relationship" relationship="viewControllers" id="FpO-6s-0Lf"/>
                     </connections>
                 </tabBarController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="A0p-Uc-iZb" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
@@ -1190,7 +1189,7 @@
             </objects>
             <point key="canvasLocation" x="669" y="2315"/>
         </scene>
-        <!--設定-->
+        <!--友だち-->
         <scene sceneID="POn-d9-7pU">
             <objects>
                 <viewController id="if6-R1-6gd" customClass="SettingsHostViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
@@ -1200,7 +1199,7 @@
                         <viewLayoutGuide key="safeArea" id="g9F-Lp-yjn"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                     </view>
-                    <tabBarItem key="tabBarItem" title="設定" image="gearshape" catalog="system" id="rqa-jE-dmz"/>
+                    <tabBarItem key="tabBarItem" title="友だち" image="person.2" catalog="system" id="rqa-jE-dmz"/>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="x7T-0Q-K1J" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>

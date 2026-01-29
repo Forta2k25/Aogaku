@@ -68,7 +68,28 @@ final class FriendTimetableViewController: UIViewController {
 
         spinner.startAnimating()
         loadAndBuild(for: year, semester: semester)
+        
+        setupBackButtonIfNeeded()
+
     }
+    
+    private func setupBackButtonIfNeeded() {
+        let isModalRoot = (presentingViewController != nil) &&
+                          (navigationController?.viewControllers.first === self)
+        guard isModalRoot else { return }
+
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "戻る",
+            style: .plain,
+            target: self,
+            action: #selector(closeSelf)
+        )
+    }
+
+    @objc private func closeSelf() {
+        dismiss(animated: true)
+    }
+
 
     // MARK: - UI
     private func setupUI() {
@@ -438,6 +459,7 @@ final class FriendTimetableViewController: UIViewController {
             stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
             stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8)
         ])
+        
         return container
     }
 

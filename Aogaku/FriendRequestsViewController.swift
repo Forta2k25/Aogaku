@@ -37,6 +37,7 @@ final class FriendRequestsViewController: UITableViewController, BannerViewDeleg
     
     override func viewDidLoad() {
         super.viewDidLoad()
+        setupBackButtonIfNeeded()
         title = "友だち申請"
         tableView.register(RequestCell.self, forCellReuseIdentifier: RequestCell.reuseID)
         tableView.rowHeight = 92
@@ -69,6 +70,23 @@ final class FriendRequestsViewController: UITableViewController, BannerViewDeleg
         if #available(iOS 16.0, *) {
             UNUserNotificationCenter.current().setBadgeCount(0)
         }
+    }
+    
+    private func setupBackButtonIfNeeded() {
+        let isModalRoot = (presentingViewController != nil) &&
+                          (navigationController?.viewControllers.first === self)
+        guard isModalRoot else { return }
+
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: "戻る",
+            style: .plain,
+            target: self,
+            action: #selector(closeSelf)
+        )
+    }
+
+    @objc private func closeSelf() {
+        dismiss(animated: true)
     }
 
     private func setupAdBanner() {

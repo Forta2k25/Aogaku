@@ -1,24 +1,40 @@
-
-
-//
-//  CirclesViewController.swift
-//  AogakuHack
-//
-//  UIKit / Storyboard minimal (scene only) compatible:
-//   - Put a plain UIViewController in storyboard and set Custom Class = CirclesViewController
-//   - Do NOT place UI components on storyboard
-//
-//  This controller builds UI entirely in code:
-//   - UISegmentedControl (青山 / 相模原)
-//   - 2-column UICollectionView grid (scrollable)
-//   - Firestore listener for collection "circle"
-//   - Falls back to mock data if Firestore is empty or not ready
-//
-//
-
-
 import UIKit
 import FirebaseFirestore
+
+// ✅ フィルター状態
+struct CircleFilters: Equatable {
+    var categories: Set<String> = []
+    var targets: Set<String> = []
+    var weekdays: Set<String> = []
+    var canDouble: Bool? = nil          // nil=指定なし
+    var hasSelection: Bool? = nil       // nil=指定なし
+    var moods: Set<String> = []         // "ゆるめ","ふつう","ガチめ"（CircleItem.intensity）
+    var feeMin: Int? = nil
+    var feeMax: Int? = nil
+
+    var isDefault: Bool {
+        categories.isEmpty &&
+        targets.isEmpty &&
+        weekdays.isEmpty &&
+        canDouble == nil &&
+        hasSelection == nil &&
+        moods.isEmpty &&
+        feeMin == nil &&
+        feeMax == nil
+    }
+
+    var activeCount: Int {
+        var c = 0
+        if !categories.isEmpty { c += 1 }
+        if !targets.isEmpty { c += 1 }
+        if !weekdays.isEmpty { c += 1 }
+        if canDouble != nil { c += 1 }
+        if hasSelection != nil { c += 1 }
+        if !moods.isEmpty { c += 1 }
+        if feeMin != nil || feeMax != nil { c += 1 }
+        return c
+    }
+}
 
 final class CirclesViewController: UIViewController,
                                   UICollectionViewDataSource,
@@ -70,45 +86,96 @@ final class CirclesViewController: UIViewController,
     private var allItems: [CircleItem] = []
     private var visibleItems: [CircleItem] = []
     private var queryText: String = ""
+    
+    // ✅ 右上フィルターボタン（自前バッジ）
+    private let filterButton = UIButton(type: .system)
+    private let filterBadgeLabel: UILabel = {
+        let lb = UILabel()
+        lb.translatesAutoresizingMaskIntoConstraints = false
+        lb.font = .systemFont(ofSize: 11, weight: .bold)
+        lb.textColor = .white
+        lb.backgroundColor = .systemRed
+        lb.textAlignment = .center
+        lb.layer.cornerRadius = 9
+        lb.clipsToBounds = true
+        lb.isHidden = true
+        return lb
+    }()
+
+
+    // ✅ filters
+    private var filters = CircleFilters()
 
     // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemGroupedBackground
 
-        setupNavigationHeader()   // ← 自動の「＜」の右にタイトルを置く
+        setupNavigationHeader()
+        setupFilterButton()
         setupUI()
 
         campusSegmentedControl.addTarget(self, action: #selector(campusChanged), for: .valueChanged)
         searchBar.delegate = self
 
-        // 初期表示：まずmockを出す → Firestoreが取れたら上書き
         selectedCampus = "青山"
         setItems(CircleItem.mock(for: selectedCampus))
         startListening()
     }
 
-    deinit {
-        listener?.remove()
-    }
+    deinit { listener?.remove() }
 
-    // MARK: - Navigation (title next to back button)
+    // MARK: - Navigation
     private func setupNavigationHeader() {
         navigationItem.largeTitleDisplayMode = .never
-
-        // 左の customView をやめる（これが“ボタンっぽさ”の原因）
         navigationItem.leftBarButtonItem = nil
         navigationItem.leftItemsSupplementBackButton = false
 
-        // 真ん中に普通のタイトルとして表示
-        navigationItem.title = "サークル・部活"
-
-        // もしフォントを太字/サイズ指定したいなら titleView を使う
         let titleLabel = UILabel()
         titleLabel.text = "サークル・部活"
         titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
         titleLabel.textColor = .label
         navigationItem.titleView = titleLabel
+    }
+
+    private func setupFilterButton() {
+        filterButton.translatesAutoresizingMaskIntoConstraints = false
+        filterButton.setImage(UIImage(systemName: "line.3.horizontal.decrease.circle"), for: .normal)
+        filterButton.tintColor = .label
+        filterButton.addTarget(self, action: #selector(didTapFilter), for: .touchUpInside)
+
+        let container = UIView(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
+        container.addSubview(filterButton)
+        container.addSubview(filterBadgeLabel)
+
+        filterButton.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            filterButton.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            filterButton.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            filterButton.widthAnchor.constraint(equalToConstant: 28),
+            filterButton.heightAnchor.constraint(equalToConstant: 28),
+
+            filterBadgeLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: -2),
+            filterBadgeLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: 2),
+            filterBadgeLabel.heightAnchor.constraint(equalToConstant: 18),
+            filterBadgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
+        ])
+
+        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: container)
+        refreshFilterButton()
+    }
+
+
+    private func refreshFilterButton() {
+        let count = filters.activeCount
+        if count <= 0 {
+            filterBadgeLabel.isHidden = true
+            filterBadgeLabel.text = nil
+        } else {
+            filterBadgeLabel.isHidden = false
+            filterBadgeLabel.text = "\(min(count, 99))"
+        }
     }
 
 
@@ -119,7 +186,6 @@ final class CirclesViewController: UIViewController,
         view.addSubview(collectionView)
 
         NSLayoutConstraint.activate([
-            // ここを詰めると「全体を上に」持っていける
             campusSegmentedControl.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             campusSegmentedControl.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             campusSegmentedControl.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
@@ -139,16 +205,37 @@ final class CirclesViewController: UIViewController,
     @objc private func campusChanged() {
         selectedCampus = campusSegmentedControl.selectedSegmentIndex == 0 ? "青山" : "相模原"
 
-        // キャンパス切り替えたら検索もリセット（好みで外してOK）
         queryText = ""
         searchBar.text = nil
         searchBar.resignFirstResponder()
 
-        // まずmockで即表示
+        // ✅ キャンパス切替ではフィルター維持（消したければここで filters = .init()）
         setItems(CircleItem.mock(for: selectedCampus))
-
-        // Firestoreを張り直し
         startListening()
+    }
+
+    @objc private func didTapFilter() {
+        let vc = CircleFilterViewController(current: filters)
+        vc.onApply = { [weak self] newFilters in
+            guard let self else { return }
+            self.filters = newFilters
+            self.refreshFilterButton()
+            self.applyFilter()
+        }
+        vc.onReset = { [weak self] in
+            guard let self else { return }
+            self.filters = CircleFilters()
+            self.refreshFilterButton()
+            self.applyFilter()
+        }
+
+        let nav = UINavigationController(rootViewController: vc)
+        nav.modalPresentationStyle = .pageSheet
+        if let sheet = nav.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(nav, animated: true)
     }
 
     // MARK: - Firestore Listener
@@ -185,14 +272,69 @@ final class CirclesViewController: UIViewController,
 
     private func applyFilter() {
         let q = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if q.isEmpty {
-            visibleItems = allItems
-        } else {
-            visibleItems = allItems.filter {
-                $0.name.localizedCaseInsensitiveContains(q)
-                || $0.intensity.localizedCaseInsensitiveContains(q)
+
+        visibleItems = allItems.filter { item in
+            // 1) 検索
+            let matchesSearch: Bool = {
+                if q.isEmpty { return true }
+                return item.name.localizedCaseInsensitiveContains(q)
+                || item.intensity.localizedCaseInsensitiveContains(q)
+                || (item.category?.localizedCaseInsensitiveContains(q) ?? false)
+            }()
+
+            guard matchesSearch else { return false }
+
+            // 2) カテゴリ
+            if !filters.categories.isEmpty {
+                guard let cat = item.category, filters.categories.contains(cat) else { return false }
             }
+
+            // 3) 対象（複数持ち想定：どれか一致でOK）
+            if !filters.targets.isEmpty {
+                let s = Set(item.targets)
+                if s.isDisjoint(with: filters.targets) { return false }
+            }
+
+            // 4) 曜日（どれか一致でOK）
+            if !filters.weekdays.isEmpty {
+                let s = Set(item.weekdays)
+                if s.isDisjoint(with: filters.weekdays) { return false }
+            }
+
+            // 5) 兼サー
+            if let v = filters.canDouble {
+                if item.canDouble != v { return false }
+            }
+
+            // 6) 選考
+            if let v = filters.hasSelection {
+                if item.hasSelection != v { return false }
+            }
+
+            // 7) 雰囲気（= intensity）
+            if !filters.moods.isEmpty {
+                if !filters.moods.contains(item.intensity) { return false }
+            }
+
+            // 8) 費用（年額目安）
+            if let minV = filters.feeMin {
+                if let fee = item.annualFeeYen {
+                    if fee < minV { return false }
+                } else {
+                    return false
+                }
+            }
+            if let maxV = filters.feeMax {
+                if let fee = item.annualFeeYen {
+                    if fee > maxV { return false }
+                } else {
+                    return false
+                }
+            }
+
+            return true
         }
+
         collectionView.reloadData()
     }
 
@@ -231,14 +373,11 @@ final class CirclesViewController: UIViewController,
     func collectionView(_ collectionView: UICollectionView,
                         layout collectionViewLayout: UICollectionViewLayout,
                         sizeForItemAt indexPath: IndexPath) -> CGSize {
-        // 2列想定（interitemSpacing = 16）
         let interItemSpacing: CGFloat = 16
         let width = (collectionView.bounds.width - interItemSpacing) / 2
-
-        // 縦を縮めて「元の感じ」に寄せる（Cell内部の image=120 に対して余白が出にくい）
         return CGSize(width: width, height: 180)
     }
-    // 末尾に追加（クラス内）
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let item = visibleItems[indexPath.item]
         let vc = CircleDetailViewController(circleId: item.id)
@@ -246,9 +385,7 @@ final class CirclesViewController: UIViewController,
         if let nav = navigationController {
             nav.pushViewController(vc, animated: true)
         } else {
-            // navが無い場合でも開けるように保険
             present(UINavigationController(rootViewController: vc), animated: true)
         }
     }
-
 }

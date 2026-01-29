@@ -162,7 +162,6 @@ final class InfoCardView: UIView {
     }
 }
 
-
 final class TagLabel: UILabel {
     init(text: String) {
         super.init(frame: .zero)
@@ -188,7 +187,7 @@ final class TagLabel: UILabel {
 
 // MARK: - VC
 
-final class CircleDetailViewController: UIViewController {
+final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
     private let circleId: String
     private let db = Firestore.firestore()
@@ -201,14 +200,28 @@ final class CircleDetailViewController: UIViewController {
     private let scrollView = UIScrollView()
     private let contentView = UIView()
 
-    private let headerImageView: UIImageView = {
-        let iv = UIImageView()
-        iv.translatesAutoresizingMaskIntoConstraints = false
-        iv.contentMode = .scaleAspectFill
-        iv.clipsToBounds = true
-        iv.backgroundColor = .tertiarySystemFill
-        return iv
+    // ✅ 複数枚表示用ヘッダー（横スワイプ）
+    private let headerScrollView: UIScrollView = {
+        let sv = UIScrollView()
+        sv.translatesAutoresizingMaskIntoConstraints = false
+        sv.isPagingEnabled = true
+        sv.showsHorizontalScrollIndicator = false
+        sv.alwaysBounceHorizontal = true
+        sv.backgroundColor = .tertiarySystemFill
+        return sv
     }()
+
+    private let headerImagesStack: UIStackView = {
+        let st = UIStackView()
+        st.translatesAutoresizingMaskIntoConstraints = false
+        st.axis = .horizontal
+        st.spacing = 0
+        st.alignment = .fill
+        st.distribution = .fill
+        return st
+    }()
+
+    private var headerImageViews: [UIImageView] = []
 
     private let pageControl: UIPageControl = {
         let pc = UIPageControl()
@@ -266,6 +279,17 @@ final class CircleDetailViewController: UIViewController {
 
     private let featureTitle = UILabel()
     private let featureBody = UILabel()
+    
+
+    // 参加前に知りたいこと（beforeJoin）
+    private let beforeJoinTitle = UILabel()
+    private let beforeJoinGrid1 = UIStackView()
+    private let beforeJoinGrid2 = UIStackView()
+    private var beforeJoinGridStack: UIStackView!
+    private var beforeCardTarget: InfoCardView!
+    private var beforeCardNonFreshman: InfoCardView!
+    private var beforeCardSelection: InfoCardView!
+    private var beforeCardPartTime: InfoCardView!
 
     private var cardPlace: InfoCardView!
     private var cardSchedule: InfoCardView!
@@ -339,16 +363,27 @@ final class CircleDetailViewController: UIViewController {
             contentView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor)
         ])
 
-        contentView.addSubview(headerImageView)
+        // ✅ header
+        headerScrollView.delegate = self
+        contentView.addSubview(headerScrollView)
+        headerScrollView.addSubview(headerImagesStack)
         contentView.addSubview(pageControl)
 
-        NSLayoutConstraint.activate([
-            headerImageView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            headerImageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            headerImageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            headerImageView.heightAnchor.constraint(equalToConstant: 280),
+        pageControl.addTarget(self, action: #selector(pageControlChanged(_:)), for: .valueChanged)
 
-            pageControl.bottomAnchor.constraint(equalTo: headerImageView.bottomAnchor, constant: -10),
+        NSLayoutConstraint.activate([
+            headerScrollView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            headerScrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            headerScrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            headerScrollView.heightAnchor.constraint(equalToConstant: 280),
+
+            headerImagesStack.topAnchor.constraint(equalTo: headerScrollView.contentLayoutGuide.topAnchor),
+            headerImagesStack.leadingAnchor.constraint(equalTo: headerScrollView.contentLayoutGuide.leadingAnchor),
+            headerImagesStack.trailingAnchor.constraint(equalTo: headerScrollView.contentLayoutGuide.trailingAnchor),
+            headerImagesStack.bottomAnchor.constraint(equalTo: headerScrollView.contentLayoutGuide.bottomAnchor),
+            headerImagesStack.heightAnchor.constraint(equalTo: headerScrollView.frameLayoutGuide.heightAnchor),
+
+            pageControl.bottomAnchor.constraint(equalTo: headerScrollView.bottomAnchor, constant: -10),
             pageControl.centerXAnchor.constraint(equalTo: contentView.centerXAnchor)
         ])
 
@@ -361,7 +396,7 @@ final class CircleDetailViewController: UIViewController {
         contentView.addSubview(titleBlock)
 
         NSLayoutConstraint.activate([
-            titleBlock.topAnchor.constraint(equalTo: headerImageView.bottomAnchor, constant: 14),
+            titleBlock.topAnchor.constraint(equalTo: headerScrollView.bottomAnchor, constant: 14),
             titleBlock.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
             titleBlock.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
         ])
@@ -380,7 +415,6 @@ final class CircleDetailViewController: UIViewController {
                                 action: #selector(tapX))
 
         websiteButton = makeSNSButton(systemName: "link", action: #selector(tapWebsite))
-
 
         snsStack.addArrangedSubview(instagramButton)
         snsStack.addArrangedSubview(xButton)
@@ -447,7 +481,44 @@ final class CircleDetailViewController: UIViewController {
         featureBody.textColor = .label
         featureBody.numberOfLines = 0
 
-        let sections = UIStackView(arrangedSubviews: [messageTitle, messageBody, featureTitle, featureBody])
+        // BeforeJoin
+        beforeJoinTitle.translatesAutoresizingMaskIntoConstraints = false
+        beforeJoinTitle.text = "参加前に知りたいこと"
+        beforeJoinTitle.font = .systemFont(ofSize: 18, weight: .bold)
+
+        beforeCardTarget = InfoCardView(title: "対象", value: nil)
+        beforeCardNonFreshman = InfoCardView(title: "新入生以外", value: nil)
+        beforeCardSelection = InfoCardView(title: "選考", value: nil)
+        beforeCardPartTime = InfoCardView(title: "兼サー", value: nil)
+
+        beforeJoinGrid1.axis = .horizontal
+        beforeJoinGrid1.spacing = 12
+        beforeJoinGrid1.distribution = .fillEqually
+        beforeJoinGrid1.translatesAutoresizingMaskIntoConstraints = false
+        beforeJoinGrid1.addArrangedSubview(beforeCardTarget)
+        beforeJoinGrid1.addArrangedSubview(beforeCardNonFreshman)
+
+        beforeJoinGrid2.axis = .horizontal
+        beforeJoinGrid2.spacing = 12
+        beforeJoinGrid2.distribution = .fillEqually
+        beforeJoinGrid2.translatesAutoresizingMaskIntoConstraints = false
+        beforeJoinGrid2.addArrangedSubview(beforeCardSelection)
+        beforeJoinGrid2.addArrangedSubview(beforeCardPartTime)
+
+        beforeJoinGridStack = UIStackView(arrangedSubviews: [beforeJoinGrid1, beforeJoinGrid2])
+        beforeJoinGridStack.translatesAutoresizingMaskIntoConstraints = false
+        beforeJoinGridStack.axis = .vertical
+        beforeJoinGridStack.spacing = 12
+
+        // 初期は隠して、データ反映時に必要なら表示
+        beforeJoinTitle.isHidden = true
+        beforeJoinGridStack.isHidden = true
+
+        let sections = UIStackView(arrangedSubviews: [
+            messageTitle, messageBody,
+            featureTitle, featureBody,
+            beforeJoinTitle, beforeJoinGridStack
+        ])
         sections.translatesAutoresizingMaskIntoConstraints = false
         sections.axis = .vertical
         sections.spacing = 10
@@ -460,6 +531,70 @@ final class CircleDetailViewController: UIViewController {
             sections.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
             sections.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -24)
         ])
+    }
+
+    // MARK: - Header paging
+
+    private func makeHeaderImageView() -> UIImageView {
+        let iv = UIImageView()
+        iv.translatesAutoresizingMaskIntoConstraints = false
+        iv.contentMode = .scaleAspectFill
+        iv.clipsToBounds = true
+        iv.backgroundColor = .tertiarySystemFill
+        return iv
+    }
+
+    private func reloadHeaderImages(with urls: [String]) {
+        // 既存をクリア
+        headerImagesStack.arrangedSubviews.forEach { v in
+            headerImagesStack.removeArrangedSubview(v)
+            v.removeFromSuperview()
+        }
+        headerImageViews.removeAll()
+
+        let showURLs = urls.isEmpty ? [""] : urls
+
+        for url in showURLs {
+            let iv = makeHeaderImageView()
+            headerImagesStack.addArrangedSubview(iv)
+
+            // ✅ 1ページ = 画面幅
+            NSLayoutConstraint.activate([
+                iv.widthAnchor.constraint(equalTo: headerScrollView.frameLayoutGuide.widthAnchor),
+                iv.heightAnchor.constraint(equalTo: headerScrollView.frameLayoutGuide.heightAnchor)
+            ])
+
+            headerImageViews.append(iv)
+
+            if !url.isEmpty {
+                loadImage(from: url, into: iv)
+            } else {
+                iv.image = nil
+            }
+        }
+    }
+
+    @objc private func pageControlChanged(_ sender: UIPageControl) {
+        let page = sender.currentPage
+        let x = CGFloat(page) * headerScrollView.bounds.width
+        headerScrollView.setContentOffset(CGPoint(x: x, y: 0), animated: true)
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        guard scrollView === headerScrollView else { return }
+        updatePageControl()
+    }
+
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        guard scrollView === headerScrollView else { return }
+        updatePageControl()
+    }
+
+    private func updatePageControl() {
+        let w = headerScrollView.bounds.width
+        guard w > 0 else { return }
+        let page = Int(round(headerScrollView.contentOffset.x / w))
+        pageControl.currentPage = max(0, min(page, max(pageControl.numberOfPages - 1, 0)))
     }
 
     // MARK: - SNS Button Factory
@@ -520,8 +655,6 @@ final class CircleDetailViewController: UIViewController {
         return btn
     }
 
-
-    
     // MARK: - Apply data
 
     private func applyDetail(_ d: CircleDetail) {
@@ -572,17 +705,34 @@ final class CircleDetailViewController: UIViewController {
         } else {
             featureBody.text = d.features.map { "・\($0)" }.joined(separator: "\n")
         }
+        
+        // After（追加するブロック）
+        beforeCardTarget.update(value: d.beforeJoinTarget)
+        beforeCardNonFreshman.update(value: d.beforeJoinNonFreshman)
+        beforeCardSelection.update(value: d.beforeJoinSelection)
+        beforeCardPartTime.update(value: d.beforeJoinPartTime)
 
-        // header image（複数枚の先頭を表示、なければ fallback）
+        let beforeJoinValues: [String?] = [
+            d.beforeJoinTarget,
+            d.beforeJoinNonFreshman,
+            d.beforeJoinSelection,
+            d.beforeJoinPartTime
+        ]
+        let hasBeforeJoin = beforeJoinValues.contains { v in
+            guard let s = v?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+            return !s.isEmpty && s != "—"
+        }
+        beforeJoinTitle.isHidden = !hasBeforeJoin
+        beforeJoinGridStack.isHidden = !hasBeforeJoin
+
+
+        // ✅ header images（複数枚すべて表示。なければ fallback）
         let urls = !d.imageURLs.isEmpty ? d.imageURLs : (d.fallbackImageURL != nil ? [d.fallbackImageURL!] : [])
         pageControl.numberOfPages = max(urls.count, 1)
         pageControl.currentPage = 0
 
-        if let first = urls.first {
-            loadImage(from: first, into: headerImageView)
-        } else {
-            headerImageView.image = nil
-        }
+        reloadHeaderImages(with: urls)
+        headerScrollView.setContentOffset(.zero, animated: false)
     }
 
     // MARK: - Open SNS

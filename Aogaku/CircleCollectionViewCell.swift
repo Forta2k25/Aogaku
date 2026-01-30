@@ -10,12 +10,17 @@ import UIKit
 final class CircleCollectionViewCell: UICollectionViewCell {
 
     static let reuseId = "CircleCollectionViewCell"
-    static let reuseIdentifier: String = reuseId   // ← 追加
+    static let reuseIdentifier: String = reuseId
 
     private let cardView = UIView()
     private let imageView = UIImageView()
     private let intensityLabel = PaddingLabel(padding: UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10))
     private let titleLabel = UILabel()
+
+    // ✅ ブックマーク
+    private let bookmarkButton = UIButton(type: .system)
+    var onTapBookmark: ((String) -> Void)?
+    private var currentId: String?
 
     private var imageTask: URLSessionDataTask?
 
@@ -36,12 +41,22 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         imageView.image = nil
         intensityLabel.text = nil
         titleLabel.text = nil
+        currentId = nil
+        onTapBookmark = nil
+
+        // ✅ 再利用時に見た目が残らないように初期化
+        updateBookmarkUI(isBookmarked: false)
     }
 
     func configure(with item: CircleItem) {
+        currentId = item.id
+
         titleLabel.text = item.name
         intensityLabel.text = item.intensity
         intensityLabel.backgroundColor = intensityColor(item.intensity)
+
+        // ✅ 表示は「今のIDの状態」を毎回ここで決める
+        updateBookmarkUI(isBookmarked: BookmarkStore.shared.isBookmarked(id: item.id))
 
         if let s = item.imageURL, let url = URL(string: s) {
             loadImage(url: url)
@@ -86,9 +101,19 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         titleLabel.textColor = .label
         titleLabel.numberOfLines = 2
 
+        // ✅ bookmark button
+        bookmarkButton.translatesAutoresizingMaskIntoConstraints = false
+        bookmarkButton.layer.cornerRadius = 10
+        bookmarkButton.clipsToBounds = true
+        bookmarkButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+        bookmarkButton.adjustsImageWhenHighlighted = false
+        bookmarkButton.isExclusiveTouch = true
+        bookmarkButton.addTarget(self, action: #selector(didTapBookmark), for: .touchUpInside)
+
         cardView.addSubview(imageView)
         cardView.addSubview(intensityLabel)
         cardView.addSubview(titleLabel)
+        cardView.addSubview(bookmarkButton)
 
         imageView.translatesAutoresizingMaskIntoConstraints = false
         intensityLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -108,11 +133,37 @@ final class CircleCollectionViewCell: UICollectionViewCell {
             intensityLabel.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),
             intensityLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 8),
 
+            // ✅ 右上ブクマ
+            bookmarkButton.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),
+            bookmarkButton.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -8),
+
             titleLabel.topAnchor.constraint(equalTo: imageView.bottomAnchor, constant: 10),
             titleLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
             titleLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -12),
             titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: cardView.bottomAnchor, constant: -10)
         ])
+    }
+
+    @objc private func didTapBookmark() {
+        guard let id = currentId else { return }
+        // ✅ 見た目更新は VC 側で indexPath 指定でやる（再利用事故を防ぐ）
+        onTapBookmark?(id)
+    }
+
+    private func updateBookmarkUI(isBookmarked: Bool) {
+        // ✅ OFF: 枠だけ / ON: 塗りつぶし（中身が緑）
+        let symbol = isBookmarked ? "bookmark.fill" : "bookmark"
+        bookmarkButton.setImage(UIImage(systemName: symbol), for: .normal)
+
+        // ✅ 外側は常に白（＝背景は白固定）
+        bookmarkButton.backgroundColor = .systemBackground
+
+        // ✅ 縁は常に緑
+        bookmarkButton.layer.borderWidth = 1
+        bookmarkButton.layer.borderColor = UIColor.systemGreen.withAlphaComponent(0.45).cgColor
+
+        // ✅ アイコンは緑（ONでもOFFでも緑。違いは fill かどうかだけ）
+        bookmarkButton.tintColor = .systemGreen
     }
 
     private func intensityColor(_ s: String) -> UIColor {
@@ -192,4 +243,3 @@ final class SimpleImageCache {
         cache.setObject(image, forKey: url as NSURL)
     }
 }
-

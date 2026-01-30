@@ -238,6 +238,28 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         lb.numberOfLines = 2
         return lb
     }()
+    
+    // ✅ タイトル左のブックマークボタン
+    private let bookmarkButton: UIButton = {
+        let btn = UIButton(type: .system)
+        btn.translatesAutoresizingMaskIntoConstraints = false
+
+        btn.backgroundColor = .systemBackground          // 外側は常に白
+        btn.layer.cornerRadius = 12
+        btn.clipsToBounds = true
+
+        // 緑の縁（常に）
+        btn.layer.borderWidth = 1
+        btn.layer.borderColor = UIColor.systemGreen.withAlphaComponent(0.45).cgColor
+
+        btn.tintColor = .systemGreen                      // アイコン色は緑
+        btn.contentEdgeInsets = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+        btn.adjustsImageWhenHighlighted = false
+        btn.isExclusiveTouch = true
+
+        return btn
+    }()
+
 
     private let categoryLabel: UILabel = {
         let lb = UILabel()
@@ -314,6 +336,12 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         view.backgroundColor = .systemBackground
         buildUI()
         startListening()
+        
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(bookmarkDidChange),
+                                               name: .bookmarkDidChange,
+                                               object: nil)
+
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -387,8 +415,22 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             pageControl.centerXAnchor.constraint(equalTo: contentView.centerXAnchor)
         ])
 
-        // タイトルブロック
-        let titleBlock = UIStackView(arrangedSubviews: [titleLabel, categoryLabel, tagsStack, snsStack])
+        // タイトルブロック（✅ タイトル左にブックマーク）
+        bookmarkButton.addTarget(self, action: #selector(didTapBookmark), for: .touchUpInside)
+
+        NSLayoutConstraint.activate([
+            bookmarkButton.widthAnchor.constraint(equalToConstant: 34),
+            bookmarkButton.heightAnchor.constraint(equalToConstant: 34)
+        ])
+
+        let titleRow = UIStackView(arrangedSubviews: [bookmarkButton, titleLabel])
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+        titleRow.axis = .horizontal
+        titleRow.spacing = 10
+        titleRow.alignment = .center
+        titleRow.distribution = .fill
+
+        let titleBlock = UIStackView(arrangedSubviews: [titleRow, categoryLabel, tagsStack, snsStack])
         titleBlock.translatesAutoresizingMaskIntoConstraints = false
         titleBlock.axis = .vertical
         titleBlock.spacing = 10
@@ -400,6 +442,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             titleBlock.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
             titleBlock.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
         ])
+
 
         // SNS buttons
         instagramButton = makeSNSButton(assetName: "instagram",
@@ -658,6 +701,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     // MARK: - Apply data
 
     private func applyDetail(_ d: CircleDetail) {
+        
+        updateBookmarkButtonUI()
+
         titleLabel.text = d.name
 
         if let cat = d.category, !cat.isEmpty {
@@ -817,4 +863,35 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             DispatchQueue.main.async { imageView.image = img }
         }.resume()
     }
+    
+    // MARK: - Bookmark
+
+    private func updateBookmarkButtonUI() {
+        let isOn = BookmarkStore.shared.isBookmarked(id: circleId)
+        let symbol = isOn ? "bookmark.fill" : "bookmark"
+        bookmarkButton.setImage(UIImage(systemName: symbol), for: .normal)
+
+        // 外側は白＋緑縁は固定（見た目ブレ防止）
+        bookmarkButton.backgroundColor = .systemBackground
+        bookmarkButton.layer.borderWidth = 1
+        bookmarkButton.layer.borderColor = UIColor.systemGreen.withAlphaComponent(0.45).cgColor
+        bookmarkButton.tintColor = .systemGreen
+    }
+
+    @objc private func didTapBookmark() {
+        BookmarkStore.shared.toggle(id: circleId)
+        updateBookmarkButtonUI()
+    }
+
+    @objc private func bookmarkDidChange() {
+        // 他画面で変わった場合も同期
+        updateBookmarkButtonUI()
+    }
+
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
 }
+

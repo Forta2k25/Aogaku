@@ -279,6 +279,7 @@ final class timetable: UIViewController,
     }
 
     //フォント追加
+    /*
     private func debugPrintAllFontNames() {
         for family in UIFont.familyNames.sorted() {
             print("▼ \(family)")
@@ -286,7 +287,7 @@ final class timetable: UIViewController,
                 print("   - \(name)")
             }
         }
-    }
+    }*/
     
     // 現在のハイライト（曜日・時限）を描画するかどうか
     private var highlightEnabled = true
@@ -1145,7 +1146,7 @@ private func placeOnlineRow() {
         publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
         startNowTicker()                     // 追加
         updateNowHighlight()                 // 追加（すぐ反映）
-        debugPrintAllFontNames()
+        //debugPrintAllFontNames()
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
     }
     override func viewWillDisappear(_ animated: Bool) {

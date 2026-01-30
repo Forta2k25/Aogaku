@@ -285,7 +285,8 @@ final class FriendTimetableViewController: UIViewController {
         v.translatesAutoresizingMaskIntoConstraints = false
 
         let mid = UILabel()
-        mid.text = "OD"
+        mid.text = "オン\nデマ"
+        mid.numberOfLines = 2
         mid.font = .systemFont(ofSize: 13, weight: .bold)
         mid.textColor = .secondaryLabel
         mid.textAlignment = .center

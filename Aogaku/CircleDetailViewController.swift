@@ -199,6 +199,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
     private let scrollView = UIScrollView()
     private let contentView = UIView()
+    
+    // ✅ 1画面表示につき1回だけ popularity を加算（同じVCの再表示で重複加算しない）
+    private var didIncrementPopularity = false
 
     // ✅ 複数枚表示用ヘッダー（横スワイプ）
     private let headerScrollView: UIScrollView = {
@@ -343,6 +346,27 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
                                                object: nil)
 
     }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        incrementPopularityIfNeeded()
+    }
+
+    // MARK: - Popularity
+    private func incrementPopularityIfNeeded() {
+        guard didIncrementPopularity == false else { return }
+        didIncrementPopularity = true
+
+        // ✅ 原子的に +1（並行アクセスでも安全）
+        db.collection("circle").document(circleId)
+            .updateData(["popularity": FieldValue.increment(Int64(1))]) { error in
+                if let error {
+                    // 失敗しても画面表示は続行
+                    print("Failed to increment popularity:", error.localizedDescription)
+                }
+            }
+    }
+
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)

@@ -298,30 +298,13 @@ final class syllabus: UIViewController,
                 undecided: self.filterUndecided
             )
 
-            if ready {
-                // ★ 最初の30件だけ作って返す
-                let first = LocalSyllabusIndex.shared.page(
-                    criteria: criteria,
-                    offset: 0,
-                    limit: self.localPageSize // = 30
-                )
-
-                DispatchQueue.main.async {
-                    self.usingLocalList = true
-                    let old = self.data                                   // ★ 旧表示を退避
-                    let mergedFirst = self.preserveEvalMethod(from: old, into: first)
-                    self.localOffset = mergedFirst.count
-                    self.data = mergedFirst
-                    self.filteredData = mergedFirst
-                    self.syllabus_table.reloadData()
-                    self.hideLoadingOverlay()
-                    self.kickoffBackgroundLocalFill(criteria: criteria)   // 残りはBG追記（この中も preserve 済）
-                }
-
-            } else {
-                // まだローカルが無い端末は既存のリモート初期化（ロード画面は出しっぱなし）
-                DispatchQueue.main.async { self.loadNextPage() }    // loadNextPage 内で初回表示後に hide 済み
+            DispatchQueue.main.async {
+                self.usingLocalList = false
+                self.loadNextPage()          // Firestoreで一覧
+                // hideLoadingOverlay は loadNextPage 内で呼ばれてるのでそのままでOK
             }
+            // LocalSyllabusIndex.prepare() はこのまま残してOK（検索用）
+
         }
     }
 
@@ -576,46 +559,18 @@ final class syllabus: UIViewController,
         usingLocalList = false           // 一旦無効化（BG追記のガード用）
 
         if kw.isEmpty {
-            if LocalSyllabusIndex.shared.isReady {
-                usingLocalList = true
-                localOffset = 0
+            usingLocalList = false
 
-                let criteria = SyllabusSearchCriteria(
-                    category: selectedCategory,
-                    department: filterDepartment,
-                    campus: filterCampus,
-                    place: filterPlace,
-                    grade: filterGrade,
-                    day: filterDay,
-                    periods: filterPeriods,
-                    timeSlots: filterTimeSlots,
-                    term: filterTerm,
-                    undecided: filterUndecided
-                )
+            // ✅ 条件が変わったら「今までロードした授業」を残さない
+            data.removeAll()
+            filteredData.removeAll()
+            localOffset = 0
+            syllabus_table.setContentOffset(.zero, animated: false)
+            syllabus_table.reloadData()
 
-                // ★ ここで first を作る
-                let first = LocalSyllabusIndex.shared.page(criteria: criteria, offset: localOffset, limit: localPageSize)
-
-                // ★ 旧表示の eval_method を温存して差し替え
-                let old = self.data
-                let safeFirst = self.preserveEvalMethod(from: old, into: first)
-                self.data = safeFirst
-                self.filteredData = safeFirst
-                self.syllabus_table.reloadData()
-                self.localOffset = safeFirst.count
-                setSearching(false)
-
-                // ★ 残りはBGで追記
-                kickoffBackgroundLocalFill(criteria: criteria)
-                return
-            } else {
-                // 従来のリモートページング
-                filteredData = data
-                syllabus_table.reloadData()
-                scrollToTop()
-                loadNextPage()
-                return
-            }
+            scrollToTop()
+            loadNextPage()   // ✅ 1ページ目から取り直す（条件の授業だけになる）
+            return
         }
 
         data.removeAll()
@@ -754,24 +709,32 @@ final class syllabus: UIViewController,
         return q
     }
 
-    // ===== ページング一覧 =====
     func loadNextPage() {
         if let kw = activeKeyword, !kw.isEmpty { return }
-        if LocalSyllabusIndex.shared.isReady { return }
+
+            // ✅ ローカル一覧を使っているときだけ、Firestoreページングを止める
+        if usingLocalList && LocalSyllabusIndex.shared.isReady { return }
+
         guard !isLoading, !reachedEnd else { return }
         isLoading = true
+
+        let session = listSessionId   // ★ 追加：この呼び出しのセッションを固定
 
         let qBase = baseQuery()
         let hasTimeFilter = (filterDay?.isEmpty == false) || ((filterPeriods?.count ?? 0) == 1)
 
         var q: Query = hasTimeFilter
-            ? qBase.limit(to: pageSizeBase)                 // orderBy無し
+            ? qBase.limit(to: pageSizeBase)
             : qBase.order(by: "class_name").limit(to: pageSizeBase)
 
         if let last = lastDoc { q = q.start(afterDocument: last) }
 
         q.getDocuments { [weak self] snap, err in
             guard let self = self else { return }
+
+            // ★ 追加：条件が変わった（別リロード/別検索に移った）結果は捨てる
+            guard self.listSessionId == session else { return }
+
             self.isLoading = false
             if let err = err { print("Firestore error:", err); return }
             guard let snap = snap else { return }
@@ -792,7 +755,6 @@ final class syllabus: UIViewController,
             self.lastDoc = snap.documents.last
             if snap.documents.count < self.pageSizeBase { self.reachedEnd = true }
 
-            // ★ eval_method 温存して追加（ここだけでOK）
             let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)
             self.data.append(contentsOf: safeChunk)
 
@@ -801,23 +763,16 @@ final class syllabus: UIViewController,
             }
 
             self.filteredData = self.data
-            
-            DispatchQueue.main.async {
-                print("STATE usingLocalList:", self.usingLocalList,
-                      "isReady:", LocalSyllabusIndex.shared.isReady,
-                      "dataCount:", self.data.count,
-                      "filtered:", self.filteredData.count)
 
+            DispatchQueue.main.async {
+                // ★ 念のためUI反映直前もセッション確認
+                guard self.listSessionId == session else { return }
                 self.syllabus_table.reloadData()
                 self.hideLoadingOverlay()
             }
-
-
-            print("📦 page:", snap.documents.count, "added:", safeChunk.count, "total:", self.data.count,
-                  "last:", self.lastDoc?.documentID ?? "nil")
         }
-
     }
+
 
     // ===== TableView =====
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { filteredData.count }
@@ -951,9 +906,15 @@ final class syllabus: UIViewController,
                 let chunk = LocalSyllabusIndex.shared.page(criteria: criteria, offset: localOffset, limit: localPageSize)
                 if !chunk.isEmpty {
                     let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)  // ← 温存
-                    self.data.append(contentsOf: safeChunk)
-                    self.filteredData = self.data
-                    self.syllabus_table.reloadData()
+                    let start = data.count
+                    data.append(contentsOf: safeChunk)
+                    filteredData = data
+
+                    let newIndexPaths = (start..<data.count).map { IndexPath(row: $0, section: 0) }
+
+                    self.syllabus_table.performBatchUpdates {
+                        self.syllabus_table.insertRows(at: newIndexPaths, with: .none)
+                    }
                     self.localOffset += safeChunk.count
                 }
             }
@@ -961,7 +922,7 @@ final class syllabus: UIViewController,
         }
 
         // （従来のリモート無限スクロール）
-        if LocalSyllabusIndex.shared.isReady { return }
+        if usingLocalList && LocalSyllabusIndex.shared.isReady { return }  // ✅ ローカル一覧の時だけ止める
         if searchController.isActive, let t = searchController.searchBar.text, !t.isEmpty { return }
         let offsetY = scrollView.contentOffset.y
         let contentH = scrollView.contentSize.height
@@ -1007,9 +968,15 @@ final class syllabus: UIViewController,
 
                     // ★ ここで既存の eval_method を温存
                     let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)
-                    self.data.append(contentsOf: safeChunk)
-                    self.filteredData = self.data
-                    self.syllabus_table.reloadData()
+                    let start = data.count
+                    data.append(contentsOf: safeChunk)
+                    filteredData = data
+
+                    let newIndexPaths = (start..<data.count).map { IndexPath(row: $0, section: 0) }
+
+                    self.syllabus_table.performBatchUpdates {
+                        self.syllabus_table.insertRows(at: newIndexPaths, with: .none)
+                    }
                     self.localOffset += safeChunk.count
                 }
                 usleep(80_000)
@@ -1094,12 +1061,11 @@ final class syllabus: UIViewController,
         searchDebounce?.cancel()
 
         if text.isEmpty {
-            filteredData = data
-            syllabus_table.reloadData()
-            scrollToTop()
-            setSearching(false)      // 入力クリア時は消灯
+            setSearching(false)
+            resetAndReload(keyword: nil)   // ✅ 1から作り直す
             return
         }
+
 
         // ★ 新しい検索を始める時はいったん空表示にして上の古いセルを消す＋くるくる
         if !filteredData.isEmpty {
@@ -1116,6 +1082,7 @@ final class syllabus: UIViewController,
 
     // ===== リモート検索（通信量を抑えつつ、長い語でもヒットが減らないように） =====
     private func remoteSearch(text rawText: String) {
+        let session = listSessionId
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             self.filteredData = self.data
@@ -1139,8 +1106,9 @@ final class syllabus: UIViewController,
                 term: filterTerm,
                 undecided: filterUndecided
             )
-            let models = LocalSyllabusIndex.shared.search(text: text, criteria: criteria)  // ★ ここ！
-            self.filteredData = models
+            let models = LocalSyllabusIndex.shared.search(text: text, criteria: criteria)
+            let merged = self.preserveEvalMethod(from: self.data, into: models)
+            self.filteredData = merged
             self.syllabus_table.reloadData()
             self.scrollToTop()
             self.setSearching(false)
@@ -1228,57 +1196,77 @@ final class syllabus: UIViewController,
             print("🔍 ngram fetched:", docs.count, "final:", models.count)
         }
     }
-    
-    private func preserveEvalMethod(from old: [SyllabusData], into new: [SyllabusData]) -> [SyllabusData] {
-            // old → keep（非空を優先）
-            var keepById  = Dictionary(old.map { ($0.docID,     $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
-            var keepByKey = Dictionary(old.map { ($0.stableKey, $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
+    private func mergeEvalMethodFromOld(_ old: [SyllabusData], into new: [SyllabusData]) -> [SyllabusData] {
+        // 旧一覧から一発で引ける辞書を作る（O(n)）
+        var byId: [String: String] = [:]
+        var byStable: [String: String] = [:]
+        var byEvalKey: [String: String] = [:]
 
-            // ★ stableKey がズレても拾えるように「授業名+教員名」のキーを用意
-            func evalKey(_ s: SyllabusData) -> String {
-                return normalizeForSearch(s.class_name) + "|" + normalizeForSearch(s.teacher_name)
-            }
-            var keepByEval = Dictionary(old.map { (evalKey($0), $0.eval_method) }, uniquingKeysWith: { cur, nxt in cur.isEmpty ? nxt : cur })
-
-            // キャッシュも併用
-            for (id, v) in evalMethodCache where !v.isEmpty {
-                if let cur = keepById[id], cur.isEmpty { keepById[id] = v }
-                else if keepById[id] == nil { keepById[id] = v }
-            }
-            for (k, v) in evalMethodCacheByStableKey where !v.isEmpty {
-                if let cur = keepByKey[k], cur.isEmpty { keepByKey[k] = v }
-                else if keepByKey[k] == nil { keepByKey[k] = v }
-            }
-
-            // new 側が空のときだけ keep を適用（evalKey → stableKey → docID の順で参照）
-            return new.map { n in
-                if !n.eval_method.isEmpty { return n }
-
-                let ekey = normalizeForSearch(n.class_name) + "|" + normalizeForSearch(n.teacher_name)
-                let val = keepByEval[ekey]
-                    ?? keepByKey[n.stableKey]
-                    ?? keepById[n.docID]
-                    ?? evalMethodCacheByStableKey[n.stableKey]
-                    ?? evalMethodCache[n.docID]
-                    ?? ""
-
-                if val.isEmpty { return n }
-
-                return SyllabusData(
-                    docID: n.docID,
-                    stableKey: n.stableKey,
-                    class_name: n.class_name,
-                    teacher_name: n.teacher_name,
-                    time: n.time,
-                    campus: n.campus,
-                    grade: n.grade,
-                    category: n.category,
-                    credit: n.credit,
-                    term: n.term,
-                    eval_method: val
-                )
-            }
+        for o in old where !o.eval_method.isEmpty {
+            byId[o.docID] = o.eval_method
+            byStable[o.stableKey] = o.eval_method
+            let ekey = makeEvalKey(className: o.class_name, teacher: o.teacher_name)
+            byEvalKey[ekey] = o.eval_method
         }
+
+        return new.map { n in
+            if !n.eval_method.isEmpty { return n }
+
+            let ekey = makeEvalKey(className: n.class_name, teacher: n.teacher_name)
+
+            // キャッシュ → old辞書 の順に探す（どっちが生きてても拾える）
+            let val =
+                evalMethodCacheByEvalKey[ekey] ?? byEvalKey[ekey] ??
+                evalMethodCacheByStableKey[n.stableKey] ?? byStable[n.stableKey] ??
+                evalMethodCache[n.docID] ?? byId[n.docID] ??
+                ""
+
+            guard !val.isEmpty else { return n }
+
+            return SyllabusData(
+                docID: n.docID,
+                stableKey: n.stableKey,
+                class_name: n.class_name,
+                teacher_name: n.teacher_name,
+                time: n.time,
+                campus: n.campus,
+                grade: n.grade,
+                category: n.category,
+                credit: n.credit,
+                term: n.term,
+                eval_method: val
+            )
+        }
+    }
+
+    private func preserveEvalMethod(from old: [SyllabusData], into new: [SyllabusData]) -> [SyllabusData] {
+        // old は使わない（作り直しコストが重すぎる）
+        return new.map { n in
+            if !n.eval_method.isEmpty { return n }
+
+            let ekey = makeEvalKey(className: n.class_name, teacher: n.teacher_name)
+            let val = evalMethodCacheByEvalKey[ekey]
+                ?? evalMethodCacheByStableKey[n.stableKey]
+                ?? evalMethodCache[n.docID]
+                ?? ""
+
+            guard !val.isEmpty else { return n }
+
+            return SyllabusData(
+                docID: n.docID,
+                stableKey: n.stableKey,
+                class_name: n.class_name,
+                teacher_name: n.teacher_name,
+                time: n.time,
+                campus: n.campus,
+                grade: n.grade,
+                category: n.category,
+                credit: n.credit,
+                term: n.term,
+                eval_method: val
+            )
+        }
+    }
 
 
 

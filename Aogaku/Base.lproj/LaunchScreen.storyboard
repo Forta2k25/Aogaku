@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="23727" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="24506" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
     <device id="retina6_12" orientation="portrait" appearance="light"/>
     <dependencies>
-        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="23721"/>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="24504"/>
         <capability name="Safe area layout guides" minToolsVersion="9.0"/>
         <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
     </dependencies>
@@ -22,11 +23,11 @@
                                     <constraint firstAttribute="height" constant="519" id="yxL-te-3vR"/>
                                 </constraints>
                             </imageView>
-                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="hack" translatesAutoresizingMaskIntoConstraints="NO" id="kQy-ym-u34">
-                                <rect key="frame" x="71.666666666666686" y="198" width="250" height="100"/>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="hack2" translatesAutoresizingMaskIntoConstraints="NO" id="kQy-ym-u34">
+                                <rect key="frame" x="61.666666666666657" y="78" width="270" height="350"/>
                                 <constraints>
-                                    <constraint firstAttribute="width" constant="250" id="3cj-I4-wDS"/>
-                                    <constraint firstAttribute="height" constant="100" id="TeK-cB-gCC"/>
+                                    <constraint firstAttribute="width" constant="270" id="3cj-I4-wDS"/>
+                                    <constraint firstAttribute="height" constant="350" id="TeK-cB-gCC"/>
                                 </constraints>
                             </imageView>
                         </subviews>
@@ -34,7 +35,7 @@
                         <color key="backgroundColor" red="0.11372549830000001" green="0.28627452250000002" blue="0.22745099660000001" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                         <constraints>
                             <constraint firstItem="kQy-ym-u34" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="B53-Pg-DGy"/>
-                            <constraint firstItem="kQy-ym-u34" firstAttribute="top" secondItem="6Tk-OE-BBY" secondAttribute="top" constant="80" id="FIk-oG-Bbn"/>
+                            <constraint firstItem="kQy-ym-u34" firstAttribute="top" secondItem="6Tk-OE-BBY" secondAttribute="top" constant="-40" id="FIk-oG-Bbn"/>
                             <constraint firstAttribute="bottom" secondItem="qFe-zN-QvC" secondAttribute="bottom" constant="-10" id="KvQ-dP-OTg"/>
                             <constraint firstItem="qFe-zN-QvC" firstAttribute="trailing" secondItem="6Tk-OE-BBY" secondAttribute="trailing" id="PGy-Wd-dCG"/>
                         </constraints>
@@ -46,7 +47,7 @@
         </scene>
     </scenes>
     <resources>
-        <image name="hack" width="238.33332824707031" height="72"/>
+        <image name="hack2" width="166.66667175292969" height="166.66667175292969"/>
         <image name="loadscreen2" width="341.33334350585938" height="512"/>
     </resources>
 </document>

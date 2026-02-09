@@ -27,6 +27,49 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
         var subtitle: String { id.isEmpty ? "" : "@\(id)" }
     }
 
+    // 学科 → 略称（FindFriendsと同じ）
+    private enum DepartmentAbbr {
+        static let map: [String: String] = [
+            // 文学部
+            "日本文学科":"日文","英米文学科":"英米","比較芸術学科":"比芸","フランス文学科":"仏文","史学科":"文史",
+            // 教育人間科学部
+            "教育学科":"教育","心理学科":"心理",
+            // 経済学部
+            "経済学科":"経済","現代経済デザイン学科":"現デ",
+            // 法学部
+            "法学科":"法法","ヒューマンライツ学科":"法ヒュ",
+            // 経営学部
+            "経営学科":"経営","マーケティング学科":"経マ",
+            // 総合文化政策学部
+            "総合文化政策学科":"総文",
+            // SIPEC（国際政治経済学部）
+            "国際コミュニケーション学科":"コミュ","国際政治学科":"国政","国際経済学科":"国経",
+            // 理工学部
+            "物理科学科":"物理","数理サイエンス学科":"数理","化学・生命科学科":"生命",
+            "電気電子工学科":"電工","機械創造工学科":"機械","経営システム工学科":"経シス","情報テクノロジー学科":"情テク",
+            // 地球社会共生・コミュニティ・社情
+            "地球社会共生学科":"地球","コミュニティ人間科学科":"コミュ","社会情報学科":"社情",
+        ]
+        static func abbr(for department: String?) -> String? {
+            guard let d = department, !d.isEmpty else { return nil }
+            return map[d] ?? d
+        }
+    }
+
+    // 友だち表示用の追加情報（学科略称・学年）
+    private struct ProfileInfo {
+        let faculty: String?
+        let department: String?
+        let grade: Int?
+        var deptAbbr: String? { DepartmentAbbr.abbr(for: department) }
+        var text: String? {
+            var parts: [String] = []
+            if let a = deptAbbr, !a.isEmpty { parts.append(a) }
+            if let g = grade, g >= 1 { parts.append("\(g)年") }
+            return parts.isEmpty ? nil : parts.joined(separator: "・")
+        }
+    }
+
     private let db = Firestore.firestore()
     private var uid: String? { Auth.auth().currentUser?.uid }
 
@@ -42,6 +85,26 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     private var friendAvatarCache: [String: UIImage] = [:]     // friendUid -> image
     private var friendPhotoURLCache: [String: String] = [:]    // friendUid -> photoURL
     private var friendAvatarLoading: Set<String> = []          // friendUid in-flight
+
+    // MARK: - Friend profile cache (dept/grade)
+    private var friendProfileInfo: [String: ProfileInfo] = [:]
+    private var friendProfileLoading: Set<String> = []
+
+    // MARK: - Pin store (固定)
+    private final class FriendPinStore {
+        static let shared = FriendPinStore()
+        private let key = "friend_pinned_set"
+        private let ud = UserDefaults.standard
+        private var set: Set<String>
+        private init() {
+            let arr = ud.array(forKey: key) as? [String] ?? []
+            set = Set(arr)
+        }
+        func isPinned(_ uid: String) -> Bool { set.contains(uid) }
+        func pin(_ uid: String) { set.insert(uid); save() }
+        func unpin(_ uid: String) { set.remove(uid); save() }
+        private func save() { ud.set(Array(set), forKey: key) }
+    }
 
     // MARK: - LifeCycle
     override func viewDidLoad() {
@@ -113,7 +176,6 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
             topBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            // ✅ 少し詰める
             topBar.heightAnchor.constraint(equalToConstant: 36),
 
             qrButton.leadingAnchor.constraint(equalTo: topBar.leadingAnchor, constant: 16),
@@ -138,9 +200,14 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
         tableView.backgroundColor = .systemGroupedBackground
         tableView.dataSource = self
         tableView.delegate = self
-        tableView.separatorStyle = .none
+
+        // ✅ 友だちセルを端から端まで見せるため、セパレータは標準を使う
+        tableView.separatorStyle = .singleLine
+        tableView.separatorInset = .zero
+        tableView.layoutMargins = .zero
+
         tableView.register(SelfHeaderCell.self, forCellReuseIdentifier: SelfHeaderCell.reuseID)
-        tableView.register(FriendListCell.self, forCellReuseIdentifier: FriendListCell.reuseID)
+        tableView.register(FriendSettingsCell.self, forCellReuseIdentifier: FriendSettingsCell.reuseID)
 
         if #available(iOS 15.0, *) {
             tableView.sectionHeaderTopPadding = 0
@@ -148,7 +215,6 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
 
         view.addSubview(tableView)
 
-        // ✅ topBarの下から少しだけ上に寄せる（空白詰め）
         let top = tableView.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: -6)
         tableTopConstraint = top
 
@@ -161,7 +227,6 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     }
 
     private func adjustTopSpacing() {
-        // iOSの自動余白が強い端末で少しだけ詰める
         tableView.contentInset.top = -6
     }
 
@@ -227,6 +292,26 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
                 self.friendAvatarCache[friendUid] = img
                 onImage(img)
             }.resume()
+        }
+    }
+
+    // MARK: - Friend profile (dept/grade) loader
+    private func loadFriendProfileInfoIfNeeded(friendUid: String, completion: @escaping (ProfileInfo?) -> Void) {
+        if let info = friendProfileInfo[friendUid] { completion(info); return }
+        if friendProfileLoading.contains(friendUid) { completion(nil); return }
+        friendProfileLoading.insert(friendUid)
+
+        db.collection("users").document(friendUid).getDocument { [weak self] snap, _ in
+            guard let self else { return }
+            defer { self.friendProfileLoading.remove(friendUid) }
+
+            let data = snap?.data() ?? [:]
+            let faculty = data["faculty"] as? String
+            let dept = data["department"] as? String
+            let grade = data["grade"] as? Int
+            let info = ProfileInfo(faculty: faculty, department: dept, grade: grade)
+            self.friendProfileInfo[friendUid] = info
+            completion(info)
         }
     }
 
@@ -302,7 +387,6 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
 
             DispatchQueue.main.async { self.tableView.reloadData() }
 
-            // FirestoreにphotoURLが無ければ補完（次回から確実に反映）
             if (fsURL == nil || fsURL == ""), let authURL, !authURL.isEmpty {
                 self.db.collection("users").document(uid).setData(["photoURL": authURL], merge: true)
             }
@@ -310,12 +394,28 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     }
 
     // MARK: - Load friends
+    private func sortFriendsPinnedFirst(_ list: [Friend]) -> [Friend] {
+        list.sorted { a, b in
+            let ap = FriendPinStore.shared.isPinned(a.friendUid)
+            let bp = FriendPinStore.shared.isPinned(b.friendUid)
+            if ap != bp { return ap && !bp }
+
+            let an = a.friendName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let bn = b.friendName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let aa = an.isEmpty ? a.friendId : an
+            let bb = bn.isEmpty ? b.friendId : bn
+            return aa.localizedCaseInsensitiveCompare(bb) == .orderedAscending
+        }
+    }
+
     private func reloadFriends() {
         FriendService.shared.fetchFriends { [weak self] result in
             guard let self else { return }
             switch result {
-            case .success(let list): self.friends = list
-            case .failure: self.friends = []
+            case .success(let list):
+                self.friends = self.sortFriendsPinnedFirst(list)
+            case .failure:
+                self.friends = []
             }
             DispatchQueue.main.async { self.tableView.reloadData() }
         }
@@ -326,20 +426,61 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
         reloadFriends()
     }
 
+    // MARK: - Friend delete (両者から削除)
+    private func removeFriendFromBothSides(friendUid: String, completion: @escaping (Bool) -> Void) {
+        guard let myUid = Auth.auth().currentUser?.uid else { completion(false); return }
+
+        // friends がサブコレクション方式前提
+        let myRef = db.collection("users").document(myUid).collection("friends").document(friendUid)
+        let otherRef = db.collection("users").document(friendUid).collection("friends").document(myUid)
+
+        let batch = db.batch()
+        batch.deleteDocument(myRef)
+        batch.deleteDocument(otherRef)
+
+        batch.commit { err in
+            completion(err == nil)
+        }
+    }
+
     // MARK: - Table
     func numberOfSections(in tableView: UITableView) -> Int { 2 }
+    
+    func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        guard section == 1 else { return nil }
+
+        let container = UIView()
+        container.backgroundColor = .clear
+
+        let label = UILabel()
+        label.text = "友だち"
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .secondaryLabel
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16), // ←ここで余白
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6)
+        ])
+
+        return container
+    }
+
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        return section == 1 ? 32 : 0.01
+    }
+
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         section == 0 ? 1 : friends.count
     }
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        // ✅ 自分セルを少し大きく
-        indexPath.section == 0 ? 104 : 84
-    }
-
-    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        section == 1 ? "友だち" : nil
+        indexPath.section == 0 ? 104 : 86
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -353,18 +494,25 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
             if #available(iOS 14.0, *) { cell.backgroundConfiguration = UIBackgroundConfiguration.clear() }
             cell.contentView.backgroundColor = .clear
             cell.backgroundColor = .clear
+
+            // 自分セルはセパレータ無し
+            cell.separatorInset = UIEdgeInsets(top: 0, left: 10000, bottom: 0, right: 0)
             return cell
         }
 
         let f = friends[indexPath.row]
-        let cell = tableView.dequeueReusableCell(withIdentifier: FriendListCell.reuseID, for: indexPath) as! FriendListCell
-        let fallbackName = f.friendName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "@\(f.friendId)" : f.friendName
+        let cell = tableView.dequeueReusableCell(withIdentifier: FriendSettingsCell.reuseID, for: indexPath) as! FriendSettingsCell
 
+        let fallbackName = f.friendName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "@\(f.friendId)" : f.friendName
         cell.accessibilityIdentifier = f.friendUid
 
-        let cachedImg = friendAvatarCache[f.friendUid]
-        cell.configure(name: fallbackName, id: f.friendId, image: cachedImg, pinned: false, extraText: nil)
+        let pinned = FriendPinStore.shared.isPinned(f.friendUid)
+        let extra = friendProfileInfo[f.friendUid]?.text
 
+        let cachedImg = friendAvatarCache[f.friendUid]
+        cell.configure(name: fallbackName, id: f.friendId, image: cachedImg, pinned: pinned, extraText: extra)
+
+        // アイコンロード
         if cachedImg == nil {
             loadFriendAvatarIfNeeded(friendUid: f.friendUid) { [weak self, weak cell] img in
                 guard let self else { return }
@@ -372,43 +520,37 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
                     guard let cell else { return }
                     guard cell.accessibilityIdentifier == f.friendUid else { return }
                     if let img {
-                        cell.configure(name: fallbackName, id: f.friendId, image: img, pinned: false, extraText: nil)
+                        let pinnedNow = FriendPinStore.shared.isPinned(f.friendUid)
+                        let extraNow = self.friendProfileInfo[f.friendUid]?.text
+                        cell.configure(name: fallbackName, id: f.friendId, image: img, pinned: pinnedNow, extraText: extraNow)
                     }
                 }
             }
         }
 
+        // 学科・学年ロード
+        if friendProfileInfo[f.friendUid] == nil {
+            loadFriendProfileInfoIfNeeded(friendUid: f.friendUid) { [weak self, weak cell] info in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    guard let cell else { return }
+                    guard cell.accessibilityIdentifier == f.friendUid else { return }
+                    let pinnedNow = FriendPinStore.shared.isPinned(f.friendUid)
+                    let extraNow = info?.text
+                    cell.configure(name: fallbackName, id: f.friendId, image: self.friendAvatarCache[f.friendUid], pinned: pinnedNow, extraText: extraNow)
+                }
+            }
+        }
+
+        // フル幅セパレータ
+        cell.preservesSuperviewLayoutMargins = false
+        cell.separatorInset = .zero
+        cell.layoutMargins = .zero
+
         if #available(iOS 14.0, *) { cell.backgroundConfiguration = UIBackgroundConfiguration.clear() }
         cell.contentView.backgroundColor = .clear
         cell.backgroundColor = .clear
-
         return cell
-    }
-
-    // ✅ 横線：自分セル(section0)は出さない
-    func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        let tag = 778899
-        cell.contentView.viewWithTag(tag)?.removeFromSuperview()
-
-        // ✅ 自分の下の線は消す
-        guard indexPath.section == 1 else { return }
-
-        let line = UIView()
-        line.tag = tag
-        line.translatesAutoresizingMaskIntoConstraints = false
-        line.backgroundColor = UIColor.systemGray3.withAlphaComponent(0.85)
-
-        cell.contentView.addSubview(line)
-        NSLayoutConstraint.activate([
-            line.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: 18),
-            line.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -18),
-            line.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor),
-            line.heightAnchor.constraint(equalToConstant: 2.0)
-        ])
-
-        if indexPath.row == friends.count - 1 {
-            line.isHidden = true
-        }
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
@@ -430,6 +572,79 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
         let friend = friends[indexPath.row]
         let vc = FriendTimetableViewController(friendUid: friend.friendUid, friendName: friend.friendName)
         showOnNav(vc, title: friend.friendName)
+    }
+
+    // MARK: - Swipe actions (固定 / 削除)
+    func tableView(_ tableView: UITableView,
+                   leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard indexPath.section == 1 else { return nil }
+        let f = friends[indexPath.row]
+        let pinned = FriendPinStore.shared.isPinned(f.friendUid)
+
+        let title = pinned ? "固定解除" : "固定"
+        let imageName = pinned ? "pin.slash" : "pin"
+
+        let action = UIContextualAction(style: .normal, title: title) { [weak self] _,_,done in
+            guard let self else { done(false); return }
+
+            if pinned { FriendPinStore.shared.unpin(f.friendUid) }
+            else { FriendPinStore.shared.pin(f.friendUid) }
+
+            self.friends = self.sortFriendsPinnedFirst(self.friends)
+            self.tableView.reloadSections(IndexSet(integer: 1), with: .automatic)
+            done(true)
+        }
+
+        action.image = UIImage(systemName: imageName)
+        action.backgroundColor = pinned ? .systemGray : .systemYellow
+
+        let config = UISwipeActionsConfiguration(actions: [action])
+        config.performsFirstActionWithFullSwipe = true
+        return config
+    }
+
+    func tableView(_ tableView: UITableView,
+                   trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard indexPath.section == 1 else { return nil }
+        let f = friends[indexPath.row]
+
+        let delete = UIContextualAction(style: .destructive, title: "削除") { [weak self] _,_,done in
+            guard let self else { done(false); return }
+
+            let alert = UIAlertController(
+                title: "友だちを削除しますか？",
+                message: "「はい」を押すと、お互いの友だち一覧から削除されます。",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "いいえ", style: .cancel, handler: { _ in
+                done(false)
+            }))
+            alert.addAction(UIAlertAction(title: "はい", style: .destructive, handler: { _ in
+                // ローカル保持を掃除
+                FriendPinStore.shared.unpin(f.friendUid)
+                self.friendAvatarCache.removeValue(forKey: f.friendUid)
+                self.friendPhotoURLCache.removeValue(forKey: f.friendUid)
+                self.friendProfileInfo.removeValue(forKey: f.friendUid)
+
+                self.removeFriendFromBothSides(friendUid: f.friendUid) { success in
+                    DispatchQueue.main.async {
+                        if success {
+                            self.reloadFriends()
+                            done(true)
+                        } else {
+                            done(false)
+                        }
+                    }
+                }
+            }))
+            self.present(alert, animated: true)
+        }
+
+        delete.image = UIImage(systemName: "trash")
+
+        let config = UISwipeActionsConfiguration(actions: [delete])
+        config.performsFirstActionWithFullSwipe = false
+        return config
     }
 
     // MARK: - Footer
@@ -477,6 +692,141 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     }
 }
 
+// MARK: - Friend cell (フル幅 / 左寄せ / 右 chevron / 学科・学年)
+final class FriendSettingsCell: UITableViewCell {
+    static let reuseID = "FriendSettingsCell"
+
+    private let rowBG = UIView()
+    private let avatarView = UIImageView()
+    private let nameLabel = UILabel()
+    private let idLabel = UILabel()
+    private let extraLabel = UILabel()
+
+    private let pinBadge = UIImageView(image: UIImage(systemName: "pin.fill"))
+    private let chevron = UIImageView(image: UIImage(systemName: "chevron.right"))
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        setupUI()
+    }
+    required init?(coder: NSCoder) { super.init(coder: coder); setupUI() }
+
+    private func setupUI() {
+        selectionStyle = .default
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
+
+        // フル幅背景
+        rowBG.translatesAutoresizingMaskIntoConstraints = false
+        rowBG.backgroundColor = .secondarySystemBackground
+        rowBG.clipsToBounds = true
+        contentView.addSubview(rowBG)
+
+        // 端から端まで
+        NSLayoutConstraint.activate([
+            rowBG.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            rowBG.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            rowBG.topAnchor.constraint(equalTo: contentView.topAnchor),
+            rowBG.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+
+        // Avatar
+        avatarView.translatesAutoresizingMaskIntoConstraints = false
+        avatarView.contentMode = .scaleAspectFill
+        avatarView.clipsToBounds = true
+        avatarView.layer.cornerRadius = 26
+        avatarView.backgroundColor = .secondarySystemFill
+        avatarView.image = UIImage(systemName: "person.crop.circle.fill")
+
+        // Labels（左寄せ）
+        nameLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        nameLabel.textColor = .label
+        nameLabel.numberOfLines = 1
+
+        idLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        idLabel.textColor = .secondaryLabel
+        idLabel.numberOfLines = 1
+
+        extraLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        extraLabel.textColor = .secondaryLabel
+        extraLabel.numberOfLines = 1
+
+        let vStack = UIStackView(arrangedSubviews: [nameLabel, idLabel, extraLabel])
+        vStack.axis = .vertical
+        vStack.spacing = 2
+        vStack.alignment = .leading
+        vStack.translatesAutoresizingMaskIntoConstraints = false
+
+        // Pin
+        pinBadge.translatesAutoresizingMaskIntoConstraints = false
+        pinBadge.tintColor = .systemYellow
+        pinBadge.isHidden = true
+
+        // Chevron（右寄せ）
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.tintColor = .tertiaryLabel
+
+        rowBG.addSubview(avatarView)
+        rowBG.addSubview(vStack)
+        rowBG.addSubview(pinBadge)
+        rowBG.addSubview(chevron)
+
+        NSLayoutConstraint.activate([
+            avatarView.leadingAnchor.constraint(equalTo: rowBG.leadingAnchor, constant: 16),
+            avatarView.centerYAnchor.constraint(equalTo: rowBG.centerYAnchor),
+            avatarView.widthAnchor.constraint(equalToConstant: 52),
+            avatarView.heightAnchor.constraint(equalToConstant: 52),
+
+            chevron.trailingAnchor.constraint(equalTo: rowBG.trailingAnchor, constant: -16),
+            chevron.centerYAnchor.constraint(equalTo: rowBG.centerYAnchor),
+
+            vStack.leadingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 12),
+            vStack.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -12),
+            vStack.centerYAnchor.constraint(equalTo: rowBG.centerYAnchor),
+
+            pinBadge.widthAnchor.constraint(equalToConstant: 16),
+            pinBadge.heightAnchor.constraint(equalToConstant: 16),
+            pinBadge.trailingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 4),
+            pinBadge.bottomAnchor.constraint(equalTo: avatarView.bottomAnchor, constant: 4)
+        ])
+
+        // 選択背景
+        let sel = UIView()
+        sel.backgroundColor = UIColor.secondarySystemFill
+        selectedBackgroundView = sel
+
+        // フル幅セパレータ用
+        preservesSuperviewLayoutMargins = false
+        separatorInset = .zero
+        layoutMargins = .zero
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        avatarView.image = UIImage(systemName: "person.crop.circle.fill")
+        nameLabel.text = nil
+        idLabel.text = nil
+        extraLabel.text = nil
+        pinBadge.isHidden = true
+    }
+
+    func configure(name: String, id: String, image: UIImage?, pinned: Bool, extraText: String?) {
+        nameLabel.text = name
+        idLabel.text = "@\(id)"
+
+        if let t = extraText, !t.isEmpty {
+            extraLabel.text = t
+            extraLabel.isHidden = false
+        } else {
+            extraLabel.text = nil
+            extraLabel.isHidden = true
+        }
+
+        pinBadge.isHidden = !pinned
+        avatarView.image = image ?? UIImage(systemName: "person.crop.circle.fill")
+    }
+}
+
 // MARK: - Self Header Cell（ユーザー表示を少し大きく + URL頑健化）
 final class SelfHeaderCell: UITableViewCell {
     static let reuseID = "SelfHeaderCell"
@@ -509,12 +859,10 @@ final class SelfHeaderCell: UITableViewCell {
         avatarView.translatesAutoresizingMaskIntoConstraints = false
         avatarView.contentMode = .scaleAspectFill
         avatarView.clipsToBounds = true
-        // ✅ 少し大きく
         avatarView.layer.cornerRadius = 36
         avatarView.backgroundColor = .secondarySystemFill
         avatarView.image = UIImage(systemName: "person.crop.circle.fill")
 
-        // ✅ 少し大きく
         nameLabel.font = .systemFont(ofSize: 22, weight: .bold)
         subLabel.font = .systemFont(ofSize: 14, weight: .medium)
         subLabel.textColor = .secondaryLabel
@@ -531,7 +879,6 @@ final class SelfHeaderCell: UITableViewCell {
         NSLayoutConstraint.activate([
             avatarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
             avatarView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            // ✅ 少し大きく
             avatarView.widthAnchor.constraint(equalToConstant: 72),
             avatarView.heightAnchor.constraint(equalToConstant: 72),
 

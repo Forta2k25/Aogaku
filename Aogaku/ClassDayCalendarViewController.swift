@@ -9,14 +9,15 @@ final class ClassDayCalendarViewController: UIViewController,
                                             BannerViewDelegate {
 
     // MARK: - Model
-    private let model = AcademicCalendar2025()
+    private let model = AcademicCalendarRouter()
     private var campus: Campus = .aoyama
 
-    // 表示許可する“月”の範囲（2025/4〜2026/3）
+    // 表示許可する“月”の範囲（2025/4〜2027/3）
     private let allowedStartMonth = Calendar(identifier: .gregorian)
         .date(from: DateComponents(year: 2025, month: 4, day: 1))!
     private let allowedEndMonth   = Calendar(identifier: .gregorian)
-        .date(from: DateComponents(year: 2026, month: 3, day: 1))!
+        .date(from: DateComponents(year: 2027, month: 3, day: 1))!
+
 
     private var currentMonth: Date = Date()
     private var grid: [Date] = []
@@ -217,44 +218,12 @@ final class ClassDayCalendarViewController: UIViewController,
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
     }
     
-    // MARK: - Week Counter (Autumn 2025)
-    private func autumnWeekNumber(for date: Date, campus: Campus) -> Int? {
-        // 後期の定義：開始 2025-09-19（金）／終了 2026-01-26（試験開始前日想定）
-        guard
-            let termStart = cal.date(from: DateComponents(timeZone: tz, year: 2025, month: 9, day: 19)),
-            let termEnd   = cal.date(from: DateComponents(timeZone: tz, year: 2026, month: 1, day: 26))
-        else { return nil }
-
-        // 後期範囲外は表示しない
-        if date < termStart || date > termEnd { return nil }
-
-        // 日曜はカウント対象外
-        let targetWeekday = cal.component(.weekday, from: date) // Sun=1 ... Sat=7
-        if targetWeekday == 1 { return nil }
-
-        // 開始日以降で「同じ曜日」の最初の出現日を求める
-        // （開始日が同曜日ならその日、違えば次の同曜日）
-        let firstHit = cal.nextDate(
-            after: termStart.addingTimeInterval(-1),
-            matching: DateComponents(weekday: targetWeekday),
-            matchingPolicy: .nextTime,
-            direction: .forward
-        ) ?? termStart
-
-        // 同曜日ごとに7日刻みで進め、classDay のみカウント
-        var count = 0
-        var cursor = firstHit
-        while cursor <= date {
-            if model.category(of: cursor, campus: campus) == .classDay {
-                count += 1
-            }
-            guard let next = cal.date(byAdding: .day, value: 7, to: cursor) else { break }
-            cursor = next
+    private func springWeekSuffix(for date: Date) -> String {
+        if let n = springWeekNumber(for: date, campus: campus) {
+            return "【第\(n)週目】"
+        } else {
+            return ""
         }
-
-        // まだ一度も授業が実施されていない曜日の日付（例：9/23(火)が休講のため）
-        // は「第0週目」にならないよう、非表示にする
-        return (count > 0) ? count : nil
     }
 
     private func autumnWeekSuffix(for date: Date) -> String {
@@ -264,6 +233,54 @@ final class ClassDayCalendarViewController: UIViewController,
             return ""
         }
     }
+    
+    private func springWeekNumber(for date: Date, campus: Campus) -> Int? {
+        // 2025前期 or 2026前期で期間を切り替え
+        let c = cal.dateComponents(in: tz, from: date)
+        guard let y = c.year else { return nil }
+
+        let termStartEnd: (Date, Date)?
+        if y == 2025 {
+            // 前期：2025-04-07 ～ 2025-07-23（7/24から試験の想定）
+            guard
+                let s = cal.date(from: DateComponents(timeZone: tz, year: 2025, month: 4, day: 7)),
+                let e = cal.date(from: DateComponents(timeZone: tz, year: 2025, month: 7, day: 23))
+            else { return nil }
+            termStartEnd = (s, e)
+        } else if y == 2026 {
+            // 前期：2026-04-06 ～ 2026-07-23（PDFより：前期授業開始4/6、補講日7/23）
+            guard
+                let s = cal.date(from: DateComponents(timeZone: tz, year: 2026, month: 4, day: 6)),
+                let e = cal.date(from: DateComponents(timeZone: tz, year: 2026, month: 7, day: 23))
+            else { return nil }
+            termStartEnd = (s, e)
+        } else {
+            termStartEnd = nil
+        }
+
+        guard let (termStart, termEnd) = termStartEnd else { return nil }
+        if date < termStart || date > termEnd { return nil }
+
+        let targetWeekday = cal.component(.weekday, from: date) // Sun=1
+        if targetWeekday == 1 { return nil }
+
+        let firstHit = cal.nextDate(
+            after: termStart.addingTimeInterval(-1),
+            matching: DateComponents(weekday: targetWeekday),
+            matchingPolicy: .nextTime,
+            direction: .forward
+        ) ?? termStart
+
+        var count = 0
+        var cursor = firstHit
+        while cursor <= date {
+            if model.category(of: cursor, campus: campus) == .classDay { count += 1 }
+            guard let next = cal.date(byAdding: .day, value: 7, to: cursor) else { break }
+            cursor = next
+        }
+        return (count > 0) ? count : nil
+    }
+
 
     // MARK: - Bottom (Legend, Disclaimer, Ad)
     private func setupBottomArea() {
@@ -541,7 +558,8 @@ final class ClassDayCalendarViewController: UIViewController,
         cell.dayLabel.text = "\(comps.day!)"
 
         // 2026/4/1〜4/5 は非表示（3月カレンダー末尾に出る先取りセルを隠す）
-        cell.isHidden = (comps.year == 2026 && comps.month == 4 && (1...5).contains(comps.day ?? 0))
+        let dayMonthFirst = firstDay(of: date)
+        cell.isHidden = (dayMonthFirst > allowedEndMonth)
 
         let curMonth = cal.component(.month, from: currentMonth)
         let isCurrentMonth = (comps.month == curMonth)
@@ -563,7 +581,13 @@ final class ClassDayCalendarViewController: UIViewController,
         df.timeZone = tz
         df.dateFormat = "M月d日"
 
-        var msg: String = {
+        let msg: String = {
+            // ✅ 祝日なら「祝日名＋理由」を必ず明記
+            if let name = holidayName(for: date) {
+                return holidayNote(for: name, category: category)
+            }
+
+            // 祝日でない通常日
             switch category {
             case .classDay:      return "授業実施日です"
             case .sunday:        return "日曜日のため授業実施日ではありません"
@@ -571,28 +595,91 @@ final class ClassDayCalendarViewController: UIViewController,
             case .makeup:        return "補講日のため授業実施日ではありません"
             case .exam:          return "定期試験期間のため授業実施日ではありません"
             case .summerBreak, .winterBreak, .springBreak:
-                                  return "長期休業期間のため授業実施日ではありません"
+                return "長期休業期間のため授業実施日ではありません"
             }
         }()
 
-        if let name = holidayName(for: date) {
-            msg = "\(name)は" + msg   // 祝日名を文頭に
-        }
+        // ✅ 前期・後期どちらも第◯週を付ける（該当しない方は空文字）
+        let titleText = "\(df.string(from: date))\(springWeekSuffix(for: date))\(autumnWeekSuffix(for: date))"
 
-        // ← ここを拡張：後期の週番号サフィックスを付ける
-        let titleText = "\(df.string(from: date))\(autumnWeekSuffix(for: date))"
 
         let alert = UIAlertController(title: titleText, message: msg, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
 
+    private func autumnWeekNumber(for date: Date, campus: Campus) -> Int? {
+        // 2025後期 or 2026後期で期間を切り替え
+        let c = cal.dateComponents(in: tz, from: date)
+        guard let y = c.year else { return nil }
+
+        let termStartEnd: (Date, Date)?
+        if y == 2025 || (y == 2026 && c.month == 1) {
+            // 後期：2025-09-19 ～ 2026-01-26(前日まで想定)
+            guard
+                let s = cal.date(from: DateComponents(timeZone: tz, year: 2025, month: 9, day: 19)),
+                let e = cal.date(from: DateComponents(timeZone: tz, year: 2026, month: 1, day: 25))
+            else { return nil }
+            termStartEnd = (s, e)
+        } else if y == 2026 || (y == 2027 && c.month == 1) {
+            // 後期：2026-09-14 ～ 2027-01-25（PDFより：後期授業開始9/14、試験開始1/26）
+            guard
+                let s = cal.date(from: DateComponents(timeZone: tz, year: 2026, month: 9, day: 14)),
+                let e = cal.date(from: DateComponents(timeZone: tz, year: 2027, month: 1, day: 25))
+            else { return nil }
+            termStartEnd = (s, e)
+        } else {
+            termStartEnd = nil
+        }
+
+        guard let (termStart, termEnd) = termStartEnd else { return nil }
+
+        if date < termStart || date > termEnd { return nil }
+        let targetWeekday = cal.component(.weekday, from: date) // Sun=1
+        if targetWeekday == 1 { return nil }
+
+        let firstHit = cal.nextDate(
+            after: termStart.addingTimeInterval(-1),
+            matching: DateComponents(weekday: targetWeekday),
+            matchingPolicy: .nextTime,
+            direction: .forward
+        ) ?? termStart
+
+        var count = 0
+        var cursor = firstHit
+        while cursor <= date {
+            if model.category(of: cursor, campus: campus) == .classDay { count += 1 }
+            guard let next = cal.date(byAdding: .day, value: 7, to: cursor) else { break }
+            cursor = next
+        }
+        return (count > 0) ? count : nil
+    }
+
+    private func holidayNote(for name: String, category: DayCategory) -> String {
+        switch category {
+        case .classDay:
+            return "\(name)は授業実施日です"
+        case .kyuko:
+            return "\(name)のため休講日です"
+        case .sunday:
+            return "\(name)ですが日曜日です"
+        case .makeup:
+            return "\(name)ですが補講日です"
+        case .exam:
+            return "\(name)ですが定期試験期間です"
+        case .summerBreak, .winterBreak, .springBreak:
+            return "\(name)ですが長期休業期間です"
+        }
+    }
 
     // 指定の祝日（2025/4〜2026/3）：名前を返す
     private func holidayName(for date: Date) -> String? {
         let c = cal.dateComponents(in: tz, from: date)
         guard let y = c.year, let m = c.month, let d = c.day else { return nil }
+
         switch (y, m, d) {
+
+        // === 2025年度（既存） ===
         case (2025, 4, 29): return "昭和の日"
         case (2025, 5, 3):  return "憲法記念日"
         case (2025, 5, 4):  return "みどりの日"
@@ -602,14 +689,38 @@ final class ClassDayCalendarViewController: UIViewController,
         case (2025, 9, 15): return "敬老の日"
         case (2025, 9, 23): return "秋分の日"
         case (2025,10, 13): return "スポーツの日"
-        case (2025,11, 3): return "文化の日"
+        case (2025,11, 3):  return "文化の日"
         case (2025,11, 23): return "勤労感謝の日"
         case (2026, 1, 1):  return "元日"
         case (2026, 1, 12): return "成人の日"
         case (2026, 2, 11): return "建国記念の日"
         case (2026, 2, 23): return "天皇誕生日"
         case (2026, 3, 20): return "春分の日"
-        default: return nil
+
+        // === 2026年度（あなたが貼ってくれた一覧） ===
+        case (2026, 4, 29): return "昭和の日"
+        case (2026, 5, 3):  return "憲法記念日"
+        case (2026, 5, 4):  return "みどりの日"
+        case (2026, 5, 5):  return "こどもの日"
+        case (2026, 5, 6):  return "振替休日"
+        case (2026, 7, 20): return "海の日"
+        case (2026, 8, 11): return "山の日"
+        case (2026, 9, 21): return "敬老の日"
+        case (2026, 9, 22): return "国民の休日"
+        case (2026, 9, 23): return "秋分の日"
+        case (2026,10, 12): return "スポーツの日"
+        case (2026,11, 3):  return "文化の日"
+        case (2026,11, 23): return "勤労感謝の日"
+
+        case (2027, 1, 1):  return "元日"
+        case (2027, 1, 11): return "成人の日"
+        case (2027, 2, 11): return "建国記念の日"
+        case (2027, 2, 23): return "天皇誕生日"
+        case (2027, 3, 21): return "春分の日"
+        case (2027, 3, 22): return "振替休日"
+
+        default:
+            return nil
         }
     }
 }

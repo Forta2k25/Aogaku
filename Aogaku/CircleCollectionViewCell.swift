@@ -2,7 +2,7 @@
 //  CircleCollectionViewCell.swift
 //  AogakuHack
 //
-//  Card cell for 2-column grid (image + intensity pill + title)
+//  Card cell for grid (image + intensity pill + title)
 //
 
 import UIKit
@@ -48,6 +48,48 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         updateBookmarkUI(isBookmarked: false)
     }
 
+    // MARK: - Google Drive URL normalize
+
+    private func extractGoogleDriveFileId(from urlString: String) -> String? {
+        // open?id=xxxx / uc?export=...&id=xxxx / thumbnail?id=xxxx
+        if let comps = URLComponents(string: urlString),
+           let id = comps.queryItems?.first(where: { $0.name == "id" })?.value,
+           !id.isEmpty {
+            return id
+        }
+
+        // /file/d/xxxx/view
+        if let range = urlString.range(of: "/file/d/") {
+            let rest = urlString[range.upperBound...]
+            if let slash = rest.firstIndex(of: "/") {
+                let id = String(rest[..<slash])
+                return id.isEmpty ? nil : id
+            }
+        }
+
+        return nil
+    }
+
+    private func normalizedImageURLString(_ raw: String) -> String? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+
+        // 既に直リンクっぽいならそのまま
+        if s.contains("googleusercontent.com") { return s }
+
+        // Drive URLなら fileId を抜いて thumbnail にする（軽い＆表示されやすい）
+        if s.contains("drive.google.com"),
+           let id = extractGoogleDriveFileId(from: s) {
+            return "https://drive.google.com/thumbnail?id=\(id)&sz=w1200"
+            // もし thumbnail がダメな場合の代替：
+            // return "https://drive.google.com/uc?export=download&id=\(id)"
+        }
+
+        return s
+    }
+
+    // MARK: - Configure
+
     func configure(with item: CircleItem) {
         currentId = item.id
 
@@ -58,7 +100,10 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         // ✅ 表示は「今のIDの状態」を毎回ここで決める
         updateBookmarkUI(isBookmarked: BookmarkStore.shared.isBookmarked(id: item.id))
 
-        if let s = item.imageURL, let url = URL(string: s) {
+        // ✅ 画像ロード（Drive URLも正規化してから読む）
+        if let raw = item.imageURL,
+           let normalized = normalizedImageURLString(raw),
+           let url = URL(string: normalized) {
             loadImage(url: url)
         } else {
             imageView.image = placeholderImage()

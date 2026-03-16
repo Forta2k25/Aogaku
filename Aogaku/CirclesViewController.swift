@@ -94,6 +94,40 @@ final class CirclesViewController: UIViewController,
                                   UICollectionViewDelegateFlowLayout,
                                   UISearchBarDelegate {
 
+    // MARK: - Grid Columns（2列 / 3列）
+    private enum GridColumns: Int {
+        case two = 2
+        case three = 3
+
+        var iconName: String {
+            switch self {
+            case .two: return "square.grid.2x2"
+            case .three: return "square.grid.3x3"
+            }
+        }
+    }
+
+    private let gridColumnsKey = "circles_grid_columns"
+    private var gridBarButtonItem: UIBarButtonItem?
+
+    private var gridColumns: GridColumns = .three {
+        didSet {
+            UserDefaults.standard.set(gridColumns.rawValue, forKey: gridColumnsKey)
+            updateGridButtonIcon()
+            collectionView.collectionViewLayout.invalidateLayout()
+            collectionView.reloadData()
+        }
+    }
+
+    private func loadGridColumns() {
+        let saved = UserDefaults.standard.integer(forKey: gridColumnsKey)
+        if let v = GridColumns(rawValue: saved) {
+            gridColumns = v
+        } else {
+            gridColumns = .three
+        }
+    }
+
     // MARK: - Sort
     private enum SortOption: Equatable {
         case popularityDesc   // ビュー順（popularity）
@@ -203,7 +237,7 @@ final class CirclesViewController: UIViewController,
     private var visibleItems: [CircleItem] = []
     private var queryText: String = ""
 
-    // ✅ 右上ブックマーク（ナビバーはブクマだけ残す）
+    // ✅ 右上ブックマーク
     private var bookmarkBarButtonItem: UIBarButtonItem?
 
     // ✅ filters
@@ -215,7 +249,7 @@ final class CirclesViewController: UIViewController,
         view.backgroundColor = .systemGroupedBackground
 
         setupNavigationHeader()
-        setupBookmarkButton()      // ✅ ナビバー右はブクマのみ
+        setupRightBarButtons()     // ✅ 右上：ブクマ + グリッド切替
         setupFilterControl()       // ✅ row内の絞り込み
         setupUI()
 
@@ -229,6 +263,9 @@ final class CirclesViewController: UIViewController,
                                                selector: #selector(bookmarkChanged),
                                                name: .bookmarkDidChange,
                                                object: nil)
+
+        // ✅ 2列/3列 保存値の復元（デフォルト3列）
+        loadGridColumns()
 
         selectedCampus = "青山"
         setItems(CircleItem.mock(for: selectedCampus))
@@ -251,14 +288,58 @@ final class CirclesViewController: UIViewController,
         navigationItem.titleView = titleLabel
     }
 
-    private func setupBookmarkButton() {
-        let item = UIBarButtonItem(image: UIImage(systemName: "bookmark"),
+    private func setupRightBarButtons() {
+        let bookmark = UIBarButtonItem(image: UIImage(systemName: "bookmark"),
+                                       style: .plain,
+                                       target: self,
+                                       action: #selector(didTapBookmarks))
+        bookmark.tintColor = .label
+        bookmarkBarButtonItem = bookmark
+
+        let grid = UIBarButtonItem(image: UIImage(systemName: GridColumns.three.iconName),
                                    style: .plain,
                                    target: self,
-                                   action: #selector(didTapBookmarks))
-        item.tintColor = .label
-        bookmarkBarButtonItem = item
-        navigationItem.rightBarButtonItems = [item]
+                                   action: #selector(didTapGridButton))
+        grid.tintColor = .label
+        gridBarButtonItem = grid
+
+        // iOS14+ はメニューで切替（タップでメニュー開く）
+        if #available(iOS 14.0, *) {
+            let two = UIAction(title: "2列", image: UIImage(systemName: "square.grid.2x2")) { [weak self] _ in
+                self?.gridColumns = .two
+            }
+            let three = UIAction(title: "3列", image: UIImage(systemName: "square.grid.3x3")) { [weak self] _ in
+                self?.gridColumns = .three
+            }
+            grid.menu = UIMenu(title: "表示列数", children: [two, three])
+            // primaryAction は nil のままでOK（menu が優先される）
+        }
+
+        navigationItem.rightBarButtonItems = [bookmark, grid]
+        updateGridButtonIcon()
+    }
+
+    private func updateGridButtonIcon() {
+        gridBarButtonItem?.image = UIImage(systemName: gridColumns.iconName)
+    }
+
+    @objc private func didTapGridButton() {
+        // iOS14+ は menu が出るので何もしない（古いOSだけアクションシート）
+        if #available(iOS 14.0, *) { return }
+
+        let ac = UIAlertController(title: "表示列数", message: nil, preferredStyle: .actionSheet)
+        ac.addAction(UIAlertAction(title: "2列", style: .default) { [weak self] _ in
+            self?.gridColumns = .two
+        })
+        ac.addAction(UIAlertAction(title: "3列", style: .default) { [weak self] _ in
+            self?.gridColumns = .three
+        })
+        ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+
+        if let pop = ac.popoverPresentationController, let btn = gridBarButtonItem {
+            pop.barButtonItem = btn
+        }
+        present(ac, animated: true)
     }
 
     // ✅ 検索バー下の右側に置く絞り込み（バッジ付き）
@@ -266,7 +347,7 @@ final class CirclesViewController: UIViewController,
         filterButton.translatesAutoresizingMaskIntoConstraints = false
         filterButton.setImage(UIImage(systemName: "line.3.horizontal.decrease.circle"), for: .normal)
 
-        // ✅ ここ追加（文字を右側に）
+        // ✅ 文字を右側に
         filterButton.setTitle("絞り込み", for: .normal)
         filterButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
         filterButton.setTitleColor(.label, for: .normal)
@@ -295,7 +376,6 @@ final class CirclesViewController: UIViewController,
 
         refreshFilterBadge()
     }
-
 
     private func refreshFilterBadge() {
         let count = filters.activeCount
@@ -636,9 +716,20 @@ final class CirclesViewController: UIViewController,
     func collectionView(_ collectionView: UICollectionView,
                         layout collectionViewLayout: UICollectionViewLayout,
                         sizeForItemAt indexPath: IndexPath) -> CGSize {
-        let interItemSpacing: CGFloat = 16
-        let width = (collectionView.bounds.width - interItemSpacing) / 2
-        return CGSize(width: width, height: 180)
+
+        let columns = CGFloat(gridColumns.rawValue)
+        let layout = (collectionViewLayout as? UICollectionViewFlowLayout)
+
+        let interItemSpacing: CGFloat = layout?.minimumInteritemSpacing ?? 16
+
+        // collectionView は左右 16 で制約してるので、bounds.width の中で割ればOK
+        let totalSpacing = interItemSpacing * (columns - 1)
+        let width = floor((collectionView.bounds.width - totalSpacing) / columns)
+
+        // 既存の見た目を崩しにくい固定（2列=従来180）
+        let height: CGFloat = (gridColumns == .two) ? 180 : 170
+
+        return CGSize(width: width, height: height)
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

@@ -1,7 +1,6 @@
 import UIKit
 import FirebaseFirestore
 
-// ✅ フィルター状態
 struct CircleFilters: Equatable {
     var categories: Set<String> = []
     var targets: Set<String> = []
@@ -11,88 +10,12 @@ struct CircleFilters: Equatable {
     var moods: Set<String> = []
     var feeMin: Int? = nil
     var feeMax: Int? = nil
-
-    var isDefault: Bool {
-        categories.isEmpty &&
-        targets.isEmpty &&
-        weekdays.isEmpty &&
-        canDouble == nil &&
-        hasSelection == nil &&
-        moods.isEmpty &&
-        feeMin == nil &&
-        feeMax == nil
-    }
-
-    var activeCount: Int {
-        var c = 0
-        if !categories.isEmpty { c += 1 }
-        if !targets.isEmpty { c += 1 }
-        if !weekdays.isEmpty { c += 1 }
-        if canDouble != nil { c += 1 }
-        if hasSelection != nil { c += 1 }
-        if !moods.isEmpty { c += 1 }
-        if feeMin != nil || feeMax != nil { c += 1 }
-        return c
-    }
-
-    /// 表示用のパーツ
-    var summaryParts: [String] {
-        var parts: [String] = []
-
-        if !categories.isEmpty {
-            parts.append("カテゴリ:" + categories.sorted().joined(separator: "・"))
-        }
-        if !targets.isEmpty {
-            parts.append("対象:" + targets.sorted().joined(separator: "・"))
-        }
-        if !weekdays.isEmpty {
-            parts.append("曜日:" + weekdays.sorted().joined(separator: "・"))
-        }
-        if let v = canDouble {
-            parts.append(v ? "兼サー可" : "兼サー不可")
-        }
-        if let v = hasSelection {
-            parts.append(v ? "選考あり" : "選考なし")
-        }
-        if !moods.isEmpty {
-            parts.append("雰囲気:" + moods.sorted().joined(separator: "・"))
-        }
-
-        if feeMin != nil || feeMax != nil {
-            let minText = feeMin != nil ? "\(feeMin!)円" : ""
-            let maxText = feeMax != nil ? "\(feeMax!)円" : ""
-            let feeText: String
-            if feeMin != nil && feeMax != nil {
-                feeText = "費用:\(minText)〜\(maxText)"
-            } else if feeMin != nil {
-                feeText = "費用:\(minText)〜"
-            } else {
-                feeText = "費用:〜\(maxText)"
-            }
-            parts.append(feeText)
-        }
-
-        return parts
-    }
-
-    /// 1行表示用（長ければ "..."）
-    func summaryText(maxChars: Int = 18) -> String {
-        let parts = summaryParts
-        if parts.isEmpty { return "条件なし" }
-
-        let joined = parts.joined(separator: " / ")
-        if joined.count <= maxChars { return joined }
-
-        let cut = max(0, maxChars - 3) // "..." の分
-        let end = joined.index(joined.startIndex, offsetBy: min(cut, joined.count))
-        return String(joined[..<end]) + "..."
-    }
 }
 
 final class CirclesViewController: UIViewController,
-                                  UICollectionViewDataSource,
-                                  UICollectionViewDelegateFlowLayout,
-                                  UISearchBarDelegate {
+                                   UICollectionViewDataSource,
+                                   UICollectionViewDelegateFlowLayout,
+                                   UISearchBarDelegate {
 
     // MARK: - Grid Columns（2列 / 3列）
     private enum GridColumns: Int {
@@ -124,6 +47,7 @@ final class CirclesViewController: UIViewController,
             collectionView.reloadData()
         }
     }
+
     private var currentGridSpacing: CGFloat {
         gridColumns == .three ? 4 : 16
     }
@@ -139,18 +63,19 @@ final class CirclesViewController: UIViewController,
 
     // MARK: - Sort
     private enum SortOption: Equatable {
-        case popularityDesc   // ビュー順（popularity）
-        case membersDesc      // 人数の多い順
-        case membersAsc       // 人数の少ない順
+        case popularityDesc
+        case membersDesc
+        case membersAsc
 
         var title: String {
             switch self {
             case .popularityDesc: return "ビュー順"
-            case .membersDesc:    return "人数の多い順"
-            case .membersAsc:     return "人数の少ない順"
+            case .membersDesc:    return "人数順↓"
+            case .membersAsc:     return "人数順↑"
             }
         }
     }
+
     private var sortOption: SortOption = .popularityDesc
 
     // MARK: - UI
@@ -160,6 +85,8 @@ final class CirclesViewController: UIViewController,
         sc.translatesAutoresizingMaskIntoConstraints = false
         return sc
     }()
+
+    private let searchRow = UIView()
 
     private let searchBar: UISearchBar = {
         let sb = UISearchBar(frame: .zero)
@@ -172,51 +99,20 @@ final class CirclesViewController: UIViewController,
         return sb
     }()
 
-    // ✅ 検索バー下の行（左：条件要約、右：並び替え＋絞り込み）
-    private let belowSearchRow = UIView()
-
-    private let conditionLabel: UILabel = {
-        let lb = UILabel()
-        lb.translatesAutoresizingMaskIntoConstraints = false
-        lb.font = .systemFont(ofSize: 13, weight: .semibold)
-        lb.textColor = .secondaryLabel
-        lb.text = "条件なし"
-        lb.numberOfLines = 1
-        lb.lineBreakMode = .byClipping
-        return lb
-    }()
-
     private let sortButton: UIButton = {
         let btn = UIButton(type: .system)
         btn.translatesAutoresizingMaskIntoConstraints = false
         btn.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
         btn.tintColor = .label
         btn.setTitleColor(.label, for: .normal)
-        btn.contentHorizontalAlignment = .right
+        btn.contentHorizontalAlignment = .center
         btn.setImage(UIImage(systemName: "arrow.up.arrow.down"), for: .normal)
         btn.semanticContentAttribute = .forceLeftToRight
-        btn.imageEdgeInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 6)
+        btn.imageEdgeInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 4)
+        btn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        btn.layer.cornerRadius = 10
+        btn.backgroundColor = .secondarySystemGroupedBackground
         return btn
-    }()
-
-    // ✅ 絞り込みボタン（右側に配置）
-    private let filterButton = UIButton(type: .system)
-    private let filterBadgeLabel: UILabel = {
-        let lb = UILabel()
-        lb.translatesAutoresizingMaskIntoConstraints = false
-        lb.font = .systemFont(ofSize: 11, weight: .bold)
-        lb.textColor = .white
-        lb.backgroundColor = .systemRed
-        lb.textAlignment = .center
-        lb.layer.cornerRadius = 9
-        lb.clipsToBounds = true
-        lb.isHidden = true
-        return lb
-    }()
-    private let filterContainer: UIView = {
-        let v = UIView()
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
     }()
 
     private lazy var collectionView: UICollectionView = {
@@ -246,10 +142,7 @@ final class CirclesViewController: UIViewController,
     private var visibleItems: [CircleItem] = []
     private var queryText: String = ""
 
-    // ✅ 右上ブックマーク
     private var bookmarkBarButtonItem: UIBarButtonItem?
-
-    // ✅ filters
     private var filters = CircleFilters()
 
     // MARK: - Lifecycle
@@ -259,7 +152,6 @@ final class CirclesViewController: UIViewController,
 
         setupNavigationHeader()
         setupRightBarButtons()
-        setupFilterControl()
         setupUI()
 
         campusSegmentedControl.addTarget(self, action: #selector(campusChanged), for: .valueChanged)
@@ -311,8 +203,6 @@ final class CirclesViewController: UIViewController,
         grid.tintColor = .label
         gridBarButtonItem = grid
 
-        
-
         navigationItem.rightBarButtonItems = [bookmark, grid]
         updateGridButtonIcon()
     }
@@ -339,89 +229,41 @@ final class CirclesViewController: UIViewController,
         present(ac, animated: true)
     }
 
-    private func setupFilterControl() {
-        filterButton.translatesAutoresizingMaskIntoConstraints = false
-        filterButton.setImage(UIImage(systemName: "line.3.horizontal.decrease.circle"), for: .normal)
-        filterButton.setTitle("絞り込み", for: .normal)
-        filterButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
-        filterButton.setTitleColor(.label, for: .normal)
-        filterButton.tintColor = .label
-        filterButton.semanticContentAttribute = .forceLeftToRight
-        filterButton.contentHorizontalAlignment = .right
-        filterButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 6)
-
-        filterButton.addTarget(self, action: #selector(didTapFilter), for: .touchUpInside)
-
-        filterContainer.addSubview(filterButton)
-        filterContainer.addSubview(filterBadgeLabel)
-
-        NSLayoutConstraint.activate([
-            filterButton.trailingAnchor.constraint(equalTo: filterContainer.trailingAnchor),
-            filterButton.centerYAnchor.constraint(equalTo: filterContainer.centerYAnchor),
-            filterButton.heightAnchor.constraint(equalToConstant: 28),
-
-            filterBadgeLabel.topAnchor.constraint(equalTo: filterContainer.topAnchor, constant: -2),
-            filterBadgeLabel.trailingAnchor.constraint(equalTo: filterContainer.trailingAnchor, constant: 2),
-            filterBadgeLabel.heightAnchor.constraint(equalToConstant: 18),
-            filterBadgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
-        ])
-
-        refreshFilterBadge()
-    }
-
-    private func refreshFilterBadge() {
-        let count = filters.activeCount
-        if count <= 0 {
-            filterBadgeLabel.isHidden = true
-            filterBadgeLabel.text = nil
-        } else {
-            filterBadgeLabel.isHidden = false
-            filterBadgeLabel.text = "\(min(count, 99))"
-        }
-    }
-
-    private func refreshConditionLabel() {
-        conditionLabel.text = filters.summaryText(maxChars: 18)
-    }
-
     // MARK: - UI Setup
     private func setupUI() {
         view.addSubview(campusSegmentedControl)
-        view.addSubview(searchBar)
-        view.addSubview(belowSearchRow)
+        view.addSubview(searchRow)
         view.addSubview(collectionView)
 
-        belowSearchRow.translatesAutoresizingMaskIntoConstraints = false
-        belowSearchRow.addSubview(sortButton)
+        searchRow.translatesAutoresizingMaskIntoConstraints = false
+        searchRow.addSubview(searchBar)
+        searchRow.addSubview(sortButton)
 
         NSLayoutConstraint.activate([
             campusSegmentedControl.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             campusSegmentedControl.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             campusSegmentedControl.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
 
-            searchBar.topAnchor.constraint(equalTo: campusSegmentedControl.bottomAnchor, constant: 10),
-            searchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            searchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            searchRow.topAnchor.constraint(equalTo: campusSegmentedControl.bottomAnchor, constant: 10),
+            searchRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            searchRow.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            searchRow.heightAnchor.constraint(equalToConstant: 44),
 
-            belowSearchRow.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 2),
-            belowSearchRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            belowSearchRow.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            belowSearchRow.heightAnchor.constraint(equalToConstant: 28),
+            sortButton.trailingAnchor.constraint(equalTo: searchRow.trailingAnchor),
+            sortButton.centerYAnchor.constraint(equalTo: searchRow.centerYAnchor),
+            sortButton.widthAnchor.constraint(equalToConstant: 96),
+            sortButton.heightAnchor.constraint(equalToConstant: 36),
 
-            sortButton.centerYAnchor.constraint(equalTo: belowSearchRow.centerYAnchor),
-            sortButton.trailingAnchor.constraint(equalTo: belowSearchRow.trailingAnchor),
+            searchBar.leadingAnchor.constraint(equalTo: searchRow.leadingAnchor),
+            searchBar.topAnchor.constraint(equalTo: searchRow.topAnchor),
+            searchBar.bottomAnchor.constraint(equalTo: searchRow.bottomAnchor),
+            searchBar.trailingAnchor.constraint(equalTo: sortButton.leadingAnchor, constant: -8),
 
-            collectionView.topAnchor.constraint(equalTo: belowSearchRow.bottomAnchor, constant: 10),
+            collectionView.topAnchor.constraint(equalTo: searchRow.bottomAnchor, constant: 10),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             collectionView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
         ])
-
-        refreshConditionLabel()
-
-        let tap = UITapGestureRecognizer(target: self, action: #selector(didTapFilter))
-        filterContainer.isUserInteractionEnabled = true
-        filterContainer.addGestureRecognizer(tap)
     }
 
     // MARK: - Campus Matching
@@ -445,7 +287,6 @@ final class CirclesViewController: UIViewController,
 
         if hasAoyama && hasSagamihara { return "両キャンパス" }
 
-        // ✅ 指定以外の回答は両方に表示
         return "both"
     }
 
@@ -473,32 +314,6 @@ final class CirclesViewController: UIViewController,
         searchBar.resignFirstResponder()
 
         applyFilter()
-    }
-
-    @objc private func didTapFilter() {
-        let vc = CircleFilterViewController(current: filters)
-        vc.onApply = { [weak self] newFilters in
-            guard let self else { return }
-            self.filters = newFilters
-            self.refreshFilterBadge()
-            self.refreshConditionLabel()
-            self.applyFilter()
-        }
-        vc.onReset = { [weak self] in
-            guard let self else { return }
-            self.filters = CircleFilters()
-            self.refreshFilterBadge()
-            self.refreshConditionLabel()
-            self.applyFilter()
-        }
-
-        let nav = UINavigationController(rootViewController: vc)
-        nav.modalPresentationStyle = .pageSheet
-        if let sheet = nav.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
-        }
-        present(nav, animated: true)
     }
 
     @objc private func didTapBookmarks() {
@@ -617,13 +432,13 @@ final class CirclesViewController: UIViewController,
         let q = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         visibleItems = allItems.filter { item in
-            guard matchesSelectedCampus(_item: item) else { return false }
+            guard matchesSelectedCampus(item) else { return false }
 
             let matchesSearch: Bool = {
                 if q.isEmpty { return true }
                 return item.name.localizedCaseInsensitiveContains(q)
-                || item.intensity.localizedCaseInsensitiveContains(q)
-                || (item.category?.localizedCaseInsensitiveContains(q) ?? false)
+                    || item.intensity.localizedCaseInsensitiveContains(q)
+                    || (item.category?.localizedCaseInsensitiveContains(q) ?? false)
             }()
             guard matchesSearch else { return false }
 
@@ -641,46 +456,31 @@ final class CirclesViewController: UIViewController,
                 if s.isDisjoint(with: filters.weekdays) { return false }
             }
 
-            if let v = filters.canDouble {
-                if item.canDouble != v { return false }
+            if let v = filters.canDouble, item.canDouble != v {
+                return false
             }
 
-            if let v = filters.hasSelection {
-                if item.hasSelection != v { return false }
+            if let v = filters.hasSelection, item.hasSelection != v {
+                return false
             }
 
-            if !filters.moods.isEmpty {
-                if !filters.moods.contains(item.intensity) { return false }
+            if !filters.moods.isEmpty, !filters.moods.contains(item.intensity) {
+                return false
             }
 
             if let minV = filters.feeMin {
-                if let fee = item.annualFeeYen {
-                    if fee < minV { return false }
-                } else {
-                    return false
-                }
+                guard let fee = item.annualFeeYen, fee >= minV else { return false }
             }
+
             if let maxV = filters.feeMax {
-                if let fee = item.annualFeeYen {
-                    if fee > maxV { return false }
-                } else {
-                    return false
-                }
+                guard let fee = item.annualFeeYen, fee <= maxV else { return false }
             }
 
             return true
         }
 
         sortVisibleItems()
-        refreshConditionLabel()
-        refreshFilterBadge()
-
         collectionView.reloadData()
-    }
-
-    // ✅ 引数ラベル付きで書くと読みやすいのでラッパー化
-    private func matchesSelectedCampus(_item item: CircleItem) -> Bool {
-        return matchesSelectedCampus(item)
     }
 
     // MARK: - UISearchBarDelegate
@@ -702,7 +502,7 @@ final class CirclesViewController: UIViewController,
 
     // MARK: - UICollectionViewDataSource
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        return visibleItems.count
+        visibleItems.count
     }
 
     func collectionView(_ collectionView: UICollectionView,
@@ -746,13 +546,13 @@ final class CirclesViewController: UIViewController,
     func collectionView(_ collectionView: UICollectionView,
                         layout collectionViewLayout: UICollectionViewLayout,
                         minimumInteritemSpacingForSectionAt section: Int) -> CGFloat {
-        return currentGridSpacing
+        currentGridSpacing
     }
 
     func collectionView(_ collectionView: UICollectionView,
                         layout collectionViewLayout: UICollectionViewLayout,
                         minimumLineSpacingForSectionAt section: Int) -> CGFloat {
-        return currentGridSpacing
+        currentGridSpacing
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

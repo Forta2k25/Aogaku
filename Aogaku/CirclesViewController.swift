@@ -311,15 +311,7 @@ final class CirclesViewController: UIViewController,
         grid.tintColor = .label
         gridBarButtonItem = grid
 
-        if #available(iOS 14.0, *) {
-            let two = UIAction(title: "2列", image: UIImage(systemName: "square.grid.2x2")) { [weak self] _ in
-                self?.gridColumns = .two
-            }
-            let three = UIAction(title: "3列", image: UIImage(systemName: "square.grid.3x3")) { [weak self] _ in
-                self?.gridColumns = .three
-            }
-            grid.menu = UIMenu(title: "表示列数", children: [two, three])
-        }
+        
 
         navigationItem.rightBarButtonItems = [bookmark, grid]
         updateGridButtonIcon()
@@ -330,9 +322,8 @@ final class CirclesViewController: UIViewController,
     }
 
     @objc private func didTapGridButton() {
-        if #available(iOS 14.0, *) { return }
-
         let ac = UIAlertController(title: "表示列数", message: nil, preferredStyle: .actionSheet)
+
         ac.addAction(UIAlertAction(title: "2列", style: .default) { [weak self] _ in
             self?.gridColumns = .two
         })
@@ -344,6 +335,7 @@ final class CirclesViewController: UIViewController,
         if let pop = ac.popoverPresentationController, let btn = gridBarButtonItem {
             pop.barButtonItem = btn
         }
+
         present(ac, animated: true)
     }
 

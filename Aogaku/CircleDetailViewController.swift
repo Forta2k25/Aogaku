@@ -883,7 +883,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         feeTitleLabel.font = .systemFont(ofSize: 18, weight: .bold)
 
         feeRowAnnual = FeeRowView(leftText: "費用", bg: grayBG())
-        feeRowOther = FeeRowView(leftText: "その他費用", bg: grayBG())
+        feeRowOther = FeeRowView(leftText: "その他", bg: grayBG())
 
         feeSectionStack.translatesAutoresizingMaskIntoConstraints = false
         feeSectionStack.axis = .vertical

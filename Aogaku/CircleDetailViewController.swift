@@ -1097,11 +1097,18 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     @objc private func didTapHeaderImage(_ gesture: UITapGestureRecognizer) {
         guard let tappedView = gesture.view as? UIImageView else { return }
         let index = tappedView.tag
-        guard currentHeaderImages.indices.contains(index) else { return }
+
+        let validImages = currentHeaderImages.enumerated().compactMap { _, image -> UIImage? in
+            image.size.width > 0 && image.size.height > 0 ? image : nil
+        }
+
+        guard !validImages.isEmpty else { return }
+
+        let safeIndex = min(index, validImages.count - 1)
 
         let viewer = FullScreenImageViewController(
-            images: currentHeaderImages,
-            initialIndex: index
+            images: validImages,
+            initialIndex: safeIndex
         )
         viewer.modalPresentationStyle = .fullScreen
         present(viewer, animated: true)
@@ -1243,6 +1250,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 }
 
 final class FullScreenImageViewController: UIViewController, UIScrollViewDelegate {
+
     private let images: [UIImage]
     private let initialIndex: Int
 
@@ -1250,15 +1258,26 @@ final class FullScreenImageViewController: UIViewController, UIScrollViewDelegat
     private let closeButton = UIButton(type: .system)
     private let pageLabel = UILabel()
 
+    private var zoomScrollViews: [UIScrollView] = []
+    private var currentPageIndex: Int
+    private var hasAppliedInitialOffset = false
+    private var lastPagingBoundsSize: CGSize = .zero
+    private var pageContainers: [UIView] = []
+   
+
     init(images: [UIImage], initialIndex: Int) {
         self.images = images
         self.initialIndex = initialIndex
+        self.currentPageIndex = initialIndex
         super.init(nibName: nil, bundle: nil)
+        modalPresentationCapturesStatusBarAppearance = true
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+
+    override var prefersStatusBarHidden: Bool { true }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1267,6 +1286,9 @@ final class FullScreenImageViewController: UIViewController, UIScrollViewDelegat
         pagingScrollView.translatesAutoresizingMaskIntoConstraints = false
         pagingScrollView.isPagingEnabled = true
         pagingScrollView.showsHorizontalScrollIndicator = false
+        pagingScrollView.showsVerticalScrollIndicator = false
+        pagingScrollView.alwaysBounceVertical = false
+        pagingScrollView.alwaysBounceHorizontal = images.count > 1
         pagingScrollView.delegate = self
         view.addSubview(pagingScrollView)
 
@@ -1278,36 +1300,51 @@ final class FullScreenImageViewController: UIViewController, UIScrollViewDelegat
         ])
 
         for image in images {
-            let zoomScroll = UIScrollView()
-            zoomScroll.translatesAutoresizingMaskIntoConstraints = false
-            zoomScroll.minimumZoomScale = 1.0
-            zoomScroll.maximumZoomScale = 3.0
-            zoomScroll.delegate = self
-            zoomScroll.showsVerticalScrollIndicator = false
-            zoomScroll.showsHorizontalScrollIndicator = false
+            let pageContainer = UIView()
+            pageContainer.backgroundColor = .black
+            pagingScrollView.addSubview(pageContainer)
+            pageContainers.append(pageContainer)
+
+            let zoomScrollView = UIScrollView()
+            zoomScrollView.backgroundColor = .black
+            zoomScrollView.delegate = self
+            zoomScrollView.minimumZoomScale = 1.0
+            zoomScrollView.maximumZoomScale = 4.0
+            zoomScrollView.zoomScale = 1.0
+            zoomScrollView.showsHorizontalScrollIndicator = false
+            zoomScrollView.showsVerticalScrollIndicator = false
+            zoomScrollView.bouncesZoom = true
+            zoomScrollView.alwaysBounceVertical = false
+            zoomScrollView.alwaysBounceHorizontal = false
+            // 追加
+            
+            zoomScrollView.bounces = false
+            zoomScrollView.isScrollEnabled = false
+            zoomScrollView.panGestureRecognizer.isEnabled = false
+            //zoomScrollView.panGestureRecognizer.minimumNumberOfTouches = 2
+            
+            pageContainer.addSubview(zoomScrollView)
+            zoomScrollViews.append(zoomScrollView)
 
             let imageView = UIImageView(image: image)
-            imageView.translatesAutoresizingMaskIntoConstraints = false
             imageView.contentMode = .scaleAspectFit
+            imageView.backgroundColor = .black
+            imageView.clipsToBounds = true
+            imageView.tag = 999
+            zoomScrollView.addSubview(imageView)
 
-            zoomScroll.addSubview(imageView)
-            pagingScrollView.addSubview(zoomScroll)
-
-            NSLayoutConstraint.activate([
-                imageView.topAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.topAnchor),
-                imageView.bottomAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.bottomAnchor),
-                imageView.leadingAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.leadingAnchor),
-                imageView.trailingAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.trailingAnchor),
-                imageView.widthAnchor.constraint(equalTo: zoomScroll.frameLayoutGuide.widthAnchor),
-                imageView.heightAnchor.constraint(equalTo: zoomScroll.frameLayoutGuide.heightAnchor)
-            ])
+            let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+            doubleTap.numberOfTapsRequired = 2
+            imageView.isUserInteractionEnabled = true
+            imageView.addGestureRecognizer(doubleTap)
         }
 
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
         closeButton.tintColor = .white
         closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        closeButton.layer.cornerRadius = 20
+        closeButton.layer.cornerRadius = 24
+        closeButton.clipsToBounds = true
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         view.addSubview(closeButton)
 
@@ -1320,15 +1357,12 @@ final class FullScreenImageViewController: UIViewController, UIScrollViewDelegat
         NSLayoutConstraint.activate([
             closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
             closeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            closeButton.widthAnchor.constraint(equalToConstant: 40),
-            closeButton.heightAnchor.constraint(equalToConstant: 40),
+            closeButton.widthAnchor.constraint(equalToConstant: 48),
+            closeButton.heightAnchor.constraint(equalToConstant: 48),
 
             pageLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             pageLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20)
         ])
-
-        let tap = UITapGestureRecognizer(target: self, action: #selector(closeTapped))
-        view.addGestureRecognizer(tap)
     }
 
     override func viewDidLayoutSubviews() {
@@ -1336,34 +1370,152 @@ final class FullScreenImageViewController: UIViewController, UIScrollViewDelegat
 
         let pageWidth = pagingScrollView.bounds.width
         let pageHeight = pagingScrollView.bounds.height
+        let boundsSize = pagingScrollView.bounds.size
 
-        for (index, subview) in pagingScrollView.subviews.enumerated() {
-            subview.frame = CGRect(x: CGFloat(index) * pageWidth,
-                                   y: 0,
-                                   width: pageWidth,
-                                   height: pageHeight)
+        pagingScrollView.contentSize = CGSize(width: pageWidth * CGFloat(images.count), height: pageHeight)
+
+        for (index, pageContainer) in pageContainers.enumerated() {
+            pageContainer.frame = CGRect(
+                x: CGFloat(index) * pageWidth,
+                y: 0,
+                width: pageWidth,
+                height: pageHeight
+            )
+
+            let zoomScrollView = zoomScrollViews[index]
+            zoomScrollView.frame = pageContainer.bounds
+            zoomScrollView.contentInsetAdjustmentBehavior = .never
+
+            if let imageView = zoomScrollView.viewWithTag(999) as? UIImageView {
+                let image = images[index]
+                let fittedFrame = aspectFitFrame(for: image.size, in: zoomScrollView.bounds)
+
+                if zoomScrollView.zoomScale <= 1.01 {
+                    imageView.frame = fittedFrame
+                    zoomScrollView.contentSize = fittedFrame.size
+                    zoomScrollView.zoomScale = 1.0
+                    zoomScrollView.contentOffset = .zero
+                }
+
+                centerImageView(imageView, in: zoomScrollView)
+
+                let isZoomed = zoomScrollView.zoomScale > 1.01
+                zoomScrollView.isScrollEnabled = isZoomed
+                zoomScrollView.panGestureRecognizer.isEnabled = isZoomed
+            }
         }
 
-        pagingScrollView.contentSize = CGSize(width: pageWidth * CGFloat(images.count),
-                                              height: pageHeight)
-
-        let offsetX = CGFloat(initialIndex) * pageWidth
-        if pagingScrollView.contentOffset.x != offsetX {
-            pagingScrollView.setContentOffset(CGPoint(x: offsetX, y: 0), animated: false)
+        let shouldReposition = !hasAppliedInitialOffset || lastPagingBoundsSize != boundsSize
+        if shouldReposition {
+            let targetX = CGFloat(currentPageIndex) * pageWidth
+            pagingScrollView.setContentOffset(CGPoint(x: targetX, y: 0), animated: false)
+            hasAppliedInitialOffset = true
+            lastPagingBoundsSize = boundsSize
         }
 
         updatePageLabel()
     }
 
-    func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if scrollView == pagingScrollView {
-            updatePageLabel()
+    private func aspectFitFrame(for imageSize: CGSize, in bounds: CGRect) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0, bounds.width > 0, bounds.height > 0 else {
+            return bounds
         }
+
+        let scale = min(bounds.width / imageSize.width, bounds.height / imageSize.height)
+        let width = imageSize.width * scale
+        let height = imageSize.height * scale
+        let x = (bounds.width - width) / 2
+        let y = (bounds.height - height) / 2
+
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func centerImageView(_ imageView: UIImageView, in scrollView: UIScrollView) {
+        let boundsSize = scrollView.bounds.size
+        var frameToCenter = imageView.frame
+
+        frameToCenter.origin.x = frameToCenter.width < boundsSize.width
+            ? (boundsSize.width - frameToCenter.width) / 2
+            : 0
+
+        frameToCenter.origin.y = frameToCenter.height < boundsSize.height
+            ? (boundsSize.height - frameToCenter.height) / 2
+            : 0
+
+        imageView.frame = frameToCenter
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-        if scrollView == pagingScrollView { return nil }
-        return scrollView.subviews.first
+        guard scrollView != pagingScrollView else { return nil }
+        return scrollView.viewWithTag(999)
+    }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        guard scrollView != pagingScrollView,
+              let imageView = scrollView.viewWithTag(999) as? UIImageView else { return }
+
+        centerImageView(imageView, in: scrollView)
+
+        let isZoomed = scrollView.zoomScale > 1.01
+        scrollView.isScrollEnabled = isZoomed
+        scrollView.panGestureRecognizer.isEnabled = isZoomed
+        pagingScrollView.isScrollEnabled = !isZoomed
+    }
+
+    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
+        guard scrollView != pagingScrollView else { return }
+        pagingScrollView.isScrollEnabled = false
+    }
+
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+        guard scrollView != pagingScrollView else { return }
+
+        let isZoomed = scale > 1.01
+        scrollView.isScrollEnabled = isZoomed
+        scrollView.panGestureRecognizer.isEnabled = isZoomed
+        pagingScrollView.isScrollEnabled = !isZoomed
+
+        if !isZoomed,
+           let imageView = scrollView.viewWithTag(999) as? UIImageView,
+           let pageIndex = zoomScrollViews.firstIndex(where: { $0 == scrollView }) {
+            let image = images[pageIndex]
+            let fittedFrame = aspectFitFrame(for: image.size, in: scrollView.bounds)
+            imageView.frame = fittedFrame
+            scrollView.contentSize = fittedFrame.size
+            scrollView.contentOffset = .zero
+            centerImageView(imageView, in: scrollView)
+        }
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView == pagingScrollView else { return }
+        updatePageLabel()
+    }
+    
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        guard scrollView == pagingScrollView else { return }
+        syncCurrentPageIndex()
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        guard scrollView == pagingScrollView else { return }
+        if !decelerate {
+            syncCurrentPageIndex()
+        }
+    }
+
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        guard scrollView == pagingScrollView else { return }
+        syncCurrentPageIndex()
+    }
+
+    private func syncCurrentPageIndex() {
+        let width = max(pagingScrollView.bounds.width, 1)
+        currentPageIndex = min(
+            max(Int((pagingScrollView.contentOffset.x + width / 2) / width), 0),
+            images.count - 1
+        )
+        updatePageLabel()
     }
 
     private func updatePageLabel() {
@@ -1374,6 +1526,30 @@ final class FullScreenImageViewController: UIViewController, UIScrollViewDelegat
 
     @objc private func closeTapped() {
         dismiss(animated: true)
+    }
+
+    @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard let imageView = gesture.view as? UIImageView,
+              let zoomScrollView = imageView.superview as? UIScrollView else { return }
+
+        if zoomScrollView.zoomScale > 1.01 {
+            zoomScrollView.setZoomScale(1.0, animated: true)
+            zoomScrollView.isScrollEnabled = false
+            zoomScrollView.panGestureRecognizer.isEnabled = false
+            pagingScrollView.isScrollEnabled = true
+            return
+        }
+
+        let tapPoint = gesture.location(in: imageView)
+        let targetZoomScale = min(zoomScrollView.maximumZoomScale, 3.0)
+
+        let width = zoomScrollView.bounds.width / targetZoomScale
+        let height = zoomScrollView.bounds.height / targetZoomScale
+        let originX = tapPoint.x - (width / 2)
+        let originY = tapPoint.y - (height / 2)
+
+        let zoomRect = CGRect(x: originX, y: originY, width: width, height: height)
+        zoomScrollView.zoom(to: zoomRect, animated: true)
     }
 }
 

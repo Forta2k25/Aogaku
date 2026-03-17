@@ -267,6 +267,7 @@ fileprivate final class InfoCardView: UIView {
 fileprivate final class FeeRowView: UIView {
     private let leftLabel = UILabel()
     private let centerLabel = UILabel()
+    private var minHeightConstraint: NSLayoutConstraint!
 
     init(leftText: String, bg: UIColor) {
         super.init(frame: .zero)
@@ -280,33 +281,42 @@ fileprivate final class FeeRowView: UIView {
         leftLabel.text = leftText
         leftLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         leftLabel.textColor = .secondaryLabel
+        leftLabel.numberOfLines = 1
+        leftLabel.setContentHuggingPriority(.required, for: .horizontal)
+        leftLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         centerLabel.translatesAutoresizingMaskIntoConstraints = false
         centerLabel.text = "—"
-        // ✅ 文字を小さく
         centerLabel.font = .systemFont(ofSize: 16, weight: .bold)
-        centerLabel.textAlignment = .center
+        centerLabel.textAlignment = .left
         centerLabel.textColor = UIColor { trait in
             if trait.userInterfaceStyle == .dark { return .label }
             return UIColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 1)
         }
-        centerLabel.numberOfLines = 1
-        centerLabel.adjustsFontSizeToFitWidth = true
-        centerLabel.minimumScaleFactor = 0.8
+
+        // ✅ 長文を複数行で全部表示
+        centerLabel.numberOfLines = 0
+        centerLabel.lineBreakMode = .byWordWrapping
+        centerLabel.adjustsFontSizeToFitWidth = false
+        centerLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        centerLabel.setContentHuggingPriority(.defaultHigh, for: .vertical)
 
         addSubview(leftLabel)
         addSubview(centerLabel)
 
+        minHeightConstraint = heightAnchor.constraint(greaterThanOrEqualToConstant: 52)
+
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 52), // ✅ 背景を縦に短く
+            minHeightConstraint,
 
             leftLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            leftLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            leftLabel.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            leftLabel.widthAnchor.constraint(equalToConstant: 84),
 
-            centerLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            centerLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            centerLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leftLabel.trailingAnchor, constant: 10),
-            centerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16)
+            centerLabel.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            centerLabel.leadingAnchor.constraint(equalTo: leftLabel.trailingAnchor, constant: 12),
+            centerLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            centerLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14)
         ])
     }
 

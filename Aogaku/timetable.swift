@@ -374,8 +374,50 @@ final class timetable: UIViewController,
     private let topRatio: CGFloat = 0.02
 
     // 現在学期
-    private var currentTerm: TermKey = TermStore.loadSelected()
+    private var currentTerm: TermKey = timetable.loadInitialTerm()
     
+    private static let selectedTermYearKey = "timetable.selectedTerm.year"
+    private static let selectedTermSemesterKey = "timetable.selectedTerm.semester"
+    private static let hasLaunchedTermKey = "timetable.hasLaunchedTerm"
+
+    private static func loadInitialTerm() -> TermKey {
+        let defaults = UserDefaults.standard
+
+        // 以前保存した学期があればそれを優先
+        if defaults.bool(forKey: hasLaunchedTermKey),
+           let semesterRaw = defaults.string(forKey: selectedTermSemesterKey) {
+            let year = defaults.integer(forKey: selectedTermYearKey)
+            if let semester = Semester(rawValue: semesterRaw), year > 0 {
+                return TermKey(year: year, semester: semester)
+            }
+        }
+
+        // 初回だけ 2026年前期
+        let initialSemester =
+            Semester.allCases.first(where: { $0.display.contains("前期") })
+            ?? Semester.allCases.first!
+
+        let initial = TermKey(year: 2026, semester: initialSemester)
+
+        defaults.set(true, forKey: hasLaunchedTermKey)
+        defaults.set(initial.year, forKey: selectedTermYearKey)
+        defaults.set(initial.semester.rawValue, forKey: selectedTermSemesterKey)
+
+        // 既存の TermStore にも合わせて保存
+        TermStore.saveSelected(initial)
+
+        return initial
+    }
+
+    private func persistSelectedTerm() {
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: Self.hasLaunchedTermKey)
+        defaults.set(currentTerm.year, forKey: Self.selectedTermYearKey)
+        defaults.set(currentTerm.semester.rawValue, forKey: Self.selectedTermSemesterKey)
+
+        // 既存処理も維持
+        TermStore.saveSelected(currentTerm)
+    }
     // === 背景テーマ ===
     private enum TTBackground: String { case system, lightGray, white }
     
@@ -806,7 +848,7 @@ private func placeOnlineRow() {
         do {
             let data = try JSONEncoder().encode(assigned)
             UserDefaults.standard.set(data, forKey: currentTerm.storageKey)
-            TermStore.saveSelected(currentTerm)
+            persistSelectedTerm()
         } catch { print("Save error:", error) }
         
         // === 共有（App Group）へミラー ===

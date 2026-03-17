@@ -416,6 +416,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     private let scrollView = UIScrollView()
     private let contentView = UIView()
     private var didIncrementPopularity = false
+    
+    private var currentHeaderImages: [UIImage] = []
+    private var currentHeaderImageURLs: [String] = []
 
     // Header
     private let headerScrollView: UIScrollView = {
@@ -755,15 +758,15 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         cardSize = InfoCardView(title: "人数", value: nil,
                                 style: .outlined(border: border),
                                 minHeight: 88,
-                                valueFont: .systemFont(ofSize: 16, weight: .bold),
-                                valueNumberOfLines: 1,
-                                shrinkToFit: true,
+                                valueFont: .systemFont(ofSize: 14, weight: .bold),
+                                valueNumberOfLines: 0,
+                                shrinkToFit: false,
                                 centerValue: true)
 
         cardGender = InfoCardView(title: "男女比", value: nil,
                                   style: .outlined(border: border),
                                   minHeight: 88,
-                                  valueFont: .systemFont(ofSize: 16, weight: .bold),
+                                  valueFont: .systemFont(ofSize: 14, weight: .bold),
                                   valueNumberOfLines: 1,
                                   shrinkToFit: true,
                                   centerValue: true)
@@ -771,13 +774,14 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         cardGrade = InfoCardView(title: "学年", value: nil,
                                  style: .outlined(border: border),
                                  minHeight: 88,
-                                 valueFont: .systemFont(ofSize: 16, weight: .bold),
+                                 valueFont: .systemFont(ofSize: 14, weight: .bold),
                                  valueNumberOfLines: 1,
                                  shrinkToFit: true,
                                  centerValue: true)
 
         memberRow.axis = .horizontal
         memberRow.spacing = 14
+        memberRow.alignment = .fill
         memberRow.distribution = .fillEqually
         memberRow.translatesAutoresizingMaskIntoConstraints = false
         memberRow.addArrangedSubview(cardSize)
@@ -902,6 +906,11 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
         iv.backgroundColor = .tertiarySystemFill
+        iv.isUserInteractionEnabled = true
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(didTapHeaderImage(_:)))
+        iv.addGestureRecognizer(tap)
+
         return iv
     }
 
@@ -911,15 +920,21 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             v.removeFromSuperview()
         }
 
+        currentHeaderImages = []
+        currentHeaderImageURLs = []
+
         let valid = urls.filter { !$0.isEmpty }
         pageControl.numberOfPages = max(valid.count, 1)
         pageControl.currentPage = 0
 
         let useURLs = valid.isEmpty ? [detail?.fallbackImageURL].compactMap { $0 } : valid
         let finalURLs = useURLs.isEmpty ? [""] : useURLs
+        currentHeaderImageURLs = finalURLs
 
-        for url in finalURLs {
+        for (index, url) in finalURLs.enumerated() {
             let iv = makeHeaderImageView()
+            iv.tag = index
+
             headerImagesStack.addArrangedSubview(iv)
             NSLayoutConstraint.activate([
                 iv.widthAnchor.constraint(equalTo: headerScrollView.frameLayoutGuide.widthAnchor),
@@ -927,11 +942,32 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             ])
 
             if !url.isEmpty {
-                loadImage(from: url, into: iv)
+                loadImage(from: url, into: iv) { [weak self] image in
+                    guard let self = self else { return }
+
+                    if self.currentHeaderImages.count <= index {
+                        self.currentHeaderImages += Array(
+                            repeating: UIImage(),
+                            count: index - self.currentHeaderImages.count + 1
+                        )
+                    }
+                    self.currentHeaderImages[index] = image
+                }
             } else {
-                iv.image = UIImage(systemName: "photo")
+                let placeholder = UIImage(systemName: "photo")
+                iv.image = placeholder
                 iv.tintColor = .secondaryLabel
                 iv.contentMode = .scaleAspectFit
+
+                if let placeholder {
+                    if currentHeaderImages.count <= index {
+                        currentHeaderImages += Array(
+                            repeating: UIImage(),
+                            count: index - currentHeaderImages.count + 1
+                        )
+                    }
+                    currentHeaderImages[index] = placeholder
+                }
             }
         }
     }
@@ -1057,6 +1093,19 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     }
 
     // MARK: - Image
+    
+    @objc private func didTapHeaderImage(_ gesture: UITapGestureRecognizer) {
+        guard let tappedView = gesture.view as? UIImageView else { return }
+        let index = tappedView.tag
+        guard currentHeaderImages.indices.contains(index) else { return }
+
+        let viewer = FullScreenImageViewController(
+            images: currentHeaderImages,
+            initialIndex: index
+        )
+        viewer.modalPresentationStyle = .fullScreen
+        present(viewer, animated: true)
+    }
 
     // ✅ 追加：Drive fileId 抽出
     private func extractGoogleDriveFileId(from urlString: String) -> String? {
@@ -1095,7 +1144,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     }
 
     // ✅ 置換：正規化してからロード + 失敗原因ログ
-    private func loadImage(from urlString: String, into imageView: UIImageView) {
+    private func loadImage(from urlString: String,
+                           into imageView: UIImageView,
+                           completion: ((UIImage) -> Void)? = nil) {
         guard let normalized = normalizedImageURLString(urlString),
               let url = URL(string: normalized) else { return }
 
@@ -1121,6 +1172,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             DispatchQueue.main.async {
                 imageView.image = img
                 imageView.contentMode = .scaleAspectFill
+                completion?(img)
             }
         }.resume()
     }
@@ -1187,6 +1239,141 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         guard let d = detail else { return }
         let isSaved = BookmarkManager.shared.isBookmarked(circleId: d.id)
         bookmarkButton.setImage(UIImage(systemName: isSaved ? "bookmark.fill" : "bookmark"), for: .normal)
+    }
+}
+
+final class FullScreenImageViewController: UIViewController, UIScrollViewDelegate {
+    private let images: [UIImage]
+    private let initialIndex: Int
+
+    private let pagingScrollView = UIScrollView()
+    private let closeButton = UIButton(type: .system)
+    private let pageLabel = UILabel()
+
+    init(images: [UIImage], initialIndex: Int) {
+        self.images = images
+        self.initialIndex = initialIndex
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        pagingScrollView.translatesAutoresizingMaskIntoConstraints = false
+        pagingScrollView.isPagingEnabled = true
+        pagingScrollView.showsHorizontalScrollIndicator = false
+        pagingScrollView.delegate = self
+        view.addSubview(pagingScrollView)
+
+        NSLayoutConstraint.activate([
+            pagingScrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            pagingScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            pagingScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            pagingScrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        for image in images {
+            let zoomScroll = UIScrollView()
+            zoomScroll.translatesAutoresizingMaskIntoConstraints = false
+            zoomScroll.minimumZoomScale = 1.0
+            zoomScroll.maximumZoomScale = 3.0
+            zoomScroll.delegate = self
+            zoomScroll.showsVerticalScrollIndicator = false
+            zoomScroll.showsHorizontalScrollIndicator = false
+
+            let imageView = UIImageView(image: image)
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            imageView.contentMode = .scaleAspectFit
+
+            zoomScroll.addSubview(imageView)
+            pagingScrollView.addSubview(zoomScroll)
+
+            NSLayoutConstraint.activate([
+                imageView.topAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.topAnchor),
+                imageView.bottomAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.bottomAnchor),
+                imageView.leadingAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.leadingAnchor),
+                imageView.trailingAnchor.constraint(equalTo: zoomScroll.contentLayoutGuide.trailingAnchor),
+                imageView.widthAnchor.constraint(equalTo: zoomScroll.frameLayoutGuide.widthAnchor),
+                imageView.heightAnchor.constraint(equalTo: zoomScroll.frameLayoutGuide.heightAnchor)
+            ])
+        }
+
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
+        closeButton.tintColor = .white
+        closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        closeButton.layer.cornerRadius = 20
+        closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        view.addSubview(closeButton)
+
+        pageLabel.translatesAutoresizingMaskIntoConstraints = false
+        pageLabel.textColor = .white
+        pageLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        pageLabel.textAlignment = .center
+        view.addSubview(pageLabel)
+
+        NSLayoutConstraint.activate([
+            closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            closeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            closeButton.widthAnchor.constraint(equalToConstant: 40),
+            closeButton.heightAnchor.constraint(equalToConstant: 40),
+
+            pageLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            pageLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20)
+        ])
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(closeTapped))
+        view.addGestureRecognizer(tap)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+
+        let pageWidth = pagingScrollView.bounds.width
+        let pageHeight = pagingScrollView.bounds.height
+
+        for (index, subview) in pagingScrollView.subviews.enumerated() {
+            subview.frame = CGRect(x: CGFloat(index) * pageWidth,
+                                   y: 0,
+                                   width: pageWidth,
+                                   height: pageHeight)
+        }
+
+        pagingScrollView.contentSize = CGSize(width: pageWidth * CGFloat(images.count),
+                                              height: pageHeight)
+
+        let offsetX = CGFloat(initialIndex) * pageWidth
+        if pagingScrollView.contentOffset.x != offsetX {
+            pagingScrollView.setContentOffset(CGPoint(x: offsetX, y: 0), animated: false)
+        }
+
+        updatePageLabel()
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if scrollView == pagingScrollView {
+            updatePageLabel()
+        }
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+        if scrollView == pagingScrollView { return nil }
+        return scrollView.subviews.first
+    }
+
+    private func updatePageLabel() {
+        let width = max(pagingScrollView.bounds.width, 1)
+        let page = Int((pagingScrollView.contentOffset.x + width / 2) / width) + 1
+        pageLabel.text = "\(min(max(page, 1), images.count)) / \(images.count)"
+    }
+
+    @objc private func closeTapped() {
+        dismiss(animated: true)
     }
 }
 

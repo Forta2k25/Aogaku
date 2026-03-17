@@ -409,9 +409,9 @@ final class CirclesViewController: UIViewController,
         view.addSubview(collectionView)
 
         belowSearchRow.translatesAutoresizingMaskIntoConstraints = false
-        belowSearchRow.addSubview(conditionLabel)
+        //belowSearchRow.addSubview(conditionLabel)
         belowSearchRow.addSubview(sortButton)
-        belowSearchRow.addSubview(filterContainer)
+        //belowSearchRow.addSubview(filterContainer)
 
         NSLayoutConstraint.activate([
             campusSegmentedControl.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
@@ -428,21 +428,21 @@ final class CirclesViewController: UIViewController,
             belowSearchRow.heightAnchor.constraint(equalToConstant: 28),
 
             // 左：条件
-            conditionLabel.centerYAnchor.constraint(equalTo: belowSearchRow.centerYAnchor),
-            conditionLabel.leadingAnchor.constraint(equalTo: belowSearchRow.leadingAnchor),
+            //conditionLabel.centerYAnchor.constraint(equalTo: belowSearchRow.centerYAnchor),
+            //conditionLabel.leadingAnchor.constraint(equalTo: belowSearchRow.leadingAnchor),
 
             // 右端：絞り込み（✅ 並び替えの右側）
-            filterContainer.centerYAnchor.constraint(equalTo: belowSearchRow.centerYAnchor),
-            filterContainer.trailingAnchor.constraint(equalTo: belowSearchRow.trailingAnchor),
-            filterContainer.widthAnchor.constraint(equalToConstant: 80),
-            filterContainer.heightAnchor.constraint(equalToConstant: 32),
+            //filterContainer.centerYAnchor.constraint(equalTo: belowSearchRow.centerYAnchor),
+            //filterContainer.trailingAnchor.constraint(equalTo: belowSearchRow.trailingAnchor),
+            //filterContainer.widthAnchor.constraint(equalToConstant: 80),
+            //filterContainer.heightAnchor.constraint(equalToConstant: 32),
 
             // 右：並び替え（絞り込みの左）
             sortButton.centerYAnchor.constraint(equalTo: belowSearchRow.centerYAnchor),
-            sortButton.trailingAnchor.constraint(equalTo: filterContainer.leadingAnchor, constant: -10),
-
+            sortButton.trailingAnchor.constraint(equalTo: belowSearchRow.trailingAnchor),
+            
             // 条件は並び替えの左まで
-            conditionLabel.trailingAnchor.constraint(lessThanOrEqualTo: sortButton.leadingAnchor, constant: -10),
+            //conditionLabel.trailingAnchor.constraint(lessThanOrEqualTo: sortButton.leadingAnchor, constant: -10),
 
             collectionView.topAnchor.constraint(equalTo: belowSearchRow.bottomAnchor, constant: 10),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),

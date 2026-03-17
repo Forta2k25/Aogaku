@@ -40,12 +40,18 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         imageTask = nil
         imageView.image = nil
         intensityLabel.text = nil
+        intensityLabel.isHidden = true
         titleLabel.text = nil
         currentId = nil
         onTapBookmark = nil
 
         // ✅ 再利用時に見た目が残らないように初期化
         updateBookmarkUI(isBookmarked: false)
+    }
+    
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        applyTitleFont()
     }
 
     // MARK: - Google Drive URL normalize
@@ -68,6 +74,15 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         }
 
         return nil
+    }
+    private func applyTitleFont() {
+        let isThreeColumn = bounds.width < 150
+
+        if isThreeColumn {
+            titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        } else {
+            titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        }
     }
 
     private func normalizedImageURLString(_ raw: String) -> String? {
@@ -94,8 +109,10 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         currentId = item.id
 
         titleLabel.text = item.name
-        intensityLabel.text = item.intensity
-        intensityLabel.backgroundColor = intensityColor(item.intensity)
+        applyTitleFont()
+        //intensityLabel.text = item.intensity
+        //intensityLabel.backgroundColor = intensityColor(item.intensity)
+        intensityLabel.isHidden = true
 
         // ✅ 表示は「今のIDの状態」を毎回ここで決める
         updateBookmarkUI(isBookmarked: BookmarkStore.shared.isBookmarked(id: item.id))
@@ -142,10 +159,11 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         intensityLabel.layer.masksToBounds = true
 
         // title
-        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
         titleLabel.textColor = .label
-        titleLabel.numberOfLines = 2
-
+        titleLabel.numberOfLines = 3
+        applyTitleFont()
+        
+        
         // ✅ bookmark button
         bookmarkButton.translatesAutoresizingMaskIntoConstraints = false
         bookmarkButton.layer.cornerRadius = 10
@@ -156,12 +174,13 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         bookmarkButton.addTarget(self, action: #selector(didTapBookmark), for: .touchUpInside)
 
         cardView.addSubview(imageView)
-        cardView.addSubview(intensityLabel)
+        //cardView.addSubview(intensityLabel)
+        
         cardView.addSubview(titleLabel)
         cardView.addSubview(bookmarkButton)
 
         imageView.translatesAutoresizingMaskIntoConstraints = false
-        intensityLabel.translatesAutoresizingMaskIntoConstraints = false
+        //intensityLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
@@ -175,8 +194,8 @@ final class CircleCollectionViewCell: UICollectionViewCell {
             imageView.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
             imageView.heightAnchor.constraint(equalToConstant: 120),
 
-            intensityLabel.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),
-            intensityLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 8),
+            //intensityLabel.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),
+            //intensityLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 8),
 
             // ✅ 右上ブクマ
             bookmarkButton.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),

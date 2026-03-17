@@ -114,9 +114,18 @@ final class CirclesViewController: UIViewController,
         didSet {
             UserDefaults.standard.set(gridColumns.rawValue, forKey: gridColumnsKey)
             updateGridButtonIcon()
+
+            if let layout = collectionView.collectionViewLayout as? UICollectionViewFlowLayout {
+                layout.minimumInteritemSpacing = currentGridSpacing
+                layout.minimumLineSpacing = currentGridSpacing
+            }
+
             collectionView.collectionViewLayout.invalidateLayout()
             collectionView.reloadData()
         }
+    }
+    private var currentGridSpacing: CGFloat {
+        gridColumns == .three ? 4 : 16
     }
 
     private func loadGridColumns() {
@@ -213,8 +222,8 @@ final class CirclesViewController: UIViewController,
     private lazy var collectionView: UICollectionView = {
         let layout = UICollectionViewFlowLayout()
         layout.scrollDirection = .vertical
-        layout.minimumInteritemSpacing = 16
-        layout.minimumLineSpacing = 16
+        layout.minimumInteritemSpacing = currentGridSpacing
+        layout.minimumLineSpacing = currentGridSpacing
 
         let cv = UICollectionView(frame: .zero, collectionViewLayout: layout)
         cv.backgroundColor = .clear
@@ -720,7 +729,7 @@ final class CirclesViewController: UIViewController,
         let columns = CGFloat(gridColumns.rawValue)
         let layout = (collectionViewLayout as? UICollectionViewFlowLayout)
 
-        let interItemSpacing: CGFloat = layout?.minimumInteritemSpacing ?? 16
+        let interItemSpacing: CGFloat = currentGridSpacing
 
         // collectionView は左右 16 で制約してるので、bounds.width の中で割ればOK
         let totalSpacing = interItemSpacing * (columns - 1)
@@ -730,6 +739,18 @@ final class CirclesViewController: UIViewController,
         let height: CGFloat = (gridColumns == .two) ? 180 : 170
 
         return CGSize(width: width, height: height)
+    }
+    
+    func collectionView(_ collectionView: UICollectionView,
+                        layout collectionViewLayout: UICollectionViewLayout,
+                        minimumInteritemSpacingForSectionAt section: Int) -> CGFloat {
+        return currentGridSpacing
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        layout collectionViewLayout: UICollectionViewLayout,
+                        minimumLineSpacingForSectionAt section: Int) -> CGFloat {
+        return currentGridSpacing
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

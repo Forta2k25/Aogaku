@@ -124,14 +124,20 @@ fileprivate final class InfoCardView: UIView {
     private let titleLabel = UILabel()
     private let valueLabel = UILabel()
 
+    private let minHeight: CGFloat
+    private let centerValue: Bool
+
     init(title: String,
          value: String?,
          style: Style,
-         fixedHeight: CGFloat,
+         minHeight: CGFloat = 62,
          valueFont: UIFont,
          valueNumberOfLines: Int,
          shrinkToFit: Bool,
          centerValue: Bool) {
+
+        self.minHeight = minHeight
+        self.centerValue = centerValue
 
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -155,27 +161,45 @@ fileprivate final class InfoCardView: UIView {
         titleLabel.text = title
         titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         titleLabel.textColor = .secondaryLabel
+        titleLabel.numberOfLines = 1
 
-        valueLabel.text = (value?.isEmpty == false) ? value : "—"
+        valueLabel.text = normalizedText(value)
         valueLabel.font = valueFont
         valueLabel.numberOfLines = valueNumberOfLines
         valueLabel.textColor = UIColor { trait in
             if trait.userInterfaceStyle == .dark { return .label }
-            return UIColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 1) // #333333
+            return UIColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 1)
         }
-        valueLabel.lineBreakMode = .byTruncatingTail
+        valueLabel.lineBreakMode = .byWordWrapping
+        
+        titleLabel.setContentHuggingPriority(.required, for: .vertical)
+        titleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
-        if shrinkToFit {
+        valueLabel.setContentHuggingPriority(.defaultLow, for: .vertical)
+        valueLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        if centerValue {
+            valueLabel.textAlignment = .center
+        } else {
+            valueLabel.textAlignment = .left
+        }
+
+        if shrinkToFit, valueNumberOfLines == 1 {
             valueLabel.adjustsFontSizeToFitWidth = true
             valueLabel.minimumScaleFactor = 0.75
             valueLabel.baselineAdjustment = .alignCenters
+        } else {
+            valueLabel.adjustsFontSizeToFitWidth = false
         }
 
         addSubview(titleLabel)
         addSubview(valueLabel)
 
+        let minHeightConstraint = heightAnchor.constraint(greaterThanOrEqualToConstant: minHeight)
+        minHeightConstraint.priority = .required
+
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: fixedHeight),
+            minHeightConstraint,
 
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 12),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
@@ -184,26 +208,36 @@ fileprivate final class InfoCardView: UIView {
 
         if centerValue {
             NSLayoutConstraint.activate([
-                valueLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-                valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 8),
-                valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
-                valueLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12)
+                valueLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+                valueLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+                valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+                valueLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
             ])
         } else {
             NSLayoutConstraint.activate([
                 valueLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6),
                 valueLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
                 valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-                valueLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12)
+                valueLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
             ])
         }
+
+        setContentCompressionResistancePriority(.required, for: .vertical)
+        setContentHuggingPriority(.defaultHigh, for: .vertical)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func update(value: String?) {
+        valueLabel.text = normalizedText(value)
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+        layoutIfNeeded()
+    }
+
+    private func normalizedText(_ value: String?) -> String {
         let t = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        valueLabel.text = t.isEmpty ? "—" : t
+        return t.isEmpty ? "—" : t
     }
 }
 
@@ -679,7 +713,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         // 活動場所 / 活動日時（この後の順序には入れないが、上部の情報として残す）
         cardPlace = InfoCardView(title: "活動場所", value: nil,
                                  style: .filled(background: grayBG()),
-                                 fixedHeight: 62,
+                                 minHeight: 62,
                                  valueFont: .systemFont(ofSize: 15, weight: .semibold),
                                  valueNumberOfLines: 2,
                                  shrinkToFit: false,
@@ -687,7 +721,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         cardSchedule = InfoCardView(title: "活動日時", value: nil,
                                     style: .filled(background: grayBG()),
-                                    fixedHeight: 62,
+                                    minHeight: 62,
                                     valueFont: .systemFont(ofSize: 15, weight: .semibold),
                                     valueNumberOfLines: 2,
                                     shrinkToFit: false,
@@ -695,6 +729,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         grid1.axis = .horizontal
         grid1.spacing = 14
+        grid1.alignment = .fill
         grid1.distribution = .fillEqually
         grid1.translatesAutoresizingMaskIntoConstraints = false
         grid1.addArrangedSubview(cardPlace)
@@ -719,7 +754,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         cardSize = InfoCardView(title: "人数", value: nil,
                                 style: .outlined(border: border),
-                                fixedHeight: 88,
+                                minHeight: 88,
                                 valueFont: .systemFont(ofSize: 16, weight: .bold),
                                 valueNumberOfLines: 1,
                                 shrinkToFit: true,
@@ -727,7 +762,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         cardGender = InfoCardView(title: "男女比", value: nil,
                                   style: .outlined(border: border),
-                                  fixedHeight: 88,
+                                  minHeight: 88,
                                   valueFont: .systemFont(ofSize: 16, weight: .bold),
                                   valueNumberOfLines: 1,
                                   shrinkToFit: true,
@@ -735,7 +770,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         cardGrade = InfoCardView(title: "学年", value: nil,
                                  style: .outlined(border: border),
-                                 fixedHeight: 88,
+                                 minHeight: 88,
                                  valueFont: .systemFont(ofSize: 16, weight: .bold),
                                  valueNumberOfLines: 1,
                                  shrinkToFit: true,
@@ -756,7 +791,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         cardIntercollegiate = InfoCardView(title: "インカレ", value: nil,
                                            style: .outlined(border: border),
-                                           fixedHeight: 88,
+                                           minHeight: 88,
                                            valueFont: .systemFont(ofSize: 14, weight: .bold),
                                            valueNumberOfLines: 2,
                                            shrinkToFit: true,
@@ -764,7 +799,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         cardNonFreshmen = InfoCardView(title: "新入生以外", value: nil,
                                        style: .outlined(border: border),
-                                       fixedHeight: 88,
+                                       minHeight: 88,
                                        valueFont: .systemFont(ofSize: 14, weight: .bold),
                                        valueNumberOfLines: 2,
                                        shrinkToFit: true,
@@ -772,7 +807,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         cardDoubleClub = InfoCardView(title: "兼サー", value: nil,
                                       style: .outlined(border: border),
-                                      fixedHeight: 88,
+                                      minHeight: 88,
                                       valueFont: .systemFont(ofSize: 14, weight: .bold),
                                       valueNumberOfLines: 2,
                                       shrinkToFit: true,

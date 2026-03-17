@@ -564,10 +564,9 @@ final class CirclesViewController: UIViewController,
 
                 guard let snapshot else { return }
                 let items = snapshot.documents.compactMap { CircleItem(document: $0) }
+                self.setItems(items)
 
-                if !items.isEmpty {
-                    self.setItems(items)
-                } else {
+                if items.isEmpty {
                     print("Firestore returned 0 items for campus=\(self.selectedCampus)")
                 }
             }

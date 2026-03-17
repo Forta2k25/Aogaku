@@ -20,20 +20,22 @@ fileprivate struct CircleDetail: Hashable {
     var activitySchedule: String?
     var shortMessage: String?
 
+    // ✅ 追加
+    var totalMemberCountText: String?
+
+    // ✅ もともと「人数」に出していた文字列
     var memberSize: String?
+
     var genderRatio: String?
     var grade: String?
 
-    // ✅ target (文字列で表示)
     var targetIntercollegiate: String?
     var targetNonFreshmen: String?
     var targetDoubleClub: String?
 
-    // fee: { annualYen: Int, note: String }
     var annualYen: Int?
     var feeNote: String?
 
-    // ratings: { activity: Int(1..5), vibe: Int(1..5) }
     var ratingActivity: Int?
     var ratingVibe: Int?
 
@@ -50,12 +52,31 @@ fileprivate struct CircleDetail: Hashable {
         let ratings = data["ratings"] as? [String: Any]
         let target = data["target"] as? [String: Any]
 
-        // ✅ Firestoreの数値が Int / String どちらでも拾えるようにする
         func intValue(_ any: Any?) -> Int? {
             if let i = any as? Int { return i }
             if let s = any as? String { return Int(s) }
             return nil
         }
+
+        func stringValue(_ any: Any?) -> String? {
+            if let s = any as? String {
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty ? nil : t
+            }
+            if let i = any as? Int { return "\(i)人" }
+            if let d = any as? Double, d.rounded() == d { return "\(Int(d))人" }
+            return nil
+        }
+
+        // ✅ AC列の合計人数をどこに入れていても拾いやすくしておく
+        let totalMemberCountText =
+            stringValue(members?["total"]) ??
+            stringValue(members?["totalCount"]) ??
+            stringValue(members?["count"]) ??
+            stringValue(data["totalMembers"]) ??
+            stringValue(data["memberCount"]) ??
+            stringValue(data["totalCount"]) ??
+            stringValue(data["人数"]) // 念のため
 
         return CircleDetail(
             id: id,
@@ -73,6 +94,7 @@ fileprivate struct CircleDetail: Hashable {
             activitySchedule: activity?["schedule"] as? String,
             shortMessage: data["shortMessage"] as? String,
 
+            totalMemberCountText: totalMemberCountText,
             memberSize: members?["size"] as? String,
             genderRatio: members?["genderRatio"] as? String,
             grade: members?["grade"] as? String,
@@ -774,9 +796,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         cardGrade = InfoCardView(title: "学年", value: nil,
                                  style: .outlined(border: border),
                                  minHeight: 88,
-                                 valueFont: .systemFont(ofSize: 14, weight: .bold),
-                                 valueNumberOfLines: 1,
-                                 shrinkToFit: true,
+                                 valueFont: .systemFont(ofSize: 12, weight: .bold),
+                                 valueNumberOfLines: 0,
+                                 shrinkToFit: false,
                                  centerValue: true)
 
         memberRow.axis = .horizontal
@@ -1029,7 +1051,6 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             categoryLabel.isHidden = true
         }
 
-        // tags
         tagsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         if d.tags.isEmpty {
             tagsStack.isHidden = true
@@ -1040,16 +1061,13 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             }
         }
 
-        // sns
         instagramButton.isHidden = (d.snsInstagram?.isEmpty != false)
         xButton.isHidden = (d.snsX?.isEmpty != false)
         instagramCTAButton.isHidden = (d.snsInstagram?.isEmpty != false)
 
-        // place/schedule
         cardPlace.update(value: d.activityPlace)
         cardSchedule.update(value: d.activitySchedule)
 
-        // shortMessage
         let sm = (d.shortMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if sm.isEmpty {
             shortMessageLabel.text = nil
@@ -1059,24 +1077,24 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             shortMessageLabel.isHidden = false
         }
 
-        // members
-        cardSize.update(value: d.memberSize)
-        cardGender.update(value: d.genderRatio)
-        cardGrade.update(value: d.grade)
+        // ✅ members
+        cardSize.update(value: d.totalMemberCountText ?? d.memberSize)
 
-        // target
+        // 男女比はそのまま
+        cardGender.update(value: d.genderRatio)
+
+        // ✅ 今まで「人数」に出していた内容を「学年」へ
+        cardGrade.update(value: d.memberSize ?? d.grade)
+
         cardIntercollegiate.update(value: d.targetIntercollegiate)
         cardNonFreshmen.update(value: d.targetNonFreshmen)
         cardDoubleClub.update(value: d.targetDoubleClub)
 
-        // ratings
         ratingActivityView.setScore(d.ratingActivity)
         ratingVibeView.setScore(d.ratingVibe)
 
-        // message (line spacing)
         setLineSpacing(messageBody, text: d.message, spacing: 3.0)
 
-        // fee
         if let yen = d.annualYen {
             feeRowAnnual.setValue("\(yen)円（通年）")
         } else {

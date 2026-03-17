@@ -81,7 +81,7 @@ final class BookmarkedCirclesViewController: UIViewController,
         setupEmptyState()
 
         searchBar.delegate = self
-        kindSegment.addTarget(self, action: #selector(kindChanged), for: .valueChanged)
+        //kindSegment.addTarget(self, action: #selector(kindChanged), for: .valueChanged)
 
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(bookmarkChanged),
@@ -108,7 +108,7 @@ final class BookmarkedCirclesViewController: UIViewController,
     // MARK: UI
     private func setupUI() {
         view.addSubview(searchBar)
-        view.addSubview(kindSegment)
+        // view.addSubview(kindSegment)
         view.addSubview(countLabel)
         view.addSubview(collectionView)
         view.addSubview(emptyStateView)
@@ -118,11 +118,7 @@ final class BookmarkedCirclesViewController: UIViewController,
             searchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             searchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
 
-            kindSegment.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 8),
-            kindSegment.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            kindSegment.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-
-            countLabel.topAnchor.constraint(equalTo: kindSegment.bottomAnchor, constant: 8),
+            countLabel.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 12),
             countLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             countLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
 
@@ -281,7 +277,7 @@ final class BookmarkedCirclesViewController: UIViewController,
         let hasAny = !BookmarkStore.shared.allIDs().isEmpty
         emptyStateView.isHidden = hasAny
         collectionView.isHidden = !hasAny
-        kindSegment.isHidden = !hasAny
+        kindSegment.isHidden = true
         countLabel.isHidden = !hasAny
     }
 

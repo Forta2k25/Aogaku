@@ -6,6 +6,7 @@ import FirebaseFirestore
 fileprivate struct CircleDetail: Hashable {
     let id: String
 
+    var campus: String?
     var name: String
     var category: String?
     var tags: [String]
@@ -80,6 +81,7 @@ fileprivate struct CircleDetail: Hashable {
 
         return CircleDetail(
             id: id,
+            campus: data["campus"] as? String,
             name: data["name"] as? String ?? "",
             category: data["category"] as? String,
             tags: tags,
@@ -95,6 +97,7 @@ fileprivate struct CircleDetail: Hashable {
             shortMessage: data["shortMessage"] as? String,
 
             totalMemberCountText: totalMemberCountText,
+            
             memberSize: members?["size"] as? String,
             genderRatio: members?["genderRatio"] as? String,
             grade: members?["grade"] as? String,
@@ -1075,7 +1078,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         xButton.isHidden = (d.snsX?.isEmpty != false)
         instagramCTAButton.isHidden = (d.snsInstagram?.isEmpty != false)
 
-        cardPlace.update(value: d.activityPlace)
+        let placeText = (d.activityPlace ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let campusText = (d.campus ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        cardPlace.update(value: placeText.isEmpty ? campusText : placeText)
         cardSchedule.update(value: d.activitySchedule)
 
         let sm = (d.shortMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

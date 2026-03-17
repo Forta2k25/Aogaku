@@ -27,12 +27,19 @@ struct CircleItem: Hashable {
     let hasSelection: Bool?
     let annualFeeYen: Int?
 
-    // ✅ 人数（Firestore: members.size 文字列）
+    // ✅ 人数表示テキスト（Firestore: members.size）
     let memberSizeText: String?
 
-    /// ソート用に、members.size から数字を抽出した値（取れなければ nil）
+    // ✅ 人数合計テキスト（Firestore: members.total）
+    let memberTotalText: String?
+
+    /// ソート用に、まず members.total を優先して人数を抽出
+    /// total が無ければ size を使う
     var memberCount: Int? {
-        Self.parseMemberCount(from: memberSizeText)
+        if let total = Self.parseMemberCount(from: memberTotalText) {
+            return total
+        }
+        return Self.parseMemberCount(from: memberSizeText)
     }
 
     init(id: String,
@@ -48,7 +55,8 @@ struct CircleItem: Hashable {
          canDouble: Bool? = nil,
          hasSelection: Bool? = nil,
          annualFeeYen: Int? = nil,
-         memberSizeText: String? = nil) {
+         memberSizeText: String? = nil,
+         memberTotalText: String? = nil) {
 
         self.id = id
         self.name = name
@@ -67,6 +75,7 @@ struct CircleItem: Hashable {
         self.annualFeeYen = annualFeeYen
 
         self.memberSizeText = memberSizeText
+        self.memberTotalText = memberTotalText
     }
 
     init?(document: QueryDocumentSnapshot) {
@@ -101,7 +110,7 @@ struct CircleItem: Hashable {
         let activity = data["activity"] as? [String: Any]
         let members = data["members"] as? [String: Any]
 
-        // ✅ members.size（人数文字列）
+        // ✅ members.size（人数内訳文字列）
         if let size = members?["size"] as? String, !size.isEmpty {
             self.memberSizeText = size
         } else if let size = data["size"] as? String, !size.isEmpty {
@@ -109,6 +118,16 @@ struct CircleItem: Hashable {
             self.memberSizeText = size
         } else {
             self.memberSizeText = nil
+        }
+
+        // ✅ members.total（人数合計文字列）
+        if let total = members?["total"] as? String, !total.isEmpty {
+            self.memberTotalText = total
+        } else if let total = data["total"] as? String, !total.isEmpty {
+            // 念のため旧フィールド互換
+            self.memberTotalText = total
+        } else {
+            self.memberTotalText = nil
         }
 
         // targets

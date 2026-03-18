@@ -49,6 +49,33 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         super.viewDidAppear(animated)
         animateOpen()          // ← 画面表示と同時に“遅延ゼロ”で開始
     } */
+    
+    private func appPageBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.2, alpha: 1.0)   // timetable と同じ
+            }
+            return UIColor(white: 0.96, alpha: 1.0)
+        }
+    }
+
+    private func appCardBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.12, alpha: 1.0)
+            }
+            return .secondarySystemBackground
+        }
+    }
+
+    private func appSeparatorColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.24, alpha: 1.0)
+            }
+            return .separator
+        }
+    }
 
     // MARK: - UI
     private func setupUI() {
@@ -64,7 +91,7 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
             dimmingButton.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
 
-        containerView.backgroundColor = .systemBackground
+        containerView.backgroundColor = appPageBackgroundColor()
         containerView.layer.cornerRadius = 12
         containerView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner]
         containerView.layer.shadowColor = UIColor.black.cgColor
@@ -87,10 +114,13 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         tableView.dataSource = self
         tableView.delegate = self
         tableView.showsVerticalScrollIndicator = false
+        tableView.backgroundColor = .clear
+        tableView.separatorColor = appSeparatorColor()
         containerView.addSubview(tableView)
 
         let footer = UIView()
         footer.translatesAutoresizingMaskIntoConstraints = false
+        footer.backgroundColor = .clear
         containerView.addSubview(footer)
 
         versionLabel.font = .systemFont(ofSize: 12)
@@ -100,27 +130,21 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         versionLabel.numberOfLines = 2
         versionLabel.translatesAutoresizingMaskIntoConstraints = false
         footer.addSubview(versionLabel)
-        
-        // ▼ Instagramボタン（footerを作った“後”に追加）— 差し替え版
+
         let igButton = UIButton(type: .system)
         igButton.translatesAutoresizingMaskIntoConstraints = false
 
-        // 画像セット（アセット "instagram" が無ければ SF Symbols にフォールバック）
         let baseImage = UIImage(named: "instagram")?.withRenderingMode(.alwaysOriginal)
             ?? UIImage(systemName: "camera.fill")
         igButton.setImage(baseImage, for: .normal)
 
-        // ★ Configuration は使わず従来レイアウトに（制約が素直に効くように）
         igButton.configuration = nil
-        igButton.contentEdgeInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-
-        // 画像をボタン枠内に確実にフィットさせる
+        igButton.contentEdgeInsets = .zero
         igButton.contentHorizontalAlignment = .fill
-        igButton.contentVerticalAlignment   = .fill
+        igButton.contentVerticalAlignment = .fill
         igButton.clipsToBounds = true
         igButton.tintColor = .label
 
-        // imageView 自体に制約を張って “ボタン＝20pt、画像＝ボタンいっぱい” を保証
         if let iv = igButton.imageView {
             iv.translatesAutoresizingMaskIntoConstraints = false
             iv.contentMode = .scaleAspectFit
@@ -136,32 +160,26 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
         igButton.addTarget(self, action: #selector(didTapInstagram), for: .touchUpInside)
         footer.addSubview(igButton)
 
-
         NSLayoutConstraint.activate([
-            // tableView と footer の関係
             tableView.topAnchor.constraint(equalTo: containerView.topAnchor),
             tableView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: footer.topAnchor),
 
-            // footer 自身の外枠
             footer.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
             footer.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
             footer.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -12),
 
-            // ▼ Instagramボタン（右下固定）
             igButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
             igButton.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -4),
             igButton.widthAnchor.constraint(equalToConstant: 30),
             igButton.heightAnchor.constraint(equalToConstant: 30),
 
-            // バージョン表記は左→Instagramボタン手前まで
             versionLabel.topAnchor.constraint(equalTo: footer.topAnchor, constant: 8),
             versionLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
             versionLabel.trailingAnchor.constraint(equalTo: igButton.leadingAnchor, constant: -8),
             versionLabel.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -4)
         ])
-
     }
     
     // 追加：一度だけ開くアニメを走らせるためのフラグ
@@ -287,15 +305,43 @@ final class SideMenuDrawerViewController: UIViewController, UITableViewDataSourc
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .default, reuseIdentifier: "cell")
+        cell.backgroundColor = appCardBackgroundColor()
+        cell.contentView.backgroundColor = appCardBackgroundColor()
+        cell.textLabel?.font = .systemFont(ofSize: 17, weight: .regular)
+        cell.textLabel?.textColor = .label
+        cell.tintColor = .secondaryLabel
+        cell.selectionStyle = .default
+
+        let selectedBG = UIView()
+        selectedBG.backgroundColor = UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.16, alpha: 1.0)
+            }
+            return .secondarySystemFill
+        }
+        cell.selectedBackgroundView = selectedBG
+
         switch mappedSection(for: indexPath.section) {
         case .account:
             cell.textLabel?.text = accountTitles[indexPath.row]
             cell.textLabel?.textColor = (indexPath.row == 1) ? .systemRed : .label
+            cell.accessoryType = .none
         case .others:
             cell.textLabel?.text = otherTitles[indexPath.row]
             cell.accessoryType = .disclosureIndicator
         }
+
         return cell
+    }
+    
+    func tableView(_ tableView: UITableView, willDisplayHeaderView view: UIView, forSection section: Int) {
+        guard let header = view as? UITableViewHeaderFooterView else { return }
+        header.contentView.backgroundColor = appPageBackgroundColor()
+        header.textLabel?.textColor = .secondaryLabel
+    }
+    
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        34
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {

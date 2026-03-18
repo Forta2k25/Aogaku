@@ -74,11 +74,14 @@ final class BookmarkedCirclesViewController: UIViewController,
     // MARK: Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = appPageBackgroundColor()
 
         setupNav()
         setupUI()
         setupEmptyState()
+        
+        collectionView.backgroundColor = .clear
+        emptyStateView.backgroundColor = .clear
 
         searchBar.delegate = self
         //kindSegment.addTarget(self, action: #selector(kindChanged), for: .valueChanged)
@@ -94,6 +97,15 @@ final class BookmarkedCirclesViewController: UIViewController,
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
+    
+    private func appPageBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.2, alpha: 1.0)   // timetable と同じ
+            }
+            return UIColor(white: 0.96, alpha: 1.0)
+        }
+    }
 
     // MARK: Nav
     private func setupNav() {
@@ -103,6 +115,9 @@ final class BookmarkedCirclesViewController: UIViewController,
         titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
         titleLabel.textColor = .label
         navigationItem.titleView = titleLabel
+        
+        navigationController?.navigationBar.standardAppearance.backgroundColor = appPageBackgroundColor()
+        navigationController?.navigationBar.scrollEdgeAppearance?.backgroundColor = appPageBackgroundColor()
     }
 
     // MARK: UI
@@ -112,6 +127,9 @@ final class BookmarkedCirclesViewController: UIViewController,
         view.addSubview(countLabel)
         view.addSubview(collectionView)
         view.addSubview(emptyStateView)
+        
+        collectionView.backgroundColor = .clear
+        emptyStateView.backgroundColor = .clear
 
         NSLayoutConstraint.activate([
             searchBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),

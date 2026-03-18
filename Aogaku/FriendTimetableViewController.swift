@@ -54,7 +54,7 @@ final class FriendTimetableViewController: UIViewController {
     // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = appPageBackgroundColor()
         title = friendName.map { "\($0) の時間割" } ?? "友だちの時間割"
 
         // 学期の保存値（友だち＋年度）を復元
@@ -64,6 +64,8 @@ final class FriendTimetableViewController: UIViewController {
         }
 
         setupUI()
+        scroll.backgroundColor = .clear
+        content.backgroundColor = .clear
         termSegment.selectedSegmentIndex = (semester == .first) ? 0 : 1
 
         spinner.startAnimating()
@@ -126,7 +128,7 @@ final class FriendTimetableViewController: UIViewController {
 
         // スリムなピル型セグメント（幅制約は貼らない＝スタックが横いっぱいにしてくれる）
         termSegment.selectedSegmentTintColor = .label.withAlphaComponent(0.08)
-        termSegment.backgroundColor = .secondarySystemBackground
+        termSegment.backgroundColor = appCardBackgroundColor()
         termSegment.setTitleTextAttributes([.foregroundColor: UIColor.label,
                                             .font: UIFont.systemFont(ofSize: 13, weight: .semibold)], for: .normal)
         termSegment.setTitleTextAttributes([.foregroundColor: UIColor.label,
@@ -152,6 +154,24 @@ final class FriendTimetableViewController: UIViewController {
         termSegment.layer.masksToBounds = true
 
         content.setCustomSpacing(Layout.sectionSpacing, after: segContainer)
+    }
+    
+    private func appPageBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.2, alpha: 1.0)   // timetable と同じ
+            }
+            return UIColor(white: 0.96, alpha: 1.0)
+        }
+    }
+
+    private func appCardBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.12, alpha: 1.0)
+            }
+            return .secondarySystemBackground
+        }
     }
 
     private func buildGrid() {

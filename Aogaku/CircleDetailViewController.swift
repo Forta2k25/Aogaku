@@ -593,7 +593,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = grayBG()
+        scrollView.backgroundColor = grayBG()
+        contentView.backgroundColor = grayBG()
 
         buildUI()
         startListening()
@@ -619,7 +621,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     private func grayBG() -> UIColor {
         UIColor { trait in
             if trait.userInterfaceStyle == .dark {
-                return .secondarySystemGroupedBackground
+                return UIColor(white: 0.2, alpha: 1.0)
             }
             return UIColor(red: 246/255, green: 247/255, blue: 247/255, alpha: 1) // #F6F7F7
         }
@@ -654,6 +656,8 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         view.addSubview(scrollView)
         scrollView.addSubview(contentView)
+        scrollView.backgroundColor = grayBG()
+        contentView.backgroundColor = grayBG()
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),

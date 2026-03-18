@@ -148,7 +148,11 @@ final class CirclesViewController: UIViewController,
     // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = pageBackgroundColor()
+        
+        navigationController?.navigationBar.standardAppearance.backgroundColor = pageBackgroundColor()
+        navigationController?.navigationBar.scrollEdgeAppearance?.backgroundColor = pageBackgroundColor()
+
 
         setupNavigationHeader()
         setupRightBarButtons()
@@ -238,6 +242,8 @@ final class CirclesViewController: UIViewController,
         searchRow.translatesAutoresizingMaskIntoConstraints = false
         searchRow.addSubview(searchBar)
         searchRow.addSubview(sortButton)
+        searchRow.backgroundColor = .clear
+        collectionView.backgroundColor = .clear
 
         NSLayoutConstraint.activate([
             campusSegmentedControl.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
@@ -428,6 +434,15 @@ final class CirclesViewController: UIViewController,
         }
     }
 
+    private func pageBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.2, alpha: 1.0)   // timetable と同じ
+            }
+            return UIColor(white: 0.96, alpha: 1.0)      // timetable と同じ
+        }
+    }
+    
     private func applyFilter() {
         let q = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
 

@@ -110,10 +110,13 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "アカウント"
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = appPageBackgroundColor()
 
         setupTopBar()
         setupTable()
+        
+        tableView.backgroundColor = appPageBackgroundColor()
+        tableView.tableFooterView?.backgroundColor = .clear
 
         tableView.tableFooterView = makeFindFriendsFooter()
 
@@ -140,6 +143,10 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
         badgeListener?.remove()
         badgeListener = nil
         listenerIsActive = false
+
+        // 画面遷移時に前画面の navigationItem が残留しないように掃除
+        navigationItem.leftBarButtonItems = nil
+        navigationItem.rightBarButtonItem = nil
     }
 
     deinit {
@@ -197,7 +204,7 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
 
     private func setupTable() {
         tableView.translatesAutoresizingMaskIntoConstraints = false
-        tableView.backgroundColor = .systemGroupedBackground
+        tableView.backgroundColor = appPageBackgroundColor()
         tableView.dataSource = self
         tableView.delegate = self
 
@@ -230,25 +237,68 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
         tableView.contentInset.top = -6
     }
 
+    private func appPageBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.2, alpha: 1.0)   // timetable と同じ
+            }
+            return UIColor(white: 0.96, alpha: 1.0)
+        }
+    }
+
+    private func appCardBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.12, alpha: 1.0)
+            }
+            return .secondarySystemBackground
+        }
+    }
+
+    private func appSelectedBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.16, alpha: 1.0)
+            }
+            return .secondarySystemFill
+        }
+    }
+    
     /// ナビがあるならnavigationItemに出す／無いならtopBarに出す
+    /// NavigationBar を使う時だけ navigationItem に出す
+    /// 使わない時は自前 topBar のみを表示し、navigationItem は必ず空にする
     private func configureHeaderButtonsVisibility() {
-        if let nav = navigationController {
+        let shouldUseNavigationBar: Bool = {
+            guard let nav = navigationController else { return false }
+            return !nav.isNavigationBarHidden
+        }()
+
+        if shouldUseNavigationBar {
             topBar.isHidden = true
 
-            let qrItem = UIBarButtonItem(image: UIImage(systemName: "qrcode.viewfinder"),
-                                         style: .plain,
-                                         target: self,
-                                         action: #selector(openQR))
-            let addItem = UIBarButtonItem(image: UIImage(systemName: "person.badge.plus"),
-                                          style: .plain,
-                                          target: self,
-                                          action: #selector(openFind))
+            let qrItem = UIBarButtonItem(
+                image: UIImage(systemName: "qrcode.viewfinder"),
+                style: .plain,
+                target: self,
+                action: #selector(openQR)
+            )
 
-            nav.navigationBar.isHidden = false
+            let addItem = UIBarButtonItem(
+                image: UIImage(systemName: "person.badge.plus"),
+                style: .plain,
+                target: self,
+                action: #selector(openFind)
+            )
+
             navigationItem.leftBarButtonItems = [qrItem, addItem]
             navigationItem.rightBarButtonItem = UIBarButtonItem(customView: bellButton)
         } else {
             topBar.isHidden = false
+
+            // ← ここが重要
+            // topBar を使うときは navigationItem 側を必ず空にする
+            navigationItem.leftBarButtonItems = nil
+            navigationItem.rightBarButtonItem = nil
         }
     }
 
@@ -718,7 +768,7 @@ final class FriendSettingsCell: UITableViewCell {
 
         // フル幅背景
         rowBG.translatesAutoresizingMaskIntoConstraints = false
-        rowBG.backgroundColor = .secondarySystemBackground
+        rowBG.backgroundColor = rowBackgroundColor()
         rowBG.clipsToBounds = true
         contentView.addSubview(rowBG)
 
@@ -735,7 +785,12 @@ final class FriendSettingsCell: UITableViewCell {
         avatarView.contentMode = .scaleAspectFill
         avatarView.clipsToBounds = true
         avatarView.layer.cornerRadius = 26
-        avatarView.backgroundColor = .secondarySystemFill
+        avatarView.backgroundColor = UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.22, alpha: 1.0)
+            }
+            return .secondarySystemFill
+        }
         avatarView.image = UIImage(systemName: "person.crop.circle.fill")
 
         // Labels（左寄せ）
@@ -792,7 +847,7 @@ final class FriendSettingsCell: UITableViewCell {
 
         // 選択背景
         let sel = UIView()
-        sel.backgroundColor = UIColor.secondarySystemFill
+        sel.backgroundColor = selectedRowBackgroundColor()
         selectedBackgroundView = sel
 
         // フル幅セパレータ用
@@ -801,6 +856,24 @@ final class FriendSettingsCell: UITableViewCell {
         layoutMargins = .zero
     }
 
+    private func rowBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.16, alpha: 1.0)
+            }
+            return .secondarySystemBackground
+        }
+    }
+
+    private func selectedRowBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.20, alpha: 1.0)
+            }
+            return .secondarySystemFill
+        }
+    }
+    
     override func prepareForReuse() {
         super.prepareForReuse()
         avatarView.image = UIImage(systemName: "person.crop.circle.fill")
@@ -836,6 +909,23 @@ final class SelfHeaderCell: UITableViewCell {
     private let subLabel = UILabel()
     private var currentURL: String?
 
+    private func avatarBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.18, alpha: 1.0)
+            }
+            return .secondarySystemFill
+        }
+    }
+
+    private func selectedBackgroundColorForCell() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.16, alpha: 1.0)
+            }
+            return .secondarySystemFill
+        }
+    }
     // 簡易キャッシュ
     private static var cache: [String: UIImage] = [:]
 
@@ -860,7 +950,7 @@ final class SelfHeaderCell: UITableViewCell {
         avatarView.contentMode = .scaleAspectFill
         avatarView.clipsToBounds = true
         avatarView.layer.cornerRadius = 36
-        avatarView.backgroundColor = .secondarySystemFill
+        avatarView.backgroundColor = avatarBackgroundColor()
         avatarView.image = UIImage(systemName: "person.crop.circle.fill")
 
         nameLabel.font = .systemFont(ofSize: 22, weight: .bold)
@@ -888,7 +978,7 @@ final class SelfHeaderCell: UITableViewCell {
         ])
 
         let sel = UIView()
-        sel.backgroundColor = UIColor.secondarySystemFill
+        sel.backgroundColor = selectedBackgroundColorForCell()
         sel.layer.cornerRadius = 14
         selectedBackgroundView = sel
     }

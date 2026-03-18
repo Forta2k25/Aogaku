@@ -16,6 +16,7 @@ final class CircleCollectionViewCell: UICollectionViewCell {
     private let imageView = UIImageView()
     private let intensityLabel = PaddingLabel(padding: UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10))
     private let titleLabel = UILabel()
+    private let titleBackgroundView = UIView()
 
     // ✅ ブックマーク
     private let bookmarkButton = UIButton(type: .system)
@@ -32,6 +33,24 @@ final class CircleCollectionViewCell: UICollectionViewCell {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         buildUI()
+    }
+    
+    private func titleAreaBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.12, alpha: 1.0)   // 真っ黒より少し薄い
+            }
+            return .systemBackground
+        }
+    }
+
+    private func cardBorderColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.28, alpha: 1.0)
+            }
+            return UIColor.black.withAlphaComponent(0.06)
+        }
     }
 
     override func prepareForReuse() {
@@ -131,14 +150,13 @@ final class CircleCollectionViewCell: UICollectionViewCell {
     private func buildUI() {
         contentView.backgroundColor = .clear
 
-        cardView.backgroundColor = .systemBackground
+        contentView.addSubview(cardView)
+        cardView.translatesAutoresizingMaskIntoConstraints = false
+        cardView.backgroundColor = .clear
         cardView.layer.cornerRadius = 16
         cardView.layer.masksToBounds = true
         cardView.layer.borderWidth = 1
-        cardView.layer.borderColor = UIColor.black.withAlphaComponent(0.06).cgColor
-
-        contentView.addSubview(cardView)
-        cardView.translatesAutoresizingMaskIntoConstraints = false
+        cardView.layer.borderColor = cardBorderColor().cgColor
 
         // shadow
         contentView.layer.shadowColor = UIColor.black.cgColor
@@ -148,23 +166,29 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         contentView.layer.masksToBounds = false
 
         // image
+        imageView.translatesAutoresizingMaskIntoConstraints = false
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         imageView.backgroundColor = .secondarySystemBackground
 
+        // title background
+        titleBackgroundView.translatesAutoresizingMaskIntoConstraints = false
+        titleBackgroundView.backgroundColor = titleAreaBackgroundColor()
+
+        // title
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.textColor = .label
+        titleLabel.numberOfLines = 3
+        applyTitleFont()
+
         // intensity pill
+        intensityLabel.translatesAutoresizingMaskIntoConstraints = false
         intensityLabel.textColor = .white
         intensityLabel.font = .boldSystemFont(ofSize: 12)
         intensityLabel.layer.cornerRadius = 12
         intensityLabel.layer.masksToBounds = true
 
-        // title
-        titleLabel.textColor = .label
-        titleLabel.numberOfLines = 3
-        applyTitleFont()
-        
-        
-        // ✅ bookmark button
+        // bookmark button
         bookmarkButton.translatesAutoresizingMaskIntoConstraints = false
         bookmarkButton.layer.cornerRadius = 10
         bookmarkButton.clipsToBounds = true
@@ -173,15 +197,12 @@ final class CircleCollectionViewCell: UICollectionViewCell {
         bookmarkButton.isExclusiveTouch = true
         bookmarkButton.addTarget(self, action: #selector(didTapBookmark), for: .touchUpInside)
 
+        // add subviews only once
         cardView.addSubview(imageView)
-        //cardView.addSubview(intensityLabel)
-        
+        cardView.addSubview(titleBackgroundView)
         cardView.addSubview(titleLabel)
         cardView.addSubview(bookmarkButton)
-
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        //intensityLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        // cardView.addSubview(intensityLabel) // 使うなら戻す
 
         NSLayoutConstraint.activate([
             cardView.topAnchor.constraint(equalTo: contentView.topAnchor),
@@ -194,10 +215,11 @@ final class CircleCollectionViewCell: UICollectionViewCell {
             imageView.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
             imageView.heightAnchor.constraint(equalToConstant: 120),
 
-            //intensityLabel.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),
-            //intensityLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 8),
+            titleBackgroundView.topAnchor.constraint(equalTo: imageView.bottomAnchor),
+            titleBackgroundView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor),
+            titleBackgroundView.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
+            titleBackgroundView.bottomAnchor.constraint(equalTo: cardView.bottomAnchor),
 
-            // ✅ 右上ブクマ
             bookmarkButton.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),
             bookmarkButton.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -8),
 

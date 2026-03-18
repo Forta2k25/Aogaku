@@ -1324,19 +1324,33 @@ private func placeOnlineRow() {
             return
         }
 
-        // === 通常のコマ ===
-        let cols = dayLabels.count
-        let idx  = max(0, min((period - 1) * cols + day, assigned.count - 1))
-        assigned[idx] = course
+    // === 通常のコマ ===
+    let cols = dayLabels.count
+    let idx  = max(0, min((period - 1) * cols + day, assigned.count - 1))
+    assigned[idx] = course
 
-        if let btn = slotButtons.first(where: { $0.tag == idx }) {
-            configureButton(btn, at: idx)
-        } else {
-            reloadAllButtons()
-        }
-        saveAssigned()
+    if let btn = slotButtons.first(where: { $0.tag == idx }) {
+        configureButton(btn, at: idx)
+    } else {
+        reloadAllButtons()
+    }
+    saveAssigned()
 
-        dlog("assigned set idx=\(idx) (day=\(day), period=\(period)) id=\(course.id)")
+    let loc = SlotLocation(day: day, period: period)
+    let colorName = SlotColorStore.color(for: loc)?.rawValue
+    let key = cellKey(day: day, period: period)
+    remoteHashes[key] = slotHash(course, colorKey: colorName)
+
+    Task {
+        await remoteStore?.upsert(
+            course: course,
+            colorKey: colorName,
+            day: day,
+            period: period
+        )
+    }
+
+    dlog("assigned set idx=\(idx) (day=\(day), period=\(period)) id=\(course.id)")
     }
 
 
@@ -1985,8 +1999,6 @@ private func placeOnlineRow() {
         }
     }
 
-    // MARK: - CourseList delegate
-    // MARK: - CourseListViewControllerDelegate
     func courseList(_ vc: CourseListViewController,
                     didSelect course: Course,
                     at location: SlotLocation) {
@@ -1998,6 +2010,19 @@ private func placeOnlineRow() {
                 arr.append(course)
                 onlineSlots[location.day] = arr
                 saveOnline(for: location.day)
+
+                // Firestore にも保存
+                let colorName = SlotColorStore.color(for: location)?.rawValue
+                let fKey = onlineFieldKey(day: location.day, course: course)
+                remoteHashes[fKey] = slotHash(course, colorKey: colorName)
+
+                Task {
+                    await remoteStore?.upsert(
+                        course: course,
+                        colorKey: colorName,
+                        fieldKey: fKey
+                    )
+                }
             }
             updateOnlineUI(for: location.day)
             reloadAllButtons()
@@ -2008,12 +2033,29 @@ private func placeOnlineRow() {
             let idx  = (location.period - 1) * cols + location.day
             if assigned.indices.contains(idx) {
                 assigned[idx] = course
+
                 if let btn = slotButtons.first(where: { $0.tag == idx }) {
                     configureButton(btn, at: idx)
                 } else {
                     reloadAllButtons()
                 }
+
                 saveAssigned()
+
+                // Firestore にも保存
+                let colorName = SlotColorStore.color(for: location)?.rawValue
+                let key = cellKey(day: location.day, period: location.period)
+                remoteHashes[key] = slotHash(course, colorKey: colorName)
+
+                Task {
+                    await remoteStore?.upsert(
+                        course: course,
+                        colorKey: colorName,
+                        day: location.day,
+                        period: location.period
+                    )
+                }
+
                 dlog("assigned: idx=\(idx), id=\(course.id)")
             }
         }

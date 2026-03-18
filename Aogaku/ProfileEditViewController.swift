@@ -78,16 +78,59 @@ final class ProfileEditViewController: UIViewController {
     private var selectedFacultyIndex = 0
     private var selectedDepartmentIndex = 0
 
+    private func appPageBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.2, alpha: 1.0)   // timetable と同じ
+            }
+            return UIColor(white: 0.96, alpha: 1.0)
+        }
+    }
+
+    private func appCardBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.12, alpha: 1.0)
+            }
+            return .secondarySystemBackground
+        }
+    }
+
+    private func appAvatarBackgroundColor() -> UIColor {
+        UIColor { trait in
+            if trait.userInterfaceStyle == .dark {
+                return UIColor(white: 0.18, alpha: 1.0)
+            }
+            return .secondarySystemFill
+        }
+    }
+
+    private func applyTheme() {
+        view.backgroundColor = appPageBackgroundColor()
+        scrollView.backgroundColor = appPageBackgroundColor()
+        contentView.backgroundColor = appPageBackgroundColor()
+
+        avatarView.backgroundColor = appAvatarBackgroundColor()
+
+        [gradeField, facultyDeptField, nameField, idField].forEach {
+            $0.backgroundColor = appCardBackgroundColor()
+            $0.textColor = .label
+        }
+
+        idField.textColor = .secondaryLabel
+    }
+    
     // MARK: - LifeCycle
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "プロフィール編集"
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = appPageBackgroundColor()
 
         setupCloseButtonIfNeeded()
         setupHamburgerMenu()
 
         setupLayout()
+        applyTheme()
         setupPickers()
         setupAvatarTap()
         setupDismissKeyboardGesture()
@@ -101,7 +144,21 @@ final class ProfileEditViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+
+        // この画面では NavigationBar を明示的に使う
+        navigationController?.setNavigationBarHidden(false, animated: animated)
+
+        setupCloseButtonIfNeeded()
+        setupHamburgerMenu()
         loadUserProfile()
+    }
+    
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+
+        // 戻る時にこの画面のボタンを残さない
+        navigationItem.leftBarButtonItem = nil
+        navigationItem.rightBarButtonItem = nil
     }
 
     // MARK: - Close button (modal root の時だけ)
@@ -140,14 +197,22 @@ final class ProfileEditViewController: UIViewController {
 
     // MARK: - Right hamburger menu
     private func setupHamburgerMenu() {
+        guard navigationController?.isNavigationBarHidden == false else {
+            navigationItem.rightBarButtonItem = nil
+            return
+        }
+
         let img = UIImage(
             systemName: "line.3.horizontal",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)
         )
-        navigationItem.rightBarButtonItem = UIBarButtonItem(image: img,
-                                                            style: .plain,
-                                                            target: self,
-                                                            action: #selector(didTapHamburger))
+
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: img,
+            style: .plain,
+            target: self,
+            action: #selector(didTapHamburger)
+        )
     }
 
     @objc private func didTapHamburger() {
@@ -254,6 +319,8 @@ final class ProfileEditViewController: UIViewController {
     private func setupLayout() {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         contentView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.backgroundColor = appPageBackgroundColor()
+        contentView.backgroundColor = appPageBackgroundColor()
         view.addSubview(scrollView)
         scrollView.addSubview(contentView)
 
@@ -274,7 +341,7 @@ final class ProfileEditViewController: UIViewController {
         avatarView.contentMode = .scaleAspectFill
         avatarView.clipsToBounds = true
         avatarView.layer.cornerRadius = 70
-        avatarView.backgroundColor = .secondarySystemFill
+        avatarView.backgroundColor = appAvatarBackgroundColor()
         avatarView.image = UIImage(systemName: "person.circle.fill")
         avatarView.tintColor = .tertiaryLabel
         avatarView.isUserInteractionEnabled = true
@@ -303,11 +370,13 @@ final class ProfileEditViewController: UIViewController {
         gradeField.borderStyle = .roundedRect
         gradeField.textAlignment = .center
         gradeField.textColor = .label
+        gradeField.backgroundColor = appCardBackgroundColor()
 
         facultyDeptField.placeholder = "学部・学科"
         facultyDeptField.borderStyle = .roundedRect
         facultyDeptField.textAlignment = .center
         facultyDeptField.textColor = .label
+        facultyDeptField.backgroundColor = appCardBackgroundColor()
 
         let row1 = UIStackView(arrangedSubviews: [gradeField, facultyDeptField])
         row1.axis = .horizontal
@@ -328,6 +397,7 @@ final class ProfileEditViewController: UIViewController {
         nameField.borderStyle = .roundedRect
         nameField.returnKeyType = .done
         nameField.textColor = .label
+        nameField.backgroundColor = appCardBackgroundColor()
         nameField.addTarget(self, action: #selector(commitName), for: .editingDidEndOnExit)
         nameField.addTarget(self, action: #selector(commitName), for: .editingDidEnd)
 
@@ -343,6 +413,7 @@ final class ProfileEditViewController: UIViewController {
         idField.borderStyle = .roundedRect
         idField.isEnabled = false
         idField.textColor = .secondaryLabel   // ✅ 薄グレーはIDだけ
+        idField.backgroundColor = appCardBackgroundColor()
 
         let idStack = UIStackView(arrangedSubviews: [idTitle, idField])
         idStack.axis = .vertical

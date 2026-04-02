@@ -455,6 +455,8 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     private var currentHeaderImages: [UIImage] = []
     private var currentHeaderImageURLs: [String] = []
 
+    // Top brand
+
     // Header
     private let headerScrollView: UIScrollView = {
         let sv = UIScrollView()
@@ -598,12 +600,18 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         contentView.backgroundColor = grayBG()
 
         buildUI()
+        setupNavigationBrand()
         startListening()
 
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(bookmarkDidChange),
                                                name: Self.bookmarkDidChangeName,
                                                object: nil)
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        applyNavigationBarAppearance()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -627,6 +635,29 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         }
     }
 
+    private func applyNavigationBarAppearance() {
+        guard let navigationBar = navigationController?.navigationBar else { return }
+
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+
+        if traitCollection.userInterfaceStyle == .dark {
+            appearance.backgroundColor = UIColor(white: 0.2, alpha: 1.0)
+        } else {
+            appearance.backgroundColor = .white
+        }
+
+        appearance.shadowColor = .clear
+        appearance.titleTextAttributes = [.foregroundColor: UIColor.clear]
+        appearance.largeTitleTextAttributes = [.foregroundColor: UIColor.clear]
+
+        navigationBar.standardAppearance = appearance
+        navigationBar.scrollEdgeAppearance = appearance
+        navigationBar.compactAppearance = appearance
+        navigationBar.tintColor = .label
+        navigationBar.isTranslucent = false
+    }
+
     private func setLineSpacing(_ label: UILabel, text: String?, spacing: CGFloat = 3.0) {
         let t = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty {
@@ -646,6 +677,58 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
                 .paragraphStyle: p
             ]
         )
+    }
+
+    private func navigationBrandImage() -> UIImage? {
+        if traitCollection.userInterfaceStyle == .dark {
+            return UIImage(named: "hack2")
+        }
+        return UIImage(named: "hack2_black")
+    }
+
+    private func setupNavigationBrand() {
+        let logoView: UIImageView
+
+        if let container = navigationItem.titleView,
+           let existing = container.subviews.first(where: { $0 is UIImageView }) as? UIImageView {
+            logoView = existing
+        } else {
+            let navWidth = navigationController?.navigationBar.bounds.width ?? UIScreen.main.bounds.width
+            let sideAllowance: CGFloat = 120
+            let containerWidth = max(220, navWidth - sideAllowance)
+
+            let container = UIView(frame: CGRect(x: 0, y: 0, width: containerWidth, height: 60))
+            container.backgroundColor = .clear
+            container.isUserInteractionEnabled = false
+
+            let iv = UIImageView()
+            iv.translatesAutoresizingMaskIntoConstraints = false
+            iv.contentMode = .scaleAspectFit
+            iv.clipsToBounds = false
+            iv.backgroundColor = .clear
+            container.addSubview(iv)
+
+            NSLayoutConstraint.activate([
+                iv.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                iv.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                iv.widthAnchor.constraint(equalTo: container.widthAnchor, multiplier: 2),
+                iv.heightAnchor.constraint(equalToConstant: 60)
+            ])
+
+            navigationItem.rightBarButtonItem = nil
+            navigationItem.titleView = container
+            logoView = iv
+        }
+
+        logoView.image = navigationBrandImage()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+
+        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
+        applyNavigationBarAppearance()
+        setupNavigationBrand()
     }
 
     // MARK: - Build UI

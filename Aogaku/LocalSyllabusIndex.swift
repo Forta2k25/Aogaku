@@ -18,6 +18,13 @@ struct SyllabusRaw: Codable {
         let day: String?
         let periods: [Int]?
     }
+    var url: String?
+    var syllabusURL: String?
+    var registration_number: String?
+    var code: String?
+    var class_code: String?
+    var course_code: String?
+    var room: String?
 }
 
 // メモリ常駐エントリ（正規化＋インデックス済み）
@@ -431,7 +438,16 @@ final class LocalSyllabusIndex {
             category: e.raw.category,
             credit: String(e.raw.credit ?? 0),
             term: e.termNorm,
-            eval_method: e.raw.eval_method ?? ""    // ★ 追加
+            eval_method: e.raw.eval_method ?? "",
+            url: (e.raw.url ?? e.raw.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            regNumber: (
+                e.raw.registration_number ??
+                e.raw.code ??
+                e.raw.class_code ??
+                e.raw.course_code ??
+                ""
+            ).trimmingCharacters(in: .whitespacesAndNewlines),
+            room: (e.raw.room ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 

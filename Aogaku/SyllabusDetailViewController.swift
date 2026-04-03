@@ -9,6 +9,11 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     var targetPeriod: Int?       // 1..7
     var docID: String?
     var initialTitle: String?
+    var initialTimeString: String?
+    var initialCampusString: String?
+    var initialGradeString: String?
+    var initialCategoryString: String?
+    var initialTermString: String?
     var initialTeacher: String?
     var initialCredit: String?   // "2" など
     var initialURLString: String?
@@ -101,13 +106,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         roomTextField?.addTarget(self, action: #selector(roomFieldChanged(_:)), for: .editingChanged)
 
         // Load content
-        if let s = initialURLString?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !s.isEmpty, let url = URL(string: s) {
-            webView.isHidden = false
-            webView.load(URLRequest(url: url))
-        } else if let id = docID, !id.isEmpty {
-            fetchDetail(docID: id)
-        }
+        resolveAndLoadBestDetail()
 
         // Close button when presented modally
         if presentingViewController != nil,
@@ -116,6 +115,180 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
                 systemItem: .close,
                 primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) }
             )
+        }
+    }
+    
+    private func resolveAndLoadBestDetail() {
+        // 1) まず docID で引いてみる
+        if let id = docID, !id.isEmpty {
+            Firestore.firestore().collection("classes").document(id).getDocument { [weak self] snap, err in
+                guard let self = self else { return }
+
+                if let data = snap?.data(), self.matchesInitialCell(data) {
+                    self.applyFetchedDetail(data)
+                    return
+                }
+
+                // 2) docID がズレていたら、一覧セル情報で同じ授業を検索
+                self.findMatchingDetailByVisibleFields()
+            }
+            return
+        }
+
+        // 3) docID が無い場合も一覧セル情報で検索
+        findMatchingDetailByVisibleFields()
+    }
+    
+    private func matchesInitialCell(_ data: [String: Any]) -> Bool {
+        func trim(_ s: String?) -> String {
+            (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let titleMatches =
+            trim(data["class_name"] as? String) == trim(initialTitle)
+
+        let teacherMatches =
+            trim(data["teacher_name"] as? String) == trim(initialTeacher)
+
+        let gradeMatches: Bool = {
+            let a = trim(data["grade"] as? String)
+            let b = trim(initialGradeString)
+            return b.isEmpty || a == b
+        }()
+
+        let categoryMatches: Bool = {
+            let a = trim(data["category"] as? String)
+            let b = trim(initialCategoryString)
+            return b.isEmpty || a == b
+        }()
+
+        let termMatches: Bool = {
+            let a = normalizeTerm(trim(data["term"] as? String))
+            let b = normalizeTerm(trim(initialTermString))
+            return b.isEmpty || a == b
+        }()
+
+        let timeMatches: Bool = {
+            let a = buildTimeString(from: data["time"] as? [String: Any])
+            let b = trim(initialTimeString)
+            return b.isEmpty || a == b
+        }()
+
+        return titleMatches && teacherMatches && gradeMatches && categoryMatches && termMatches && timeMatches
+    }
+    
+    private func findMatchingDetailByVisibleFields() {
+        guard let title = initialTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            fallbackLoadInitialURLOnly()
+            return
+        }
+
+        var q: Query = Firestore.firestore()
+            .collection("classes")
+            .whereField("class_name", isEqualTo: title)
+
+        if let teacher = initialTeacher?.trimmingCharacters(in: .whitespacesAndNewlines), !teacher.isEmpty {
+            q = q.whereField("teacher_name", isEqualTo: teacher)
+        }
+
+        q.limit(to: 20).getDocuments { [weak self] snap, err in
+            guard let self = self else { return }
+
+            let docs = snap?.documents ?? []
+
+            if let matched = docs.first(where: { self.matchesInitialCell($0.data()) }) {
+                self.applyFetchedDetail(matched.data())
+                return
+            }
+
+            // 完全一致が無ければ、最初の候補を雑に使わず、渡されたURLにフォールバック
+            self.fallbackLoadInitialURLOnly()
+        }
+    }
+    
+    private func normalizeTerm(_ raw: String) -> String {
+        var s = raw.replacingOccurrences(of: "[()（）\\s]", with: "", options: .regularExpression)
+
+        if let x = s.applyingTransform(.fullwidthToHalfwidth, reverse: false) {
+            s = x
+        }
+
+        s = s.replacingOccurrences(of: "隔週第1週", with: "隔1")
+             .replacingOccurrences(of: "隔週第2週", with: "隔2")
+
+        switch s.lowercased() {
+        case "前期", "春学期", "spring":
+            return "前期"
+        case "後期", "秋学期", "autumn", "fall":
+            return "後期"
+        case "通年", "年間", "fullyear", "yearlong":
+            return "通年"
+        default:
+            s = s.replacingOccurrences(of: "通年隔週第1週", with: "通年隔1")
+                 .replacingOccurrences(of: "通年隔週第2週", with: "通年隔2")
+                 .replacingOccurrences(of: "前期隔週第1週", with: "前期隔1")
+                 .replacingOccurrences(of: "前期隔週第2週", with: "前期隔2")
+                 .replacingOccurrences(of: "後期隔週第1週", with: "後期隔1")
+                 .replacingOccurrences(of: "後期隔週第2週", with: "後期隔2")
+            return s
+        }
+    }
+    
+    private func fallbackLoadInitialURLOnly() {
+        let s = initialURLString?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let url = URL(string: s), !s.isEmpty {
+            webView.isHidden = false
+            webView.load(URLRequest(url: url))
+        }
+    }
+    
+    private func buildTimeString(from t: [String: Any]?) -> String {
+        guard let t = t else { return "" }
+        let day = (t["day"] as? String) ?? ""
+        let ps = (t["periods"] as? [Int]) ?? []
+
+        if ps.isEmpty { return day }
+
+        let s = ps.sorted()
+        return s.count == 1 ? "\(day)\(s[0])" : "\(day)\(s.first!)-\(s.last!)"
+    }
+    private func applyFetchedDetail(_ data: [String: Any]) {
+        self.lastFetched = data
+
+        if let name = data["class_name"] as? String {
+            self.titleTextView?.text = name
+        }
+        if let t = data["teacher_name"] as? String {
+            self.teacherLabel?.text = t
+        }
+        if let c = data["credit"] as? Int {
+            self.creditLabel?.text = "\(c)単位"
+        } else if let cStr = data["credit"] as? String, !cStr.isEmpty {
+            self.creditLabel?.text = "\(cStr)単位"
+        }
+
+        let code = (data["registration_number"] as? String)
+            ?? (data["code"] as? String)
+            ?? (data["class_code"] as? String)
+            ?? (data["course_code"] as? String)
+            ?? initialRegNumber
+
+        let room = (data["room"] as? String) ?? self.initialRoom
+        self.updateCodeAndRoomLabels(code: code, room: room)
+
+        if (self.roomTextField?.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+           let r = data["room"] as? String {
+            self.roomTextField?.text = r
+        }
+
+        let urlStr = ((data["url"] as? String) ?? (data["syllabusURL"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let url = URL(string: urlStr), !urlStr.isEmpty {
+            self.webView.isHidden = false
+            self.webView.load(URLRequest(url: url))
+        } else {
+            self.fallbackLoadInitialURLOnly()
         }
     }
 
@@ -200,12 +373,16 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
 
     // MARK: - Add flow（＋押下時の共通フロー）
     private func startAddFlow() {
-        // 多重起動防止
         guard !isAddFlowBusy else { return }
         isAddFlowBusy = true
 
-        // まだ詳細未取得なら取得してから続行
-        if lastFetched.isEmpty, let id = docID {
+        // ★ 一覧から渡された初期値が揃っているなら、Firestore再取得をしない
+        let hasEnoughInitialData =
+            !(initialTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) ||
+            !(initialURLString?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) ||
+            !(initialRegNumber?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+
+        if lastFetched.isEmpty, let id = docID, !hasEnoughInitialData {
             fetchDetail(docID: id)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
                 self?.continueAddFlow()

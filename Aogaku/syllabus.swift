@@ -86,8 +86,8 @@ final class syllabus: UIViewController,
     
     // ===== データ =====
     struct SyllabusData {
-        let docID: String                // ソース依存（自動ID / 行番号ID）
-        let stableKey: String            // ソースをまたいで同一授業を識別するキー
+        let docID: String
+        let stableKey: String
         let class_name: String
         let teacher_name: String
         let time: String
@@ -97,6 +97,11 @@ final class syllabus: UIViewController,
         let credit: String
         let term: String
         let eval_method: String
+
+        // ★ 追加
+        let url: String
+        let regNumber: String
+        let room: String
     }
 
     private var data: [SyllabusData] = []
@@ -824,7 +829,10 @@ final class syllabus: UIViewController,
                     category: subject.category,
                     credit: subject.credit,
                     term: subject.term,
-                    eval_method: evalText
+                    eval_method: evalText,
+                    url: subject.url,
+                    regNumber: subject.regNumber,
+                    room: subject.room
                 )
                 // filteredData を更新
                 filteredData[indexPath.row] = updated
@@ -855,14 +863,24 @@ final class syllabus: UIViewController,
 
         let sb = UIStoryboard(name: "Main", bundle: nil)
         guard let detail = sb.instantiateViewController(withIdentifier: "SyllabusDetailViewController") as? SyllabusDetailViewController else {
-            print("❌ failed to instantiate SyllabusDetailViewController"); return
+            print("❌ failed to instantiate SyllabusDetailViewController")
+            return
         }
 
-        // 渡す最小情報
         detail.docID = item.docID
         detail.initialTitle = item.class_name
         detail.initialTeacher = item.teacher_name
         detail.initialCredit = item.credit
+        detail.initialURLString = item.url
+        detail.initialRegNumber = item.regNumber
+        detail.initialRoom = item.room
+
+        // ★ 一覧セルと同じ授業を再特定するための材料
+        detail.initialTimeString = item.time
+        detail.initialCampusString = item.campus
+        detail.initialGradeString = item.grade
+        detail.initialCategoryString = item.category
+        detail.initialTermString = item.term
 
         detail.modalPresentationStyle = .pageSheet
         if let sheet = detail.sheetPresentationController {
@@ -1000,8 +1018,8 @@ final class syllabus: UIViewController,
                 timeStr = s.count == 1 ? "\(day)\(s[0])" : "\(day)\(s.first!)-\(s.last!)"
             }
         }
+
         let campusStr: String = {
-            // String/配列どっちでも「キャンパス名を正規化 → 重複除去 → ソート → join」
             var parts: [String] = []
             if let s = x["campus"] as? String {
                 parts = s.split(separator: ",").map { String($0) }
@@ -1020,14 +1038,40 @@ final class syllabus: UIViewController,
         let term = normalizeTerm(termRaw)
         let eval = (x["eval_method"] as? String) ?? ""
 
-        // ★ 安定キー
-        let key = makeStableKey(className: x["class_name"] as? String ?? "",
-                                teacher: x["teacher_name"] as? String ?? "",
-                                time: timeStr,
-                                campus: campusStr,
-                                grade: x["grade"] as? String ?? "",
-                                category: x["category"] as? String ?? "",
-                                term: term)
+        let key = makeStableKey(
+            className: x["class_name"] as? String ?? "",
+            teacher: x["teacher_name"] as? String ?? "",
+            time: timeStr,
+            campus: campusStr,
+            grade: x["grade"] as? String ?? "",
+            category: x["category"] as? String ?? "",
+            term: term
+        )
+
+        let creditString: String = {
+            if let n = x["credit"] as? Int { return String(n) }
+            if let s = x["credit"] as? String { return s }
+            return ""
+        }()
+
+        let urlString: String = {
+            ((x["url"] as? String) ?? (x["syllabusURL"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+
+        let regNumberString: String = {
+            ((x["registration_number"] as? String)
+             ?? (x["code"] as? String)
+             ?? (x["class_code"] as? String)
+             ?? (x["course_code"] as? String)
+             ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+
+        let roomString: String = {
+            ((x["room"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
 
         let model = SyllabusData(
             docID: docID,
@@ -1038,9 +1082,12 @@ final class syllabus: UIViewController,
             campus: campusStr,
             grade: x["grade"] as? String ?? "",
             category: x["category"] as? String ?? "",
-            credit: String(x["credit"] as? Int ?? 0),
+            credit: creditString,
             term: term,
-            eval_method: eval
+            eval_method: eval,
+            url: urlString,
+            regNumber: regNumberString,
+            room: roomString
         )
 
         if !eval.isEmpty {
@@ -1234,7 +1281,10 @@ final class syllabus: UIViewController,
                 category: n.category,
                 credit: n.credit,
                 term: n.term,
-                eval_method: val
+                eval_method: val,
+                url: n.url,
+                regNumber: n.regNumber,
+                room: n.room
             )
         }
     }
@@ -1263,7 +1313,10 @@ final class syllabus: UIViewController,
                 category: n.category,
                 credit: n.credit,
                 term: n.term,
-                eval_method: val
+                eval_method: val,
+                url: n.url,
+                regNumber: n.regNumber,
+                room: n.room
             )
         }
     }

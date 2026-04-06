@@ -20,6 +20,7 @@ struct SyllabusSearchCriteria {
     var timeSlots: [(String, Int)]? = nil
     var term: String? = nil
     var undecided: Bool? = nil      // ★ 追加：授業名に「不定」を含む
+    var registrationType: String? = nil
 }
 
 final class syllabus: UIViewController,
@@ -71,13 +72,14 @@ final class syllabus: UIViewController,
     private var filterTimeSlots: [(day: String, period: Int)]? = nil
     private var filterTerm: String? = nil       // ★ 学期
     private var filterUndecided: Bool = false
+    private var filterRegistrationType: String? = nil
     private var activeKeyword: String? = nil
     private var localOffset = 0
-    private let localPageSize = 20
+    private let localPageSize = 40
     private var usingLocalList = false
     private var localIsLoading = false
     private var isBackgroundFilling = false
-    private let localPrefetchBatch = 120
+    private let localPrefetchBatch = 200
     private var loadingOverlay: SyllabusLoadingOverlay?
     private var listSessionId = UUID()
     private var evalMethodCacheByStableKey: [String: String] = [:]
@@ -113,16 +115,27 @@ final class syllabus: UIViewController,
     private var searchDebounce: DispatchWorkItem?
 
     // ===== ページング =====
-    private var pageSizeBase = 10
+    private var pageSizeBase = 40
     private var lastDoc: DocumentSnapshot?
     private var isLoading = false
     private var reachedEnd = false
     private var seenIds = Set<String>()
 
-    // ===== Loading indicator =====
+    // ===== Loading / Status =====
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
+    private let statusLabel = UILabel()
+    private var isLocalIndexReady = false
+
+    private func setupStatusLabel() {
+        statusLabel.textAlignment = .center
+        statusLabel.numberOfLines = 0
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.font = .systemFont(ofSize: 15)
+        statusLabel.isHidden = true
+    }
     private func setSearching(_ searching: Bool) {
         if searching {
+            statusLabel.isHidden = true
             if syllabus_table.backgroundView !== loadingIndicator {
                 syllabus_table.backgroundView = loadingIndicator
             }
@@ -133,6 +146,22 @@ final class syllabus: UIViewController,
                 syllabus_table.backgroundView = nil
             }
         }
+    }
+    private func showStatusMessage(_ message: String) {
+        loadingIndicator.stopAnimating()
+        statusLabel.text = message
+        statusLabel.isHidden = false
+        syllabus_table.backgroundView = statusLabel
+    }
+    private func clearStatusMessageIfNeeded() {
+        if syllabus_table.backgroundView === statusLabel { syllabus_table.backgroundView = nil }
+        statusLabel.isHidden = true
+    }
+    private func showSearchingMessage(_ message: String = "検索中…") {
+        loadingIndicator.stopAnimating()
+        statusLabel.text = message
+        statusLabel.isHidden = false
+        syllabus_table.backgroundView = statusLabel
     }
     
     // MARK: - Dark Gray theming
@@ -211,6 +240,7 @@ final class syllabus: UIViewController,
 
         // Loading indicator
         loadingIndicator.hidesWhenStopped = true
+        setupStatusLabel()
 
         showLoadingOverlay()
 
@@ -266,6 +296,7 @@ final class syllabus: UIViewController,
         searchVC.initialPeriods    = filterPeriods
         searchVC.initialTimeSlots  = filterTimeSlots
         searchVC.initialTerm       = filterTerm   // ★ 追加
+        searchVC.initialRegistrationType = filterRegistrationType
 
         searchVC.onApply = { [weak self] criteria in
             self?.apply(criteria: criteria)
@@ -283,33 +314,86 @@ final class syllabus: UIViewController,
     }
 
     private func startInitialLoad() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
+        // 一時対応:
+        // ローカルの古いシラバスキャッシュ(2025前期など)が残って一覧に混ざる問題を避けるため、
+        // 一覧は Firebase(classes) を正として読み込む。
+        isLocalIndexReady = false
+        usingLocalList = false
+        showSearchingMessage()
+        loadNextPage()
+    }
 
-            // ★ prepare はBGで（UIを止めない）
-            LocalSyllabusIndex.shared.prepare()
-            let ready = LocalSyllabusIndex.shared.isReady
+    private func currentCriteria(keyword: String? = nil) -> SyllabusSearchCriteria {
+        SyllabusSearchCriteria(
+            keyword: keyword,
+            category: selectedCategory,
+            department: filterDepartment,
+            campus: filterCampus,
+            place: filterPlace,
+            grade: filterGrade,
+            day: filterDay,
+            periods: filterPeriods,
+            timeSlots: filterTimeSlots,
+            term: filterTerm,
+            undecided: filterUndecided,
+            registrationType: filterRegistrationType
+        )
+    }
 
-            let criteria = SyllabusSearchCriteria(
-                category: self.selectedCategory,
-                department: self.filterDepartment,
-                campus: self.filterCampus,
-                place: self.filterPlace,
-                grade: self.filterGrade,
-                day: self.filterDay,
-                periods: self.filterPeriods,
-                timeSlots: self.filterTimeSlots,
-                term: self.filterTerm,
-                undecided: self.filterUndecided
-            )
+    private func registrationType(for regNumber: String) -> String? {
+        let trimmed = regNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed == "#####" { return "required" }
+        if trimmed == "+++++" { return "lottery" }
+        if trimmed.range(of: #"^\d{5}$"#, options: .regularExpression) != nil { return "selectable" }
+        return nil
+    }
 
-            DispatchQueue.main.async {
-                self.usingLocalList = false
-                self.loadNextPage()          // Firestoreで一覧
-                // hideLoadingOverlay は loadNextPage 内で呼ばれてるのでそのままでOK
-            }
-            // LocalSyllabusIndex.prepare() はこのまま残してOK（検索用）
+    private func regNumber(from raw: [String: Any]) -> String {
+        return ((raw["registration_number"] as? String)
+             ?? (raw["code"] as? String)
+             ?? (raw["class_code"] as? String)
+             ?? (raw["course_code"] as? String)
+             ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
+    private func modelMatchesCurrentCriteria(_ item: SyllabusData) -> Bool {
+        if let wanted = filterRegistrationType, !wanted.isEmpty {
+            if registrationType(for: item.regNumber) != wanted { return false }
+        }
+        return true
+    }
+
+    private func loadLocalFirstPage(keyword: String? = nil) {
+        let criteria = currentCriteria(keyword: keyword)
+        usingLocalList = true
+        localOffset = 0
+        data.removeAll()
+        filteredData.removeAll()
+        syllabus_table.reloadData()
+        scrollToTop()
+
+        let chunk: [SyllabusData]
+        if let kw = keyword?.trimmingCharacters(in: .whitespacesAndNewlines), !kw.isEmpty {
+            chunk = LocalSyllabusIndex.shared.search(text: kw, criteria: criteria)
+        } else {
+            chunk = LocalSyllabusIndex.shared.page(criteria: criteria, offset: 0, limit: localPageSize)
+        }
+
+        let safeChunk = preserveEvalMethod(from: data, into: chunk).filter { self.modelMatchesCurrentCriteria($0) }
+        data = safeChunk
+        filteredData = safeChunk
+        localOffset = chunk.count
+        syllabus_table.reloadData()
+        scrollToTop()
+        setSearching(false)
+
+        if safeChunk.isEmpty {
+            showStatusMessage(keyword == nil ? "条件に一致する授業はありません" : "該当する授業が見つかりませんでした")
+        } else {
+            clearStatusMessageIfNeeded()
+            if keyword == nil { kickoffBackgroundLocalFill(criteria: criteria) }
         }
     }
 
@@ -544,6 +628,7 @@ final class syllabus: UIViewController,
         filterTimeSlots  = criteria.timeSlots
         filterTerm       = criteria.term
         filterUndecided = criteria.undecided ?? false
+        filterRegistrationType = criteria.registrationType
 
         DispatchQueue.main.async { [weak self] in
             self?.resetAndReload(keyword: criteria.keyword)
@@ -559,45 +644,28 @@ final class syllabus: UIViewController,
         reachedEnd = false
         lastDoc = nil
         seenIds.removeAll()
-        listSessionId = UUID()          // ★ 新しいセッションを開始
-        isBackgroundFilling = false      // 旧BGループの続行を避ける（念のため）
-        usingLocalList = false           // 一旦無効化（BG追記のガード用）
+        listSessionId = UUID()
+        isBackgroundFilling = false
+        usingLocalList = false
+        clearStatusMessageIfNeeded()
 
         if kw.isEmpty {
-            usingLocalList = false
-
-            // ✅ 条件が変わったら「今までロードした授業」を残さない
             data.removeAll()
             filteredData.removeAll()
             localOffset = 0
             syllabus_table.setContentOffset(.zero, animated: false)
             syllabus_table.reloadData()
-
+            setSearching(false)
             scrollToTop()
-            loadNextPage()   // ✅ 1ページ目から取り直す（条件の授業だけになる）
+            loadNextPage()
             return
         }
 
-        data.removeAll()
+        searchController.searchBar.text = kw
         filteredData.removeAll()
-        searchController.isActive = false
-        syllabus_table.setContentOffset(.zero, animated: false)
         syllabus_table.reloadData()
-
-       // let kw = (keyword ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if kw.isEmpty {
-            searchController.searchBar.text = nil
-            setSearching(false)          // 検索していないので非表示
-            loadNextPage()
-        } else {
-            searchController.searchBar.text = kw
-            // ★ 検索開始時はいったん空表示＋くるくる
-            filteredData.removeAll()
-            syllabus_table.reloadData()
-            scrollToTop()
-            setSearching(true)
-            remoteSearch(text: kw)
-        }
+        scrollToTop()
+        performSearch(text: kw)
     }
 
     // ===== クライアント側の最終フィルタ =====
@@ -620,6 +688,11 @@ final class syllabus: UIViewController,
         if let g = filterGrade, !g.isEmpty {
             let s = (x["grade"] as? String) ?? ""
             if !(s == g || s.contains(g)) { return false }
+        }
+
+        if let wanted = filterRegistrationType, !wanted.isEmpty {
+            let reg = regNumber(from: x)
+            if registrationType(for: reg) != wanted { return false }
         }
 
         // === 不定（授業名に「不定」を含む）===
@@ -689,6 +762,33 @@ final class syllabus: UIViewController,
     }
 
     // ===== クエリのベース（通信費削減：できるだけサーバで絞る） =====
+
+    private func currentPageSize() -> Int {
+        var size = pageSizeBase
+
+        let hasBroadCategoryFilter =
+            (selectedCategory?.isEmpty == false) && (filterDepartment?.isEmpty ?? true)
+
+        let hasExtraNarrowingFilter =
+            (filterCampus?.isEmpty == false) ||
+            (filterPlace?.isEmpty == false) ||
+            (filterGrade?.isEmpty == false) ||
+            (filterDay?.isEmpty == false) ||
+            ((filterPeriods?.isEmpty == false)) ||
+            ((filterTimeSlots?.isEmpty == false)) ||
+            (filterTerm?.isEmpty == false) ||
+            filterUndecided ||
+            (filterRegistrationType?.isEmpty == false)
+
+        if hasBroadCategoryFilter && !hasExtraNarrowingFilter {
+            size = max(size, 80)
+        } else if selectedCategory?.isEmpty == false || filterDepartment?.isEmpty == false {
+            size = max(size, 50)
+        }
+
+        return size
+    }
+
     private func baseQuery() -> Query {
         var q: Query = db.collection("classes")
 
@@ -717,7 +817,7 @@ final class syllabus: UIViewController,
     func loadNextPage() {
         if let kw = activeKeyword, !kw.isEmpty { return }
 
-            // ✅ ローカル一覧を使っているときだけ、Firestoreページングを止める
+        // ✅ ローカル一覧を使っているときだけ、Firestoreページングを止める
         if usingLocalList && LocalSyllabusIndex.shared.isReady { return }
 
         guard !isLoading, !reachedEnd else { return }
@@ -728,9 +828,11 @@ final class syllabus: UIViewController,
         let qBase = baseQuery()
         let hasTimeFilter = (filterDay?.isEmpty == false) || ((filterPeriods?.count ?? 0) == 1)
 
+        let pageSize = currentPageSize()
+
         var q: Query = hasTimeFilter
-            ? qBase.limit(to: pageSizeBase)
-            : qBase.order(by: "class_name").limit(to: pageSizeBase)
+            ? qBase.limit(to: pageSize)
+            : qBase.order(by: "class_name").limit(to: pageSize)
 
         if let last = lastDoc { q = q.start(afterDocument: last) }
 
@@ -741,11 +843,29 @@ final class syllabus: UIViewController,
             guard self.listSessionId == session else { return }
 
             self.isLoading = false
-            if let err = err { print("Firestore error:", err); return }
+            if let err = err {
+                print("Firestore error:", err)
+                DispatchQueue.main.async {
+                    guard self.listSessionId == session else { return }
+                    self.showStatusMessage("検索に失敗しました")
+                    self.hideLoadingOverlay()
+                }
+                return
+            }
             guard let snap = snap else { return }
 
             if snap.documents.isEmpty {
                 self.reachedEnd = true
+                DispatchQueue.main.async {
+                    guard self.listSessionId == session else { return }
+                    if self.data.isEmpty {
+                        self.setSearching(false)
+                        self.showStatusMessage("条件に一致する授業はありません")
+                    } else {
+                        self.clearStatusMessageIfNeeded()
+                    }
+                    self.hideLoadingOverlay()
+                }
                 return
             }
 
@@ -758,9 +878,9 @@ final class syllabus: UIViewController,
             }
 
             self.lastDoc = snap.documents.last
-            if snap.documents.count < self.pageSizeBase { self.reachedEnd = true }
+            if snap.documents.count < pageSize { self.reachedEnd = true }
 
-            let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)
+            let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk).filter { self.modelMatchesCurrentCriteria($0) }
             self.data.append(contentsOf: safeChunk)
 
             if hasTimeFilter {
@@ -770,8 +890,16 @@ final class syllabus: UIViewController,
             self.filteredData = self.data
 
             DispatchQueue.main.async {
-                // ★ 念のためUI反映直前もセッション確認
                 guard self.listSessionId == session else { return }
+
+                if self.data.isEmpty && !self.reachedEnd {
+                    self.showSearchingMessage()
+                    self.syllabus_table.reloadData()
+                    self.loadNextPage()
+                    return
+                }
+
+                self.clearStatusMessageIfNeeded()
                 self.syllabus_table.reloadData()
                 self.hideLoadingOverlay()
             }
@@ -909,21 +1037,10 @@ final class syllabus: UIViewController,
             let y = scrollView.contentOffset.y
             let needMore = y > scrollView.contentSize.height - scrollView.frame.size.height - 400
             if needMore {
-                let criteria = SyllabusSearchCriteria(
-                    category: selectedCategory,
-                    department: filterDepartment,
-                    campus: filterCampus,
-                    place: filterPlace,
-                    grade: filterGrade,
-                    day: filterDay,
-                    periods: filterPeriods,
-                    timeSlots: filterTimeSlots,
-                    term: filterTerm,
-                    undecided: filterUndecided
-                )
+                let criteria = currentCriteria()
                 let chunk = LocalSyllabusIndex.shared.page(criteria: criteria, offset: localOffset, limit: localPageSize)
                 if !chunk.isEmpty {
-                    let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk)  // ← 温存
+                    let safeChunk = self.preserveEvalMethod(from: self.data, into: chunk).filter { self.modelMatchesCurrentCriteria($0) }
                     let start = data.count
                     data.append(contentsOf: safeChunk)
                     filteredData = data
@@ -933,7 +1050,7 @@ final class syllabus: UIViewController,
                     self.syllabus_table.performBatchUpdates {
                         self.syllabus_table.insertRows(at: newIndexPaths, with: .none)
                     }
-                    self.localOffset += safeChunk.count
+                    self.localOffset += chunk.count
                 }
             }
             return
@@ -995,7 +1112,7 @@ final class syllabus: UIViewController,
                     self.syllabus_table.performBatchUpdates {
                         self.syllabus_table.insertRows(at: newIndexPaths, with: .none)
                     }
-                    self.localOffset += safeChunk.count
+                    self.localOffset += chunk.count
                 }
                 usleep(80_000)
             }
@@ -1109,12 +1226,25 @@ final class syllabus: UIViewController,
 
         if text.isEmpty {
             setSearching(false)
-            resetAndReload(keyword: nil)   // ✅ 1から作り直す
+            clearStatusMessageIfNeeded()
+            resetAndReload(keyword: nil)
             return
         }
 
+        if !isLocalIndexReady {
+            clearStatusMessageIfNeeded()
+            setSearching(true)
+        }
 
-        // ★ 新しい検索を始める時はいったん空表示にして上の古いセルを消す＋くるくる
+        if text.count < 2 {
+            setSearching(false)
+            filteredData.removeAll()
+            syllabus_table.reloadData()
+            showStatusMessage("2文字以上で検索してください")
+            return
+        }
+
+        clearStatusMessageIfNeeded()
         if !filteredData.isEmpty {
             filteredData.removeAll()
             syllabus_table.reloadData()
@@ -1122,127 +1252,54 @@ final class syllabus: UIViewController,
         }
         setSearching(true)
 
-        let work = DispatchWorkItem { [weak self] in self?.remoteSearch(text: text) }
+        let work = DispatchWorkItem { [weak self] in self?.performSearch(text: text) }
         searchDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
-    // ===== リモート検索（通信量を抑えつつ、長い語でもヒットが減らないように） =====
-    private func remoteSearch(text rawText: String) {
-        let session = listSessionId
+    // ===== ローカル検索（常に同じ経路） =====
+    private func performSearch(text rawText: String) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
-            self.filteredData = self.data
-            self.syllabus_table.reloadData()
-            scrollToTop()
-            setSearching(false)
-            return
-        }
-
-        if LocalSyllabusIndex.shared.isReady {
-            let criteria = SyllabusSearchCriteria(
-                keyword: text,              // ★ キーワードも入れる
-                category: selectedCategory,
-                department: filterDepartment,
-                campus: filterCampus,
-                place: filterPlace,
-                grade: filterGrade,
-                day: filterDay,
-                periods: filterPeriods,
-                timeSlots: filterTimeSlots,
-                term: filterTerm,
-                undecided: filterUndecided
-            )
-            let models = LocalSyllabusIndex.shared.search(text: text, criteria: criteria)
-            let merged = self.preserveEvalMethod(from: self.data, into: models)
-            self.filteredData = merged
-            self.syllabus_table.reloadData()
-            self.scrollToTop()
-            self.setSearching(false)
-            return
-        } else {
-            loadNextPage()
-        }
-        
-        // 1文字は prefix 検索（2クエリ）…軽量で十分
-        if text.count == 1 {
-            let startKey = text, endKey = text + "\u{f8ff}"
-            let queries: [Query] = [
-                baseQuery().order(by: "class_name").start(at: [startKey]).end(at: [endKey]).limit(to: 50),
-                baseQuery().order(by: "teacher_name").start(at: [startKey]).end(at: [endKey]).limit(to: 50)
-            ]
-            let group = DispatchGroup()
-            var docs: [QueryDocumentSnapshot] = []
-            for q in queries {
-                group.enter()
-                q.getDocuments { snap, _ in defer { group.leave() }
-                    if let snap = snap { docs += snap.documents }
-                }
-            }
-            group.notify(queue: .main) { [weak self] in
-                guard let self = self else { return }
-                var seen = Set<String>()
-                let models = docs.compactMap { (d) -> SyllabusData? in
-                    let raw = d.data()
-                    guard self.docMatchesFilters(raw) else { return nil }
-                    guard seen.insert(d.documentID).inserted else { return nil }
-                    return self.toModel(docID: d.documentID, raw)
-                }
-                self.filteredData = models
-                self.syllabus_table.reloadData()
-                self.scrollToTop()
-                self.setSearching(false)   // 結果確定（0件でも消灯）
-            }
-            return
-        }
-
-        // 2文字以上：n-gram で粗く拾い、ローカル contains で最終判定
-        let normalizedQuery = normalizeForSearch(text)
-        let tokens  = tokensForArrayContainsAny(text)      // ← ここが改良点
-        guard !tokens.isEmpty else {
-            // トークン化できない場合は軽量 prefix へ
-            filteredData.removeAll()
+            filteredData = data
             syllabus_table.reloadData()
             scrollToTop()
-            fallbackPrefixSearch(text: text, base: [])
+            setSearching(false)
+            clearStatusMessageIfNeeded()
             return
         }
 
-        var q: Query = baseQuery()
-            .whereField("ngrams2", arrayContainsAny: tokens)  // サーバ側：ORで粗く
-            .order(by: "class_name")
-            .limit(to: 120)                                   // 上限で通信を制御
-
-        q.getDocuments { [weak self] snap, _ in
-            guard let self = self else { return }
-            let docs = snap?.documents ?? []
-
-            // ローカル最終判定：正規化した「授業名+教員名」に正規化クエリが含まれるか（substring）
-            var seen = Set<String>()
-            let models = docs.compactMap { (d) -> SyllabusData? in
-                let x = d.data()
-                guard self.docMatchesFilters(x) else { return nil }
-                let haystack = self.aggregateDocText(x)
-                guard haystack.contains(normalizedQuery) else { return nil }
-                guard seen.insert(d.documentID).inserted else { return nil }
-                return self.toModel(docID: d.documentID, x)
-            }
-
-            if !models.isEmpty {
-                self.filteredData = models
-                self.syllabus_table.reloadData()
-                self.scrollToTop()
-                self.setSearching(false)   // 結果確定
-            } else {
-                // 0件なら最小限のフォールバック（ここでは継続表示、確定はフォールバック側で消灯）
-                self.filteredData.removeAll()
-                self.syllabus_table.reloadData()
-                self.scrollToTop()
-                self.fallbackPrefixSearch(text: text, existingIDs: seen, base: [])
-            }
-            print("🔍 ngram fetched:", docs.count, "final:", models.count)
+        guard text.count >= 2 else {
+            setSearching(false)
+            filteredData.removeAll()
+            syllabus_table.reloadData()
+            showStatusMessage("2文字以上で検索してください")
+            return
         }
+
+        if isLocalIndexReady, LocalSyllabusIndex.shared.isReady {
+            let criteria = currentCriteria(keyword: text)
+            let models = LocalSyllabusIndex.shared.search(text: text, criteria: criteria)
+            let merged = preserveEvalMethod(from: data, into: models).filter { self.modelMatchesCurrentCriteria($0) }
+            filteredData = merged
+            syllabus_table.reloadData()
+            scrollToTop()
+            setSearching(false)
+
+            if merged.isEmpty {
+                showStatusMessage("該当する授業が見つかりませんでした")
+            } else {
+                clearStatusMessageIfNeeded()
+            }
+            return
+        }
+
+        filteredData.removeAll()
+        syllabus_table.reloadData()
+        scrollToTop()
+        fallbackPrefixSearch(text: text)
     }
+
     private func mergeEvalMethodFromOld(_ old: [SyllabusData], into new: [SyllabusData]) -> [SyllabusData] {
         // 旧一覧から一発で引ける辞書を作る（O(n)）
         var byId: [String: String] = [:]
@@ -1354,6 +1411,11 @@ final class syllabus: UIViewController,
             self.syllabus_table.reloadData()
             self.scrollToTop()
             self.setSearching(false)       // フォールバック結果確定（0件でも消灯）
+            if models.isEmpty {
+                self.showStatusMessage("該当する授業が見つかりませんでした")
+            } else {
+                self.clearStatusMessageIfNeeded()
+            }
             print("🔁 fallback(prefix) replaced, total:", models.count)
         }
     }

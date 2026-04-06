@@ -43,8 +43,8 @@ final class CircleFilterViewController: UIViewController {
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(didTapClose))
 
         buildUI()
-        applyInitialStateToUI()
-        updateFeeLabel()
+       // applyInitialStateToUI()
+       // updateFeeLabel()
     }
 
     private func buildUI() {
@@ -233,8 +233,8 @@ final class CircleFilterViewController: UIViewController {
         feeMaxSlider.minimumValue = 0
         feeMaxSlider.maximumValue = 50000
 
-        feeMinSlider.addTarget(self, action: #selector(feeChanged), for: .valueChanged)
-        feeMaxSlider.addTarget(self, action: #selector(feeChanged), for: .valueChanged)
+       // feeMinSlider.addTarget(self, action: #selector(feeChanged), for: .valueChanged)
+       // feeMaxSlider.addTarget(self, action: #selector(feeChanged), for: .valueChanged)
 
         v.addArrangedSubview(header)
         v.addArrangedSubview(feeLabel)
@@ -296,7 +296,7 @@ final class CircleFilterViewController: UIViewController {
 
         return container
     }
-
+/*
     private func applyInitialStateToUI() {
         let minV = Float(filters.feeMin ?? 0)
         let maxV = Float(filters.feeMax ?? 50000)
@@ -324,7 +324,7 @@ final class CircleFilterViewController: UIViewController {
         let minText = filters.feeMin.map { "\(formatYen($0))円" } ?? "0円"
         let maxText = filters.feeMax.map { "\(formatYen($0))円" } ?? "50,000円以上"
         feeLabel.text = "\(minText)〜\(maxText)"
-    }
+    } */
 
     private func formatYen(_ v: Int) -> String {
         let nf = NumberFormatter()
@@ -343,7 +343,7 @@ final class CircleFilterViewController: UIViewController {
 
         feeMinSlider.value = 0
         feeMaxSlider.value = 50000
-        updateFeeLabel()
+      //  updateFeeLabel()
 
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         buildUI()

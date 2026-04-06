@@ -118,13 +118,55 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
         }
     }
     
+
+    private func trimmed(_ s: String?) -> String {
+        (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func matchesPrimaryIdentity(_ data: [String: Any]) -> Bool {
+        let titleMatches = trimmed(data["class_name"] as? String) == trimmed(initialTitle)
+        let initialTeacherTrimmed = trimmed(initialTeacher)
+        let teacherMatches = initialTeacherTrimmed.isEmpty || trimmed(data["teacher_name"] as? String) == initialTeacherTrimmed
+        return titleMatches && teacherMatches
+    }
+
+    private func candidateScore(_ data: [String: Any]) -> Int {
+        var score = 0
+
+        if trimmed(data["class_name"] as? String) == trimmed(initialTitle) { score += 5 }
+
+        let teacher = trimmed(initialTeacher)
+        if !teacher.isEmpty, trimmed(data["teacher_name"] as? String) == teacher { score += 5 }
+
+        let grade = trimmed(initialGradeString)
+        if !grade.isEmpty, trimmed(data["grade"] as? String) == grade { score += 2 }
+
+        let category = trimmed(initialCategoryString)
+        if !category.isEmpty, trimmed(data["category"] as? String) == category { score += 2 }
+
+        let term = normalizeTerm(trimmed(initialTermString))
+        if !term.isEmpty, normalizeTerm(trimmed(data["term"] as? String)) == term { score += 2 }
+
+        let time = trimmed(initialTimeString)
+        if !time.isEmpty, buildTimeString(from: data["time"] as? [String: Any]) == time { score += 3 }
+
+        let initialCampus = Set(trimmed(initialCampusString).split(separator: ",").map { String($0) }.filter { !$0.isEmpty })
+        let dataCampusRaw = (data["campus"] as? String) ?? ""
+        let dataCampus = Set(dataCampusRaw.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        if !initialCampus.isEmpty && !dataCampus.isEmpty && !initialCampus.isDisjoint(with: dataCampus) {
+            score += 1
+        }
+
+        return score
+    }
+
     private func resolveAndLoadBestDetail() {
         // 1) まず docID で引いてみる
         if let id = docID, !id.isEmpty {
             Firestore.firestore().collection("classes").document(id).getDocument { [weak self] snap, err in
                 guard let self = self else { return }
 
-                if let data = snap?.data(), self.matchesInitialCell(data) {
+                if let data = snap?.data(), self.matchesPrimaryIdentity(data) {
                     self.applyFetchedDetail(data)
                     return
                 }
@@ -191,7 +233,7 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
             q = q.whereField("teacher_name", isEqualTo: teacher)
         }
 
-        q.limit(to: 20).getDocuments { [weak self] snap, err in
+        q.limit(to: 50).getDocuments { [weak self] snap, err in
             guard let self = self else { return }
 
             let docs = snap?.documents ?? []
@@ -201,7 +243,20 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
                 return
             }
 
-            // 完全一致が無ければ、最初の候補を雑に使わず、渡されたURLにフォールバック
+            let ranked = docs
+                .map { ($0.data(), self.candidateScore($0.data())) }
+                .sorted { $0.1 > $1.1 }
+
+            if let best = ranked.first, best.1 >= 5 {
+                self.applyFetchedDetail(best.0)
+                return
+            }
+
+            if docs.count == 1, let only = docs.first, self.matchesPrimaryIdentity(only.data()) {
+                self.applyFetchedDetail(only.data())
+                return
+            }
+
             self.fallbackLoadInitialURLOnly()
         }
     }

@@ -34,7 +34,7 @@ fileprivate struct CircleDetail: Hashable {
     var targetNonFreshmen: String?
     var targetDoubleClub: String?
 
-    var annualYen: Int?
+    var feeRaw: String?
     var feeNote: String?
 
     var ratingActivity: Int?
@@ -106,7 +106,7 @@ fileprivate struct CircleDetail: Hashable {
             targetNonFreshmen: target?["nonFreshmen"] as? String,
             targetDoubleClub: target?["doubleClub"] as? String,
 
-            annualYen: fee?["annualYen"] as? Int,
+            feeRaw: fee?["raw"] as? String,
             feeNote: fee?["note"] as? String,
 
             ratingActivity: intValue(ratings?["activity"]),
@@ -973,7 +973,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
         feeTitleLabel.font = .systemFont(ofSize: 18, weight: .bold)
 
         feeRowAnnual = FeeRowView(leftText: "費用", bg: grayBG())
-        feeRowOther = FeeRowView(leftText: "その他", bg: grayBG())
+        feeRowOther = FeeRowView(leftText: "補足", bg: grayBG())
 
         feeSectionStack.translatesAutoresizingMaskIntoConstraints = false
         feeSectionStack.axis = .vertical
@@ -1197,10 +1197,11 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
 
         setLineSpacing(messageBody, text: d.message, spacing: 3.0)
 
-        if let yen = d.annualYen {
-            feeRowAnnual.setValue("\(yen)円（通年）")
-        } else {
+        let rawFee = (d.feeRaw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if rawFee.isEmpty {
             feeRowAnnual.setValue("—")
+        } else {
+            feeRowAnnual.setValue(rawFee)
         }
 
         let note = (d.feeNote ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

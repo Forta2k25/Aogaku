@@ -8,8 +8,6 @@ struct CircleFilters: Equatable {
     var canDouble: Bool? = nil
     var hasSelection: Bool? = nil
     var moods: Set<String> = []
-    var feeMin: Int? = nil
-    var feeMax: Int? = nil
 }
 
 final class CirclesViewController: UIViewController,
@@ -96,6 +94,7 @@ final class CirclesViewController: UIViewController,
         sb.autocapitalizationType = .none
         sb.autocorrectionType = .no
         sb.spellCheckingType = .no
+        sb.returnKeyType = .done
         return sb
     }()
 
@@ -160,6 +159,7 @@ final class CirclesViewController: UIViewController,
 
         campusSegmentedControl.addTarget(self, action: #selector(campusChanged), for: .valueChanged)
         searchBar.delegate = self
+        setupSearchKeyboardToolbar()
 
         sortButton.addTarget(self, action: #selector(didTapSort), for: .touchUpInside)
         updateSortButtonTitle()
@@ -172,7 +172,6 @@ final class CirclesViewController: UIViewController,
         loadGridColumns()
 
         selectedCampus = "青山"
-        setItems(CircleItem.mock(for: selectedCampus))
         startListening()
     }
 
@@ -181,6 +180,25 @@ final class CirclesViewController: UIViewController,
         NotificationCenter.default.removeObserver(self)
     }
 
+    private func setupSearchKeyboardToolbar() {
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+
+        let flexible = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+        let done = UIBarButtonItem(title: "完了", style: .done, target: self, action: #selector(didTapSearchDone))
+
+        toolbar.items = [flexible, done]
+
+        if let textField = searchBar.searchTextField as UITextField? {
+            textField.inputAccessoryView = toolbar
+            textField.returnKeyType = .done
+        }
+    }
+
+    @objc private func didTapSearchDone() {
+        searchBar.resignFirstResponder()
+    }
+    
     // MARK: - Navigation
     private func setupNavigationHeader() {
         navigationItem.largeTitleDisplayMode = .never
@@ -481,14 +499,6 @@ final class CirclesViewController: UIViewController,
 
             if !filters.moods.isEmpty, !filters.moods.contains(item.intensity) {
                 return false
-            }
-
-            if let minV = filters.feeMin {
-                guard let fee = item.annualFeeYen, fee >= minV else { return false }
-            }
-
-            if let maxV = filters.feeMax {
-                guard let fee = item.annualFeeYen, fee <= maxV else { return false }
             }
 
             return true

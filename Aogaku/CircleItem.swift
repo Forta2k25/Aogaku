@@ -25,7 +25,6 @@ struct CircleItem: Hashable {
     let weekdays: [String]
     let canDouble: Bool?
     let hasSelection: Bool?
-    let annualFeeYen: Int?
 
     // ✅ 人数表示テキスト（Firestore: members.size）
     let memberSizeText: String?
@@ -54,7 +53,6 @@ struct CircleItem: Hashable {
          weekdays: [String] = [],
          canDouble: Bool? = nil,
          hasSelection: Bool? = nil,
-         annualFeeYen: Int? = nil,
          memberSizeText: String? = nil,
          memberTotalText: String? = nil) {
 
@@ -72,7 +70,6 @@ struct CircleItem: Hashable {
         self.weekdays = weekdays
         self.canDouble = canDouble
         self.hasSelection = hasSelection
-        self.annualFeeYen = annualFeeYen
 
         self.memberSizeText = memberSizeText
         self.memberTotalText = memberTotalText
@@ -163,16 +160,6 @@ struct CircleItem: Hashable {
             self.weekdays = (data["weekdays"] as? [String]) ?? []
         }
 
-        // 年額費用
-        if let top = data["annualFeeYen"] as? Int {
-            self.annualFeeYen = top
-        } else if
-            let fee = data["fee"] as? [String: Any],
-            let annual = fee["annualYen"] as? Int {
-            self.annualFeeYen = annual
-        } else {
-            self.annualFeeYen = nil
-        }
     }
 
     // MARK: - Normalize helpers
@@ -244,37 +231,4 @@ struct CircleItem: Hashable {
         return nums[0]
     }
 
-    static func mock(for campus: String) -> [CircleItem] {
-        if campus == "相模原" {
-            return [
-                CircleItem(id: "m1", name: "理工サイエンス部", campus: campus, intensity: "ガチめ", popularity: 90,
-                           kind: "部活",
-                           category: "IT・ビジネス", targets: ["青学生のみ"], weekdays: ["水"], canDouble: false, hasSelection: true, annualFeeYen: 20000,
-                           memberSizeText: "50人前後"),
-                CircleItem(id: "m2", name: "Sagamihara Music", campus: campus, intensity: "ゆるめ", popularity: 80,
-                           kind: "サークル",
-                           category: "音楽", targets: ["インカレ"], weekdays: ["不定期"], canDouble: true, hasSelection: false, annualFeeYen: 5000,
-                           memberSizeText: "20〜30人"),
-            ]
-        } else {
-            return [
-                CircleItem(id: "a1", name: "茶道部", campus: campus, intensity: "ふつう", popularity: 100,
-                           kind: "部活",
-                           category: "文化・芸術", targets: ["青学生のみ"], weekdays: ["木"], canDouble: true, hasSelection: false, annualFeeYen: 15000,
-                           memberSizeText: "40人程度"),
-                CircleItem(id: "a2", name: "ESS123daily", campus: campus, intensity: "ゆるめ", popularity: 95,
-                           kind: "サークル",
-                           category: "国際・語学", targets: ["インカレ"], weekdays: ["木"], canDouble: true, hasSelection: false, annualFeeYen: 10000,
-                           memberSizeText: "100人前後"),
-                CircleItem(id: "a3", name: "Sonickers", campus: campus, intensity: "ふつう", popularity: 90,
-                           kind: "サークル",
-                           category: "音楽", targets: ["新入生のみ"], weekdays: ["土"], canDouble: true, hasSelection: true, annualFeeYen: 30000,
-                           memberSizeText: "30人前後"),
-                CircleItem(id: "a4", name: "英字新聞編集委員会", campus: campus, intensity: "ガチめ", popularity: 85,
-                           kind: "その他",
-                           category: "学生団体", targets: ["青学生のみ"], weekdays: ["月","金"], canDouble: false, hasSelection: true, annualFeeYen: 0,
-                           memberSizeText: "10人程度"),
-            ]
-        }
-    }
 }

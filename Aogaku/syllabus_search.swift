@@ -6,40 +6,56 @@ private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
 }
 
-final class syllabus_search: UIViewController, BannerViewDelegate {
+final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDelegate {
 
     // ===== 入出力 =====
     var initialCategory: String?
     var initialDepartment: String?
     var initialCampus: String?
-    var initialPlace: String?          // "対面" / "オンライン"
+    var initialPlace: String?
     var initialGrade: String?
     var initialDay: String?
     var initialPeriods: [Int]?
-    var initialTimeSlots: [(String, Int)]?   // ★ 複数コマの復元用
-    var initialTerm: String?                 // ★ 追加: "前期" / "後期" / nil
+    var initialTimeSlots: [(String, Int)]?
+    var initialTerm: String?
+    var initialRegistrationType: String?
     var onApply: ((SyllabusSearchCriteria) -> Void)?
     var term: String?
 
-    // ===== AdMob (Banner) =====
+    // ===== AdMob =====
     private let adContainer = UIView()
     private var bannerView: BannerView?
     private var adContainerHeight: NSLayoutConstraint?
     private var lastBannerWidth: CGFloat = 0
     private var didLoadBannerOnce = false
-    private let bannerBottomOffset: CGFloat = 45   // ← 下へ 8pt ずらす（好みで調整）
+    private let bannerBottomOffset: CGFloat = 45
 
-    // ===== Outlets =====
-    @IBOutlet weak var keywordTextField: UITextField!
-    @IBOutlet weak var facultyButton: UIButton!
-    @IBOutlet weak var departmentButton: UIButton!
-    @IBOutlet weak var campusSegmentedControl: UISegmentedControl!
-    @IBOutlet weak var placeSegmentedControl: UISegmentedControl!
-    @IBOutlet weak var termSegmentedControl: UISegmentedControl!    // ★ 追加: 前期/後期
-    @IBOutlet var slotButtons: [UIButton]!
-    @IBOutlet weak var gridContainerView: UIView!
-    @IBOutlet weak var detailFilterButton: UIButton!
-    @IBOutlet weak var resetButton: UIButton!
+    // ===== UI =====
+    private let scrollView = UIScrollView()
+    private let contentStack = UIStackView()
+    private let grabber = UIView()
+    private let titleLabel = UILabel()
+    private let headerButtonStack = UIStackView()
+    private let resetButton = UIButton(type: .system)
+    private let favoritesButton = UIButton(type: .system)
+
+    private let searchRow = UIStackView()
+    private let searchFieldContainer = UIView()
+    private let searchIconView = UIImageView(image: UIImage(systemName: "magnifyingglass"))
+    private let keywordTextField = UITextField()
+    private let applyButton = UIButton(type: .system)
+
+    private let buttonRow = UIStackView()
+    private let facultyButton = UIButton(type: .system)
+    private let departmentButton = UIButton(type: .system)
+
+    private let campusSegmentedControl = UISegmentedControl()
+    private let termSegmentedControl = UISegmentedControl()
+    private let placeSegmentedControl = UISegmentedControl()
+    private let registrationSegmentedControl = UISegmentedControl()
+
+    private let gridContainerView = UIView()
+    private var slotButtons: [UIButton] = []
 
     // ===== 内部状態 =====
     private var selectedCategory: String?
@@ -47,10 +63,9 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
     private var selectedCampus: String?
     private var selectedPlace: String?
     private var selectedGrade: String?
-    private var selectedTerm: String?    // ★ "前期" / "後期" / nil
-    //リセットボタン関連 ===
-    private weak var favoritesButtonDetected: UIButton?   // 既存の「ブックマーク」ボタンを自動検出
-    private var didInstallResetButton = false
+    private var selectedTerm: String?
+    private var selectedRegistrationType: String?
+
     private var selectedStates = Array(repeating: false, count: 25)
     private let days = ["月","火","水","木","金"]
     private let periods = [1,2,3,4,5]
@@ -79,206 +94,599 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         "教職課程科目": ["指定なし"]
     ]
 
-    // 一度だけやる系
-    private var didAssignTags = false
-    private var didApplyInitialSelection = false
-    private var didBuildGridConstraints = false
-
-    // ===== ライフサイクル =====
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        selectedCategory   = initialCategory
+        selectedCategory = initialCategory
         selectedDepartment = initialDepartment
-        selectedCampus     = initialCampus
-        selectedPlace      = initialPlace
-        selectedGrade      = initialGrade
-        selectedTerm       = initialTerm   // ★ 追加
+        selectedCampus = initialCampus
+        selectedPlace = initialPlace
+        selectedGrade = initialGrade
+        selectedTerm = initialTerm
+        selectedRegistrationType = initialRegistrationType
 
+        buildUI()
         setupFacultyMenu()
         setupDepartmentMenu(initial: selectedCategory ?? "指定なし")
-
-        // 学部
-        if let cat = selectedCategory, cat != "指定なし" {
-            setButtonTitleAndColor(facultyButton, title: cat, color: .black)
-        } else {
-            setButtonTitleAndColor(facultyButton, title: "学部", color: .lightGray)
-            selectedCategory = nil
-        }
-
-        // 学科（★ 教育人間科学部だけ表示名↔クエリ名をマップ）
-        if let title = departmentDisplayTitle(for: selectedCategory, stored: selectedDepartment) {
-            departmentButton.setTitle(title, for: .normal)
-            setButtonTitleColor(departmentButton, .black)
-        } else {
-            departmentButton.setTitle("学科", for: .normal)
-            setButtonTitleColor(departmentButton, .lightGray)
-            selectedDepartment = nil
-        }
-
-        // キャンパス
-        let campuses = ["指定なし","青山","相模原"]
-        campusSegmentedControl.removeAllSegments()
-        for (i, t) in campuses.enumerated() { campusSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
-        campusSegmentedControl.selectedSegmentIndex = indexFor(value: selectedCampus, in: campuses)
-        //campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-        //campusSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-        restyleSegmented(campusSegmentedControl)
-
-        // 形態
-        let places = ["指定なし","対面","オンライン"]
-        placeSegmentedControl.removeAllSegments()
-        for (i, t) in places.enumerated() { placeSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
-        placeSegmentedControl.selectedSegmentIndex = indexFor(value: selectedPlace, in: places)
-        //placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-        //placeSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-        restyleSegmented(placeSegmentedControl)
-
-        
-        // ★ 学期（前期/後期）
-        let terms = ["指定なし","前期","後期"]
-        termSegmentedControl.removeAllSegments()
-        for (i, t) in terms.enumerated() { termSegmentedControl.insertSegment(withTitle: t, at: i, animated: false) }
-        termSegmentedControl.selectedSegmentIndex = indexFor(value: selectedTerm, in: terms)
-        //termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-        //termSegmentedControl.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-        restyleSegmented(termSegmentedControl)
-        
+        configureInitialSelections()
         configureSlotButtons()
-        // グリッド制約/タグ採番/初期選択は viewDidLayoutSubviews で
-
         setupAdBanner()
+
         NotificationCenter.default.addObserver(self,
-            selector: #selector(onAdMobReady),
-            name: .adMobReady, object: nil)
-        applySearchBackground()   // ← 背景だけグレーに
-        applyHeaderTitleColor()     // ← 見出しの色だけ動的に
-        applySearchFieldStyle()   // ← 検索窓だけグレー化
+                                               selector: #selector(onAdMobReady),
+                                               name: .adMobReady,
+                                               object: nil)
     }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            applyTheme()
+        }
+    }
+
     @objc private func onAdMobReady() {
         loadBannerIfNeeded()
     }
 
-    // 画面上部あたりに追記
-    private func searchBGColor(for trait: UITraitCollection) -> UIColor {
-        // ライト…従来どおり淡いグレー、ダーク…少し暗めのグレー
-        return (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemGray6
-    }
-    // ★ 追加: モードに応じて薄いグレーを返す（ライト=systemGray6 / ダーク=systemGray5）
-    private func slotNormalBGColor(for trait: UITraitCollection) -> UIColor {
-        // 背景より“ほんの少しだけ”薄い
-        if trait.userInterfaceStyle == .dark {
-            return .systemGray3   // 背景(systemGray5)より1段明るい
-        } else {
-        return UIColor(white: 0.96, alpha: 1.0) // 背景(systemGray6)よりわずかに明るい薄グレー
-    }
+    private func buildUI() {
+        view.backgroundColor = searchBGColor(for: traitCollection)
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.alwaysBounceVertical = true
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.axis = .vertical
+        contentStack.spacing = 8
+
+        view.addSubview(scrollView)
+        scrollView.addSubview(contentStack)
+
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            contentStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 4),
+            contentStack.leadingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.leadingAnchor, constant: 16),
+            contentStack.trailingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.trailingAnchor, constant: -16),
+            contentStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -12),
+            contentStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -32)
+        ])
+
+        let headerRow = UIStackView()
+        headerRow.axis = .horizontal
+        headerRow.alignment = .center
+        headerRow.spacing = 8
+
+        titleLabel.text = "シラバス検索"
+        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
+        titleLabel.textColor = .label
+
+        headerButtonStack.axis = .horizontal
+        headerButtonStack.spacing = 8
+        headerButtonStack.alignment = .center
+
+        configureTopIconButton(resetButton, systemName: "arrow.counterclockwise")
+        configureTopIconButton(favoritesButton, systemName: "bookmark")
+        resetButton.addTarget(self, action: #selector(didTapReset), for: .touchUpInside)
+        favoritesButton.addTarget(self, action: #selector(didTapFavorites), for: .touchUpInside)
+        headerButtonStack.addArrangedSubview(resetButton)
+        headerButtonStack.addArrangedSubview(favoritesButton)
+
+        headerRow.addArrangedSubview(titleLabel)
+        headerRow.addArrangedSubview(UIView())
+        headerRow.addArrangedSubview(headerButtonStack)
+        contentStack.addArrangedSubview(headerRow)
+
+        searchRow.axis = .horizontal
+        searchRow.spacing = 8
+        searchRow.alignment = .fill
+
+        searchFieldContainer.translatesAutoresizingMaskIntoConstraints = false
+        searchFieldContainer.layer.cornerRadius = 14
+        searchFieldContainer.layer.masksToBounds = true
+        searchFieldContainer.heightAnchor.constraint(equalToConstant: 52).isActive = true
+
+        searchIconView.translatesAutoresizingMaskIntoConstraints = false
+        searchIconView.tintColor = .secondaryLabel
+
+        keywordTextField.translatesAutoresizingMaskIntoConstraints = false
+        keywordTextField.borderStyle = .none
+        keywordTextField.backgroundColor = .clear
+        keywordTextField.placeholder = "授業名・教員名で検索"
+        keywordTextField.font = .systemFont(ofSize: 15)
+        keywordTextField.delegate = self
+        keywordTextField.returnKeyType = .search
+
+        searchFieldContainer.addSubview(searchIconView)
+        searchFieldContainer.addSubview(keywordTextField)
+        NSLayoutConstraint.activate([
+            searchIconView.leadingAnchor.constraint(equalTo: searchFieldContainer.leadingAnchor, constant: 14),
+            searchIconView.centerYAnchor.constraint(equalTo: searchFieldContainer.centerYAnchor),
+            searchIconView.widthAnchor.constraint(equalToConstant: 20),
+            searchIconView.heightAnchor.constraint(equalToConstant: 20),
+
+            keywordTextField.leadingAnchor.constraint(equalTo: searchIconView.trailingAnchor, constant: 10),
+            keywordTextField.trailingAnchor.constraint(equalTo: searchFieldContainer.trailingAnchor, constant: -12),
+            keywordTextField.centerYAnchor.constraint(equalTo: searchFieldContainer.centerYAnchor),
+            keywordTextField.heightAnchor.constraint(equalToConstant: 22)
+        ])
+
+        var applyConfig = UIButton.Configuration.filled()
+        applyConfig.title = "検索"
+        applyConfig.cornerStyle = .large
+        applyConfig.baseBackgroundColor = .systemGreen
+        applyConfig.baseForegroundColor = .white
+        applyButton.configuration = applyConfig
+        applyButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
+        applyButton.widthAnchor.constraint(equalToConstant: 96).isActive = true
+        applyButton.heightAnchor.constraint(equalToConstant: 52).isActive = true
+        applyButton.addTarget(self, action: #selector(didTapApply), for: .touchUpInside)
+
+        searchRow.addArrangedSubview(searchFieldContainer)
+        searchRow.addArrangedSubview(applyButton)
+        contentStack.addArrangedSubview(searchRow)
+
+        buttonRow.axis = .horizontal
+        buttonRow.spacing = 8
+        buttonRow.distribution = .fillEqually
+
+        configureMenuButton(facultyButton, title: "学部")
+        configureMenuButton(departmentButton, title: "学科")
+        buttonRow.addArrangedSubview(facultyButton)
+        buttonRow.addArrangedSubview(departmentButton)
+        contentStack.addArrangedSubview(buttonRow)
+
+        contentStack.addArrangedSubview(makeSegmentRow(campusSegmentedControl, items: ["指定なし","青山","相模原"]))
+        contentStack.addArrangedSubview(makeSegmentRow(termSegmentedControl, items: ["指定なし","前期","後期"]))
+        contentStack.addArrangedSubview(makeSegmentRow(placeSegmentedControl, items: ["指定なし","対面","オンライン"]))
+
+        campusSegmentedControl.addTarget(self, action: #selector(campusChanged(_:)), for: .valueChanged)
+        termSegmentedControl.addTarget(self, action: #selector(termChanged(_:)), for: .valueChanged)
+        placeSegmentedControl.addTarget(self, action: #selector(placeChanged(_:)), for: .valueChanged)
+
+        gridContainerView.translatesAutoresizingMaskIntoConstraints = false
+        gridContainerView.heightAnchor.constraint(equalTo: gridContainerView.widthAnchor, multiplier: 0.82).isActive = true
+        contentStack.addArrangedSubview(gridContainerView)
+
+        buildSlotGrid()
+        applyTheme()
     }
 
-    // 画面上部あたり
+    private func configureTopIconButton(_ button: UIButton, systemName: String) {
+        button.translatesAutoresizingMaskIntoConstraints = false
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: systemName)
+        config.baseForegroundColor = .label
+        config.background.backgroundColor = .systemBackground
+        config.cornerStyle = .medium
+        config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
+        button.configuration = config
+        button.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 48).isActive = true
+    }
+
+    private func configureMenuButton(_ button: UIButton, title: String) {
+        var config = UIButton.Configuration.filled()
+        config.title = title
+        config.baseBackgroundColor = .systemBackground
+        config.baseForegroundColor = .lightGray
+        config.cornerStyle = .medium
+        config.titleAlignment = .center
+        config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
+        button.configuration = config
+        button.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
+        button.heightAnchor.constraint(equalToConstant: 46).isActive = true
+    }
+
+    private func makeSegmentRow(_ control: UISegmentedControl, items: [String]) -> UIView {
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.removeAllSegments()
+        for (idx, item) in items.enumerated() {
+            control.insertSegment(withTitle: item, at: idx, animated: false)
+        }
+        control.selectedSegmentIndex = 0
+        restyleSegmented(control)
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(control)
+        NSLayoutConstraint.activate([
+            control.topAnchor.constraint(equalTo: container.topAnchor),
+            control.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            control.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            control.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            control.heightAnchor.constraint(equalToConstant: 44)
+        ])
+        return container
+    }
+
+    private func buildSlotGrid() {
+        slotButtons = []
+        for row in 0..<5 {
+            for col in 0..<5 {
+                let button = UIButton(type: .system)
+                button.translatesAutoresizingMaskIntoConstraints = false
+                button.tag = row * 5 + col
+                let title = "\(days[col])\(periods[row])"
+                var config = UIButton.Configuration.plain()
+                config.title = title
+                config.baseForegroundColor = .lightGray
+                config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                    var outgoing = incoming
+                    outgoing.font = .systemFont(ofSize: 15, weight: .regular)
+                    return outgoing
+                }
+                var bg = UIBackgroundConfiguration.clear()
+                bg.backgroundColor = slotNormalBGColor(for: traitCollection)
+                bg.cornerRadius = 0
+                config.background = bg
+                button.configuration = config
+                button.layer.borderWidth = 1.0
+                button.layer.borderColor = UIColor.black.cgColor
+                button.addTarget(self, action: #selector(slotTapped(_:)), for: .touchUpInside)
+                slotButtons.append(button)
+                gridContainerView.addSubview(button)
+            }
+        }
+
+        for idx in 0..<slotButtons.count {
+            let btn = slotButtons[idx]
+            let row = idx / 5
+            let col = idx % 5
+            if col == 0 {
+                btn.leadingAnchor.constraint(equalTo: gridContainerView.leadingAnchor).isActive = true
+            } else {
+                let left = slotButtons[idx - 1]
+                btn.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: spacing).isActive = true
+                btn.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
+            }
+            if col == 4 {
+                btn.trailingAnchor.constraint(equalTo: gridContainerView.trailingAnchor).isActive = true
+            }
+            if row == 0 {
+                btn.topAnchor.constraint(equalTo: gridContainerView.topAnchor).isActive = true
+            } else {
+                let above = slotButtons[(row - 1) * 5 + col]
+                btn.topAnchor.constraint(equalTo: above.bottomAnchor, constant: spacing).isActive = true
+                btn.heightAnchor.constraint(equalTo: above.heightAnchor).isActive = true
+            }
+            if row == 4 {
+                btn.bottomAnchor.constraint(equalTo: gridContainerView.bottomAnchor).isActive = true
+            }
+        }
+    }
+
+    private func configureInitialSelections() {
+        selectedCategory = initialCategory
+        selectedDepartment = initialDepartment
+        if let cat = selectedCategory, cat != "指定なし" {
+            setButtonTitleAndColor(facultyButton, title: cat, color: .black)
+        } else {
+            setButtonTitleAndColor(facultyButton, title: "学部", color: .lightGray)
+            selectedCategory = initialCategory
+        }
+
+        if let title = departmentDisplayTitle(for: selectedCategory, stored: selectedDepartment) {
+            setButtonTitleAndColor(departmentButton, title: title, color: .black)
+        } else {
+            setButtonTitleAndColor(departmentButton, title: "学科", color: .lightGray)
+            selectedDepartment = initialDepartment
+        }
+
+        campusSegmentedControl.selectedSegmentIndex = indexFor(value: selectedCampus, in: ["指定なし","青山","相模原"])
+        placeSegmentedControl.selectedSegmentIndex = indexFor(value: selectedPlace, in: ["指定なし","対面","オンライン"])
+        termSegmentedControl.selectedSegmentIndex = indexFor(value: selectedTerm, in: ["指定なし","前期","後期"])
+
+        if let slots = initialTimeSlots, !slots.isEmpty {
+            for (dayName, period) in slots {
+                guard let col = days.firstIndex(of: dayName) else { continue }
+                let row = period - 1
+                let idx = row * 5 + col
+                if selectedStates.indices.contains(idx) {
+                    selectedStates[idx] = true
+                }
+            }
+        } else if let d = initialDay, let ps = initialPeriods, let col = days.firstIndex(of: d) {
+            for p in ps {
+                let row = p - 1
+                let idx = row * 5 + col
+                if selectedStates.indices.contains(idx) {
+                    selectedStates[idx] = true
+                }
+            }
+        }
+
+        for button in slotButtons where selectedStates.indices.contains(button.tag) {
+            button.isSelected = selectedStates[button.tag]
+            button.configurationUpdateHandler?(button)
+        }
+    }
+
+    private func registrationDisplayValue(for raw: String?) -> String? {
+        switch raw {
+        case "required": return "必修"
+        case "lottery": return "抽選"
+        case "selectable": return "選択"
+        default: return nil
+        }
+    }
+
+    private func searchBGColor(for trait: UITraitCollection) -> UIColor {
+        (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemGray6
+    }
+
+    private func slotNormalBGColor(for trait: UITraitCollection) -> UIColor {
+        if trait.userInterfaceStyle == .dark {
+            return .systemGray3
+        } else {
+            return UIColor(white: 0.96, alpha: 1.0)
+        }
+    }
+
     private func restyleSegmented(_ sc: UISegmentedControl) {
         let isDark = (traitCollection.userInterfaceStyle == .dark)
-        // トラック（未選択の地の色）を薄く
         sc.backgroundColor = isDark ? .systemGray5 : UIColor(white: 0.95, alpha: 1.0)
-        // 選択部分も少し薄め
         sc.selectedSegmentTintColor = isDark ? .systemGray2 : UIColor(white: 1.0, alpha: 1.0)
-        // 文字色は動的色
-        sc.setTitleTextAttributes([.foregroundColor: UIColor.secondaryLabel], for: .normal)
-        sc.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .selected)
+        sc.setTitleTextAttributes([.foregroundColor: UIColor.secondaryLabel, .font: UIFont.systemFont(ofSize: 17, weight: .medium)], for: .normal)
+        sc.setTitleTextAttributes([.foregroundColor: UIColor.label, .font: UIFont.systemFont(ofSize: 17, weight: .semibold)], for: .selected)
+        sc.layer.cornerRadius = 12
         sc.layer.masksToBounds = true
     }
 
-    private func applySearchBackground() {
+    private func applyTheme() {
         let bg = searchBGColor(for: traitCollection)
         view.backgroundColor = bg
+        scrollView.backgroundColor = bg
+        contentStack.backgroundColor = .clear
         adContainer.backgroundColor = bg
+        searchFieldContainer.backgroundColor = searchFieldBG(for: traitCollection)
+        keywordTextField.textColor = (traitCollection.userInterfaceStyle == .dark) ? .black : .label
+        keywordTextField.tintColor = keywordTextField.textColor
+        let phColor: UIColor = (traitCollection.userInterfaceStyle == .dark) ? .systemGray2 : .placeholderText
+        keywordTextField.attributedPlaceholder = NSAttributedString(string: "授業名・教員名で検索", attributes: [.foregroundColor: phColor])
+        searchIconView.tintColor = (traitCollection.userInterfaceStyle == .dark) ? .black : .secondaryLabel
+        [campusSegmentedControl, termSegmentedControl, placeSegmentedControl, registrationSegmentedControl].forEach(restyleSegmented)
+        configureSlotButtons()
     }
 
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        assignTagsIfNeeded()
-        buildGridConstraintsIfNeeded()
-        applyInitialSelectionIfNeeded()
-        loadBannerIfNeeded()
-        applySearchFieldStyle()
+    private func searchFieldBG(for trait: UITraitCollection) -> UIColor {
+        (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemGray6
     }
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
-            applySearchBackground()
-            applyHeaderTitleColor()
-            applySearchFieldStyle()
-            restyleSegmented(campusSegmentedControl)
-            restyleSegmented(placeSegmentedControl)
-            restyleSegmented(termSegmentedControl)
-        }
-    }
-    
-    // === 追加ブロック: ボタン設置・検索条件の全リセット ===
-    private func installResetButtonIfPossible() {
-        // 既存の「ブックマーク」ボタンを再帰的に探す（didTapFavorites: が紐づく UIButton）
-        if favoritesButtonDetected == nil {
-            favoritesButtonDetected = findFavoritesButton(in: view)
-        }
 
-        // 見つからなければ安全に右上へ設置（サイズは適度に）
-        let anchorButton = favoritesButtonDetected
-
-        let btn = UIButton(type: .system)
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        // 見た目：ブックマークと同等サイズにするため、Configurationを真似る
-        if let cfg = (anchorButton?.configuration) {
-            var c = cfg
-            c.image = UIImage(systemName: "arrow.counterclockwise")
-            c.title = nil
-            btn.configuration = c
-        } else {
-            // フォールバック（同程度の見た目）
-            var c = UIButton.Configuration.filled()
-            c.image = UIImage(systemName: "arrow.counterclockwise")
-            c.baseBackgroundColor = .systemGray5
-            c.baseForegroundColor = .label
-            c.contentInsets = .init(top: 8, leading: 12, bottom: 8, trailing: 12)
-            btn.configuration = c
-        }
-        btn.accessibilityLabel = "条件をリセット"
-        btn.addTarget(self, action: #selector(didTapReset), for: .touchUpInside)
-        view.addSubview(btn)
-        self.resetButton = btn
-
-        // 位置: 「ブックマーク」ボタンの**左**に、同サイズで並べる
-        if let fav = anchorButton, let sv = fav.superview {
-            sv.addSubview(btn)   // 同じコンテナに入れる
-            NSLayoutConstraint.activate([
-                btn.centerYAnchor.constraint(equalTo: fav.centerYAnchor),
-                btn.trailingAnchor.constraint(equalTo: fav.leadingAnchor, constant: -8),
-                btn.widthAnchor.constraint(equalTo: fav.widthAnchor),
-                btn.heightAnchor.constraint(equalTo: fav.heightAnchor)
-            ])
-        } else {
-            // フォールバック配置（右上固定）
-            let sa = view.safeAreaLayoutGuide
-            NSLayoutConstraint.activate([
-                btn.topAnchor.constraint(equalTo: sa.topAnchor, constant: 12),
-                btn.trailingAnchor.constraint(equalTo: sa.trailingAnchor, constant: -12),
-                btn.widthAnchor.constraint(equalToConstant: 44),
-                btn.heightAnchor.constraint(equalToConstant: 44)
-            ])
+    private func configureSlotButtons() {
+        for button in slotButtons {
+            button.configurationUpdateHandler = { [weak self] btn in
+                guard let self = self else { return }
+                var config = btn.configuration ?? .plain()
+                config.baseForegroundColor = btn.isSelected ? .white : .lightGray
+                var bg = config.background ?? UIBackgroundConfiguration.clear()
+                bg.cornerRadius = 0
+                bg.backgroundColor = btn.isSelected ? .systemGreen : self.slotNormalBGColor(for: self.traitCollection)
+                config.background = bg
+                btn.configuration = config
+            }
+            button.configurationUpdateHandler?(button)
         }
     }
 
-    // didTapFavorites: を action に持つ UIButton を探索
-    private func findFavoritesButton(in root: UIView) -> UIButton? {
-        if let b = root as? UIButton {
-            if b.allTargets.contains(self),
-               (b.actions(forTarget: self, forControlEvent: .touchUpInside) ?? []).contains("didTapFavorites:") {
-                return b
+    private func setupFacultyMenu() {
+        let actions = faculties.map { name in
+            UIAction(title: name) { [weak self] action in
+                guard let self = self else { return }
+                if action.title == "指定なし" {
+                    self.selectedCategory = nil
+                    self.setButtonTitleAndColor(self.facultyButton, title: "学部", color: .lightGray)
+                } else {
+                    self.selectedCategory = action.title
+                    self.setButtonTitleAndColor(self.facultyButton, title: action.title, color: .black)
+                }
+                self.selectedDepartment = nil
+                self.setButtonTitleAndColor(self.departmentButton, title: "学科", color: .lightGray)
+                self.setupDepartmentMenu(initial: action.title)
             }
         }
-        for v in root.subviews {
-            if let hit = findFavoritesButton(in: v) { return hit }
+        facultyButton.menu = UIMenu(children: actions)
+        facultyButton.showsMenuAsPrimaryAction = true
+    }
+
+    private func setupDepartmentMenu(initial faculty: String) {
+        let list = departments[faculty] ?? ["指定なし"]
+        let actions = list.map { dept in
+            UIAction(title: dept) { [weak self] action in
+                guard let self = self else { return }
+                if action.title == "指定なし" {
+                    self.selectedDepartment = nil
+                    self.setButtonTitleAndColor(self.departmentButton, title: "学科", color: .lightGray)
+                } else {
+                    if faculty == "教育人間科学部" {
+                        self.selectedDepartment = "教育人間　\(action.title)"
+                    } else if faculty == "理工学部" {
+                        self.selectedDepartment = self.mapScienceDeptToCategory(deptDisplay: action.title)
+                    } else {
+                        self.selectedDepartment = action.title
+                    }
+                    self.setButtonTitleAndColor(self.departmentButton, title: action.title, color: .black)
+                }
+            }
+        }
+        departmentButton.menu = UIMenu(children: actions)
+        departmentButton.showsMenuAsPrimaryAction = true
+    }
+
+    private func departmentDisplayTitle(for faculty: String?, stored: String?) -> String? {
+        guard let stored else { return nil }
+        guard faculty == "教育人間科学部" else { return stored }
+        for value in ["教育学科", "心理学科", "外国語科目"] {
+            if stored == "教育人間　\(value)" || stored == "教育人間 \(value)" {
+                return value
+            }
         }
         return nil
+    }
+
+    private func mapScienceDeptToCategory(deptDisplay: String) -> String {
+        switch deptDisplay {
+        case "物理科学科", "物理数学科", "物理・数理学科": return "物理・数理"
+        case "数理サイエンス学科": return "数理サイエンス"
+        case "化学・生命科学科": return "化学・生命"
+        case "電気電子工学科": return "電気電子工学科"
+        case "機械創造工学科": return "機械創造"
+        case "経営システム工学科": return "経営システム"
+        case "情報テクノロジー学科": return "情報テクノロジー"
+        default: return deptDisplay
+        }
+    }
+
+    private func setButtonTitleAndColor(_ button: UIButton, title: String, color: UIColor) {
+        var config = button.configuration ?? .filled()
+        config.title = title
+        config.baseForegroundColor = color
+        config.baseBackgroundColor = .systemBackground
+        button.configuration = config
+    }
+
+    private func indexFor(value: String?, in list: [String]) -> Int {
+        guard let value, let index = list.firstIndex(of: value) else { return 0 }
+        return index
+    }
+
+    @objc private func campusChanged(_ sender: UISegmentedControl) {
+        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
+        selectedCampus = (title == "指定なし") ? nil : title
+    }
+
+    @objc private func placeChanged(_ sender: UISegmentedControl) {
+        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
+        selectedPlace = (title == "指定なし") ? nil : title
+    }
+
+    @objc private func termChanged(_ sender: UISegmentedControl) {
+        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
+        selectedTerm = (title == "指定なし") ? nil : title
+    }
+
+    @objc private func registrationTypeChanged(_ sender: UISegmentedControl) {
+        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
+        switch title {
+        case "必修": selectedRegistrationType = "required"
+        case "抽選": selectedRegistrationType = "lottery"
+        case "選択": selectedRegistrationType = "selectable"
+        default: selectedRegistrationType = nil
+        }
+    }
+
+    @objc private func slotTapped(_ sender: UIButton) {
+        sender.isSelected.toggle()
+        if selectedStates.indices.contains(sender.tag) {
+            selectedStates[sender.tag] = sender.isSelected
+        }
+    }
+
+    @objc private func didTapApply() {
+        var campusValue: String?
+        if let title = campusSegmentedControl.titleForSegment(at: campusSegmentedControl.selectedSegmentIndex), title != "指定なし" {
+            campusValue = title
+        }
+        var placeValue: String?
+        if let title = placeSegmentedControl.titleForSegment(at: placeSegmentedControl.selectedSegmentIndex), title != "指定なし" {
+            placeValue = title
+        }
+        let slots = deriveTimeSlots()
+        let (day, ps) = deriveSingleDayAndPeriods()
+
+        let criteria = SyllabusSearchCriteria(
+            keyword: keywordTextField.text,
+            category: selectedCategory,
+            department: selectedDepartment,
+            campus: campusValue,
+            place: placeValue,
+            grade: selectedGrade,
+            day: day,
+            periods: ps,
+            timeSlots: slots,
+            term: selectedTerm,
+            undecided: nil,
+           // registrationType: selectedRegistrationType
+        )
+
+        let handler = onApply
+        dismiss(animated: true) { handler?(criteria) }
+    }
+
+    @objc private func didTapReset() {
+        selectedCategory = initialCategory
+        selectedDepartment = initialDepartment
+        selectedCampus = nil
+        selectedPlace = nil
+        selectedGrade = nil
+        selectedTerm = nil
+        selectedRegistrationType = nil
+        selectedStates = Array(repeating: false, count: selectedStates.count)
+
+        keywordTextField.text = nil
+        setButtonTitleAndColor(facultyButton, title: "学部", color: .lightGray)
+        setButtonTitleAndColor(departmentButton, title: "学科", color: .lightGray)
+        campusSegmentedControl.selectedSegmentIndex = 0
+        placeSegmentedControl.selectedSegmentIndex = 0
+        termSegmentedControl.selectedSegmentIndex = 0
+        slotButtons.forEach { $0.isSelected = false; $0.configurationUpdateHandler?($0) }
+        view.endEditing(true)
+
+        let criteria = SyllabusSearchCriteria(keyword: nil,
+                                              category: nil,
+                                              department: nil,
+                                              campus: nil,
+                                              place: nil,
+                                              grade: nil,
+                                              day: nil,
+                                              periods: nil,
+                                              timeSlots: nil,
+                                              term: nil,
+                                              undecided: nil,
+                                             // registrationType: nil
+        )
+        onApply?(criteria)
+    }
+
+    @objc private func didTapFavorites() {
+        let vc = FavoritesListViewController()
+        let nav = UINavigationController(rootViewController: vc)
+        present(nav, animated: true)
+    }
+
+    private func deriveTimeSlots() -> [(String, Int)]? {
+        var result: [(String, Int)] = []
+        for idx in 0..<selectedStates.count where selectedStates[idx] {
+            let row = idx / 5
+            let col = idx % 5
+            result.append((days[col], periods[row]))
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    private func deriveSingleDayAndPeriods() -> (String?, [Int]?) {
+        var pairs: [(dayIndex: Int, period: Int)] = []
+        for idx in 0..<selectedStates.count where selectedStates[idx] {
+            let row = idx / 5
+            let col = idx % 5
+            pairs.append((dayIndex: col, period: periods[row]))
+        }
+        guard !pairs.isEmpty else { return (nil, nil) }
+        let first = pairs[0].dayIndex
+        guard pairs.allSatisfy({ $0.dayIndex == first }) else { return (nil, nil) }
+        return (days[first], pairs.map { $0.period }.sorted())
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        didTapApply()
+        return true
     }
 
     // ===== Ad =====
@@ -293,58 +701,52 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
             adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: bannerBottomOffset),
             adContainerHeight!
         ])
-        // RCで広告を止めているときはUIも消す
+
         guard AdsConfig.enabled else {
             adContainer.isHidden = true
             adContainerHeight?.constant = 0
             return
         }
-        let bv = BannerView()
-        bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
-        bv.rootViewController = self
-        bv.adSize = AdSizeBanner  // 仮サイズ
-        bv.delegate = self
 
-        adContainer.addSubview(bv)
+        let banner = BannerView()
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.adUnitID = AdsConfig.bannerUnitID
+        banner.rootViewController = self
+        banner.adSize = AdSizeBanner
+        banner.delegate = self
+        adContainer.addSubview(banner)
         NSLayoutConstraint.activate([
-            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
-            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
-            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
-            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+            banner.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            banner.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            banner.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
         ])
-        bannerView = bv
+        bannerView = banner
     }
 
     private func loadBannerIfNeeded() {
-        guard let bv = bannerView else { return }
+        guard let bannerView else { return }
         let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
         if safeWidth <= 0 { return }
-
         let useWidth = max(320, floor(safeWidth))
-        if abs(useWidth - lastBannerWidth) < 0.5 { return } // 無駄な再ロード防止
+        if abs(useWidth - lastBannerWidth) < 0.5 { return }
         lastBannerWidth = useWidth
-
         let size = makeAdaptiveAdSize(width: useWidth)
-
-        // 先に高さを確保し、重なりを避けるため Safe Area を広げる
         adContainerHeight?.constant = size.size.height
         additionalSafeAreaInsets.bottom = max(0, size.size.height - bannerBottomOffset)
         view.layoutIfNeeded()
-
         guard size.size.height > 0 else { return }
-        if !CGSizeEqualToSize(bv.adSize.size, size.size) { bv.adSize = size }
+        if !CGSizeEqualToSize(bannerView.adSize.size, size.size) { bannerView.adSize = size }
         if !didLoadBannerOnce {
             didLoadBannerOnce = true
-            bv.load(Request())
+            bannerView.load(Request())
         }
     }
 
-    // MARK: - BannerViewDelegate
     func bannerViewDidReceiveAd(_ bannerView: BannerView) {
-        let h = bannerView.adSize.size.height
-        adContainerHeight?.constant = h
-        additionalSafeAreaInsets.bottom = max(0, h - bannerBottomOffset)  // ← 修正
+        let height = bannerView.adSize.size.height
+        adContainerHeight?.constant = height
+        additionalSafeAreaInsets.bottom = max(0, height - bannerBottomOffset)
         UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
     }
 
@@ -353,482 +755,5 @@ final class syllabus_search: UIViewController, BannerViewDelegate {
         additionalSafeAreaInsets.bottom = 0
         UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
         print("Ad failed:", error.localizedDescription)
-    }
-    
-    @IBAction func didTapReset(_ sender: Any) {
-        // 内部状態
-        selectedCategory = nil
-        selectedDepartment = nil
-        selectedCampus = nil
-        selectedPlace = nil
-        selectedGrade = nil
-        selectedTerm = nil
-        selectedStates = Array(repeating: false, count: selectedStates.count)
-
-        // UI
-        keywordTextField?.text = nil
-        setButtonTitleAndColor(facultyButton, title: "学部", color: .lightGray)
-        departmentButton.setTitle("学科", for: .normal)
-        setButtonTitleColor(departmentButton, .lightGray)
-        campusSegmentedControl.selectedSegmentIndex = 0
-        placeSegmentedControl.selectedSegmentIndex = 0
-        termSegmentedControl.selectedSegmentIndex = 0
-        slotButtons?.forEach { $0.isSelected = false }
-        view.endEditing(true)
-
-        // 親へ即時反映
-        let criteria = SyllabusSearchCriteria(
-            keyword: nil, category: nil, department: nil,
-            campus: nil, place: nil, grade: nil,
-            day: nil, periods: nil, timeSlots: nil,
-            term: nil, undecided: nil
-        )
-        onApply?(criteria)
-    }
-
-    // ===== Actions =====
-    @IBAction func didTapDetailFilter(_ sender: Any) {
-        let vc = SyllabusDetailFilterViewController()
-        // 詳細画面 → この画面へ結果を返す
-        vc.onApply = { [weak self] detail in
-            guard let self = self else { return }
-
-            // いまこの画面にある選択状態からベース条件を作成
-            var campusValue: String? = nil
-            if let t = self.campusSegmentedControl.titleForSegment(at: self.campusSegmentedControl.selectedSegmentIndex),
-               t != "指定なし" { campusValue = t }
-
-            var placeValue: String? = nil
-            if let t = self.placeSegmentedControl.titleForSegment(at: self.placeSegmentedControl.selectedSegmentIndex),
-               t != "指定なし" { placeValue = t }
-
-            let slots = self.deriveTimeSlots()
-            let (day, ps) = self.deriveSingleDayAndPeriods()
-
-            var merged = SyllabusSearchCriteria(
-                keyword: self.keywordTextField?.text,
-                category: self.selectedCategory,
-                department: self.selectedDepartment,
-                campus: campusValue,
-                place: placeValue,
-                grade: self.selectedGrade,
-                day: day,
-                periods: ps,
-                timeSlots: slots,
-                term: self.selectedTerm,
-                undecided: nil
-            )
-
-            if let d = detail.day { merged.day = d }
-            if let p = detail.periods { merged.periods = p }
-            if let t = detail.timeSlots { merged.timeSlots = t }
-            if let term = detail.term { merged.term = term }          // ★ 学期を上書き
-            merged.undecided = detail.undecided
-
-            // ★ 詳細指定があれば、過去のグリッド選択（timeSlots）は解除して競合回避
-            if detail.day != nil || detail.periods != nil || (detail.undecided ?? false) || detail.term != nil {
-                merged.timeSlots = nil
-            }
-
-            self.onApply?(merged)
-
-
-        }
-
-        let nav = UINavigationController(rootViewController: vc)
-        nav.modalPresentationStyle = .pageSheet
-        if let sheet = nav.sheetPresentationController {
-            sheet.detents = [.large()]
-            sheet.prefersGrabberVisible = true
-        }
-        present(nav, animated: true)
-    }
-
-    @IBAction func campusChanged(_ sender: UISegmentedControl) {
-        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
-        selectedCampus = (title == "指定なし") ? nil : title
-    }
-    @IBAction func placeChanged(_ sender: UISegmentedControl) {
-        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
-        selectedPlace = (title == "指定なし") ? nil : title
-    }
-    @IBAction func termChanged(_ sender: UISegmentedControl) {   // ★ 追加
-        let title = sender.titleForSegment(at: sender.selectedSegmentIndex) ?? "指定なし"
-        selectedTerm = (title == "指定なし") ? nil : title       // "前期" / "後期" / nil
-    }
-    @IBAction func slotTapped(_ sender: UIButton) {
-        sender.isSelected.toggle()
-        let idx = sender.tag
-        if selectedStates.indices.contains(idx) { selectedStates[idx] = sender.isSelected }
-    }
-    @IBAction func didTapClose(_ sender: Any) { dismiss(animated: true) }
-
-    // 検索ボタン
-    @IBAction func didTapApply(_ sender: Any) {
-        var campusValue: String? = nil
-        if let t = campusSegmentedControl.titleForSegment(at: campusSegmentedControl.selectedSegmentIndex),
-           t != "指定なし" { campusValue = t }
-
-        var placeValue: String? = nil
-        if let t = placeSegmentedControl.titleForSegment(at: placeSegmentedControl.selectedSegmentIndex),
-           t != "指定なし" { placeValue = t }
-
-        let termValue = selectedTerm   // ★ "前期" / "後期" / nil
-
-        let slots = deriveTimeSlots()
-        let (day, ps) = deriveSingleDayAndPeriods()
-
-        // ★ 学期を criteria に渡す（SyllabusSearchCriteria に semester: がある想定）
-        let criteria = SyllabusSearchCriteria(
-            keyword: keywordTextField?.text,
-            category: selectedCategory,
-            department: selectedDepartment,
-            campus: campusValue,
-            place: placeValue,
-            grade: selectedGrade,
-            day: day,
-            periods: ps,
-            timeSlots: slots,
-            term: termValue           // ← ここが今回の要。フィールド名が `term` の場合は置換してください
-        )
-
-        let handler = self.onApply
-        dismiss(animated: true) { handler?(criteria) }
-    }
-
-    @IBAction func didTapFavorites(_ sender: Any) {
-        let vc = FavoritesListViewController()
-        let nav = UINavigationController(rootViewController: vc)
-        present(nav, animated: true)
-        // または navigationController?.pushViewController(vc, animated: true)
-    }
-
-    // ===== メニュー =====
-    private func setupFacultyMenu() {
-        let actions = faculties.map { name in
-            UIAction(title: name) { [weak self] act in
-                guard let self = self else { return }
-
-                if act.title == "指定なし" {
-                    self.selectedCategory = nil
-                    self.setButtonTitleAndColor(self.facultyButton, title: "学部", color: .lightGray)
-                } else {
-                    self.selectedCategory = act.title
-                    self.setButtonTitleAndColor(self.facultyButton, title: act.title, color: .black)
-                }
-
-
-                // 学部が変わったので学科は毎回リセット
-                self.selectedDepartment = nil
-                self.departmentButton.setTitle("学科", for: .normal)
-                self.setButtonTitleColor(self.departmentButton, .lightGray)
-
-                // 学部に合わせて学科メニューを作り直し
-                self.setupDepartmentMenu(initial: act.title)
-            }
-        }
-        facultyButton.menu = UIMenu(children: actions)
-        facultyButton.showsMenuAsPrimaryAction = true
-    }
-    
-    /// 教育人間科学部の stored 部（完全カテゴリ名）→ ボタン表示用の短い名前に変換
-    private func departmentDisplayTitle(for faculty: String?, stored: String?) -> String? {
-        guard let s = stored else { return nil }
-        guard let f = faculty, f == "教育人間科学部" else {
-            // それ以外の学部は stored = 表示名 とみなす
-            return s
-        }
-        // 受け取りは「教育人間　教育学科/心理学科/外国語科目」or 半角スペース版にも対応
-        let pairs = ["教育学科", "心理学科", "外国語科目"]
-        for v in pairs {
-            if s == "教育人間　\(v)" || s == "教育人間 \(v)" { return v }
-        }
-        return nil
-    }
-
-
-    private func setupDepartmentMenu(initial faculty: String) {
-        let list = departments[faculty] ?? ["指定なし"]
-        let actions = list.map { dept in
-            UIAction(title: dept) { [weak self] act in
-                guard let self = self else { return }
-                if act.title == "指定なし" {
-                    self.selectedDepartment = nil
-                    self.departmentButton.setTitle("学科", for: .normal)
-                    self.setButtonTitleColor(self.departmentButton, .lightGray)
-                } else {
-                    if faculty == "教育人間科学部" {
-                        // 検索用に「教育人間　◯◯」（全角スペース）へ
-                        self.selectedDepartment = "教育人間　\(act.title)"
-                    } else if faculty == "理工学部" {
-                        // ★ 追加：理工学部は学科→カテゴリ名へマップ
-                        self.selectedDepartment = self.mapScienceDeptToCategory(deptDisplay: act.title)
-                    } else {
-                        self.selectedDepartment = act.title
-                    }
-                    // 表示は短い名前のまま
-                    self.departmentButton.setTitle(act.title, for: .normal)
-                    self.setButtonTitleColor(self.departmentButton, .black)
-                }
-            }
-        }
-        departmentButton.menu = UIMenu(children: actions)
-        departmentButton.showsMenuAsPrimaryAction = true
-    }
-
-
-    // ===== グリッド関連 =====
-    private func assignTagsIfNeeded() {
-        guard !didAssignTags, let slotButtons else { return }
-        // AutoLayout後の座標で上→下、左→右に並べ替え
-        let sorted = slotButtons.sorted {
-            if abs($0.frame.minY - $1.frame.minY) > 0.5 { return $0.frame.minY < $1.frame.minY }
-            return $0.frame.minX < $1.frame.minX
-        }
-        for (idx, btn) in sorted.enumerated() { btn.tag = idx } // 0...24
-        didAssignTags = true
-    }
-
-    private func buildGridConstraintsIfNeeded() {
-        guard !didBuildGridConstraints, let slotButtons else { return }
-        gridContainerView.translatesAutoresizingMaskIntoConstraints = false
-        slotButtons.forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
-        let buttons = slotButtons.sorted { $0.tag < $1.tag }
-        for idx in 0..<buttons.count {
-            let btn = buttons[idx]
-            let row = idx / 5, col = idx % 5
-            if col == 0 { btn.leadingAnchor.constraint(equalTo: gridContainerView.leadingAnchor).isActive = true }
-            else {
-                let left = buttons[idx - 1]
-                btn.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: spacing).isActive = true
-                btn.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
-            }
-            if col == 4 { btn.trailingAnchor.constraint(equalTo: gridContainerView.trailingAnchor).isActive = true }
-            if row == 0 { btn.topAnchor.constraint(equalTo: gridContainerView.topAnchor).isActive = true }
-            else {
-                let above = buttons[(row - 1) * 5 + col]
-                btn.topAnchor.constraint(equalTo: above.bottomAnchor, constant: spacing).isActive = true
-                btn.heightAnchor.constraint(equalTo: above.heightAnchor).isActive = true
-            }
-            if row == 4 { btn.bottomAnchor.constraint(equalTo: gridContainerView.bottomAnchor).isActive = true }
-        }
-        didBuildGridConstraints = true
-    }
-
-    // ★ 初期選択の復元（複数コマが来ていればそれを優先）
-    private func applyInitialSelectionIfNeeded() {
-        guard !didApplyInitialSelection else { return }
-        defer { didApplyInitialSelection = true }
-
-        if let slots = initialTimeSlots, !slots.isEmpty {
-            for (dayName, period) in slots {
-                guard let col = days.firstIndex(of: dayName) else { continue }
-                let row = period - 1
-                let idx = row * 5 + col
-                if (0..<selectedStates.count).contains(idx) {
-                    selectedStates[idx] = true
-                    slotButtons.first(where: { $0.tag == idx })?.isSelected = true
-                }
-            }
-            return
-        }
-
-        if let d = initialDay, let ps = initialPeriods, let col = days.firstIndex(of: d) {
-            for p in ps {
-                let row = p - 1, idx = row * 5 + col
-                if (0..<selectedStates.count).contains(idx) {
-                    selectedStates[idx] = true
-                    slotButtons.first(where: { $0.tag == idx })?.isSelected = true
-                }
-            }
-        }
-    }
-
-
-    // 置換後：角丸なしで四角いマスに固定
-    // 角丸なしで四角に固定（エラー修正版）
-    private func configureSlotButtons() {
-        guard let slotButtons else { return }
-
-        for b in slotButtons {
-            // 念のためレイヤー側でも無効化
-            b.layer.cornerRadius = 0
-            b.clipsToBounds = true
-
-            var cfg = b.configuration ?? .plain()
-            cfg.cornerStyle = .fixed              // ← こちらは UIButton.Configuration のプロパティ
-
-            var bg = cfg.background ?? UIBackgroundConfiguration.clear()
-            bg.cornerRadius = 0                   // ← 背景の角丸を物理的に 0
-            bg.backgroundColor = slotNormalBGColor(for: traitCollection) // ← 薄いグレーに統一
-            cfg.background = bg
-
-            cfg.baseForegroundColor = .lightGray
-            b.configuration = cfg
-
-            b.configurationUpdateHandler = { [weak self] btn in
-                guard let self = self else { return }
-                var c = btn.configuration ?? .plain()
-                c.cornerStyle = .fixed            // 毎回固定
-
-                var bg = c.background ?? UIBackgroundConfiguration.clear()
-                bg.cornerRadius = 0
-                bg.backgroundColor = btn.isSelected ? .systemGreen : self.slotNormalBGColor(for: self.traitCollection)
-                c.background = bg
-
-                c.baseForegroundColor = btn.isSelected ? .white : .lightGray
-                btn.configuration = c
-            }
-        }
-    }
-
-    // ★ 追加: 見出しの色を動的色(.label)に
-    private func applyHeaderTitleColor() {
-        // 既にアウトレットがある場合はそれを優先（任意）
-        // titleLabel?.textColor = .label
-
-        // フォールバック：テキストに「シラバス」を含む UILabel を探索
-        if let header = findHeaderLabel(in: view) {
-            header.textColor = .label   // ライト=黒 / ダーク=白
-        }
-    }
-
-    private func findHeaderLabel(in root: UIView) -> UILabel? {
-        if let l = root as? UILabel, (l.text ?? "").contains("シラバス") { return l }
-        for v in root.subviews {
-            if let hit = findHeaderLabel(in: v) { return hit }
-        }
-        return nil
-    }
-    // 画面上部あたりに追記
-    private func searchFieldBG(for trait: UITraitCollection) -> UIColor {
-        return (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemGray6
-    }
-
-    private func applySearchFieldStyle() {
-        guard let tf = keywordTextField else { return }
-
-        let isDark = (traitCollection.userInterfaceStyle == .dark)
-        let bg = searchFieldBG(for: traitCollection)
-
-        // ★ 外側の白ピル（角丸コンテナ）を確実にグレーに
-        if let container = findRoundedContainer(for: tf) {
-            container.backgroundColor = bg
-            container.layer.cornerRadius = 12
-            container.layer.masksToBounds = true
-        }
-
-        // TextField自体は透明（重ね角丸を避ける）
-        tf.backgroundColor = .clear
-        tf.borderStyle = .none
-        tf.layer.cornerRadius = 12
-        tf.layer.masksToBounds = true
-        tf.textColor = isDark ? .black : .label     // ← ダーク時は黒文字
-        tf.tintColor = isDark ? .black : .label     // ← キャレットも黒
-        if let ph = tf.placeholder, !ph.isEmpty {
-        // ダーク時は白背景なのでやや濃いグレーに
-        let phColor: UIColor = isDark ? .systemGray2 : .placeholderText
-            tf.attributedPlaceholder = NSAttributedString(
-            string: ph, attributes: [.foregroundColor: phColor]
-        )
-        }
-
-
-        let iconColor: UIColor = isDark ? .black : .secondaryLabel
-        tf.leftView?.tintColor = iconColor
-        if let iv = tf.leftView as? UIImageView {
-            iv.image = iv.image?.withRenderingMode(.alwaysTemplate)
-            iv.tintColor = iconColor
-        } else if let iv = tf.leftView?.subviews.compactMap({ $0 as? UIImageView }).first {
-            iv.image = iv.image?.withRenderingMode(.alwaysTemplate)
-            iv.tintColor = iconColor
-        }
-    }
-
-
-
-    // TextFieldの外側にある角丸コンテナ（白いピル）を探す
-    private func findRoundedContainer(for tf: UITextField) -> UIView? {
-        var v: UIView? = tf.superview
-        while let cur = v, cur !== self.view {
-            // 角丸 or 背景色あり → コンテナ候補
-            if cur.layer.cornerRadius > 0.5 ||
-               (cur.backgroundColor != nil && cur.backgroundColor != .clear) {
-                return cur
-            }
-            v = cur.superview
-        }
-        return tf.superview
-    }
-
-    
-
-    // ===== ヘルパ =====
-    private func setButtonTitleColor(_ button: UIButton, _ color: UIColor) {
-        if var cfg = button.configuration { cfg.baseForegroundColor = color; button.configuration = cfg }
-        else { button.setTitleColor(color, for: .normal) }
-    }
-    private func indexFor(value: String?, in list: [String]) -> Int {
-        guard let v = value, let i = list.firstIndex(of: v) else { return 0 }
-        return i
-    }
-    
-    /// UIButton の Configuration を考慮してタイトル＆色をまとめて更新
-    private func setButtonTitleAndColor(_ button: UIButton, title: String, color: UIColor) {
-        if var cfg = button.configuration {
-            cfg.title = title
-            cfg.baseForegroundColor = color
-            button.configuration = cfg
-        } else {
-            button.setTitle(title, for: .normal)
-            button.setTitleColor(color, for: .normal)
-        }
-    }
-
-    /// 理工学部の学科表示名 → 検索用 category へ変換
-    private func mapScienceDeptToCategory(deptDisplay: String) -> String {
-        switch deptDisplay {
-        case "物理科学科", "物理数学科", "物理・数理学科":
-            return "物理・数理"
-        case "数理サイエンス学科":
-            return "数理サイエンス"
-        case "化学・生命科学科":
-            return "化学・生命"
-        case "電気電子工学科":
-            return "電気電子工学科"
-        case "機械創造工学科":
-            return "機械創造"
-        case "経営システム工学科":
-            return "経営システム"
-        case "情報テクノロジー学科":
-            return "情報テクノロジー"
-        default:
-            // 予期しない表示名はそのまま（後方互換）
-            return deptDisplay
-        }
-    }
-
-    // 選択セル→配列
-    private func deriveTimeSlots() -> [(String, Int)]? {
-        var out: [(String, Int)] = []
-        for idx in 0..<selectedStates.count where selectedStates[idx] {
-            let row = idx / 5, col = idx % 5
-            out.append((days[col], periods[row])) // periodは1始まり
-        }
-        return out.isEmpty ? nil : out
-    }
-
-    // 単一曜日なら day/periods を返す（最適化）
-    private func deriveSingleDayAndPeriods() -> (String?, [Int]?) {
-        var pairs: [(dayIndex: Int, period: Int)] = []
-        for idx in 0..<selectedStates.count where selectedStates[idx] {
-            let row = idx / 5, col = idx % 5
-            pairs.append((dayIndex: col, period: periods[row]))
-        }
-        guard !pairs.isEmpty else { return (nil, nil) }
-        let first = pairs.first!.dayIndex
-        guard pairs.allSatisfy({ $0.dayIndex == first }) else { return (nil, nil) }
-        let ps = pairs.map { $0.period }.sorted()
-        return (days[first], ps)
     }
 }

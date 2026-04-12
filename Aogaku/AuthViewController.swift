@@ -163,7 +163,7 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
 
     // MARK: - UI
     private func setupUI() {
-        titleLabel.text = "青学ハック アカウント"
+        titleLabel.text = "青山ハック アカウント"
         titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
         titleLabel.textAlignment = .center
 

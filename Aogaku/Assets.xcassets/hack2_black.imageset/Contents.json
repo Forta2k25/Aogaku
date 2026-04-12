@@ -1,17 +1,17 @@
 {
   "images" : [
     {
-      "filename" : "hack2_black 3.png",
+      "filename" : "aoyama_hack_gray.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
-      "filename" : "hack2_black 4.png",
+      "filename" : "aoyama_hack_gray 1.png",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
-      "filename" : "hack2_black 5.png",
+      "filename" : "aoyama_hack_gray 2.png",
       "idiom" : "universal",
       "scale" : "3x"
     }

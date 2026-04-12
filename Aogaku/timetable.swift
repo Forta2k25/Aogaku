@@ -2349,7 +2349,7 @@ private func placeOnlineRow() {
         let iconSize: CGFloat = 44
         let gap: CGFloat = 12
 
-        let appName = "青学ハック"
+        let appName = "青山ハック"
 
         let width = image.size.width
         let totalHeight = image.size.height + footerHeight

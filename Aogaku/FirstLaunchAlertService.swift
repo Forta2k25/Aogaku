@@ -23,7 +23,7 @@ final class FirstLaunchAlertService {
 
     // ローカルのフォールバック（RC未取得時）
     private static let defaultEnabled = true
-    private static let defaultTitle   = "ようこそ 青学ハックへ"
+    private static let defaultTitle   = "ようこそ 青山ハックへ"
     private static let defaultMessage = "はじめに簡単なご案内です。メニューから時間割を作成し、シラバス検索で授業を追加できます。"
     private static let defaultOk      = "OK"
 

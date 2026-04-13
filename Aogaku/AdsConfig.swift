@@ -9,13 +9,13 @@ enum AdsConfig {
 
     /// 広告を出すか（必要なら UserDefaults で強制OFFできる）
     static var enabled: Bool {
-        return false
+
         // UserDefaults に "ads_enabled" があればそれを優先（テストでOFFに便利）
-/*        if UserDefaults.standard.object(forKey: "ads_enabled") != nil {
+       if UserDefaults.standard.object(forKey: "ads_enabled") != nil {
             return UserDefaults.standard.bool(forKey: "ads_enabled")
         }
         return true
-*/
+
     }
 
     /// バナー広告 Unit ID

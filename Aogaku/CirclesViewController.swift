@@ -1,5 +1,10 @@
 import UIKit
 import FirebaseFirestore
+import GoogleMobileAds
+
+private func circlesCurrentOrientationAnchoredAdaptiveBanner(width: CGFloat) -> AdSize {
+    return currentOrientationAnchoredAdaptiveBanner(width: width)
+}
 
 struct CircleFilters: Equatable {
     var categories: Set<String> = []
@@ -13,7 +18,8 @@ struct CircleFilters: Equatable {
 final class CirclesViewController: UIViewController,
                                    UICollectionViewDataSource,
                                    UICollectionViewDelegateFlowLayout,
-                                   UISearchBarDelegate {
+                                   UISearchBarDelegate,
+                                   BannerViewDelegate {
 
     // MARK: - Grid Columns（2列 / 3列）
     private enum GridColumns: Int {
@@ -131,6 +137,18 @@ final class CirclesViewController: UIViewController,
         return cv
     }()
 
+    // MARK: - AdMob (Banner)
+    private let adContainer: UIView = {
+        let v = UIView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.backgroundColor = .clear
+        v.isHidden = true
+        return v
+    }()
+    private var bannerView: BannerView?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
+    
     // MARK: - Firestore
     private let db = Firestore.firestore()
     private var listener: ListenerRegistration?
@@ -156,6 +174,7 @@ final class CirclesViewController: UIViewController,
         setupNavigationHeader()
         setupRightBarButtons()
         setupUI()
+        setupAdBanner()
 
         campusSegmentedControl.addTarget(self, action: #selector(campusChanged), for: .valueChanged)
         searchBar.delegate = self
@@ -180,6 +199,11 @@ final class CirclesViewController: UIViewController,
         NotificationCenter.default.removeObserver(self)
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        loadBannerIfNeeded()
+    }
+    
     private func setupSearchKeyboardToolbar() {
         let toolbar = UIToolbar()
         toolbar.sizeToFit()
@@ -256,7 +280,8 @@ final class CirclesViewController: UIViewController,
         view.addSubview(campusSegmentedControl)
         view.addSubview(searchRow)
         view.addSubview(collectionView)
-
+        view.addSubview(adContainer)
+        
         searchRow.translatesAutoresizingMaskIntoConstraints = false
         searchRow.addSubview(searchBar)
         searchRow.addSubview(sortButton)
@@ -286,10 +311,60 @@ final class CirclesViewController: UIViewController,
             collectionView.topAnchor.constraint(equalTo: searchRow.bottomAnchor, constant: 10),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            collectionView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            collectionView.bottomAnchor.constraint(equalTo: adContainer.topAnchor, constant: -12),
+
+            adContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
         ])
     }
 
+    // MARK: - AdMob Setup
+    private func setupAdBanner() {
+        adContainer.subviews.forEach { $0.removeFromSuperview() }
+        bannerView = nil
+        didLoadBannerOnce = false
+        lastBannerWidth = 0
+
+        guard AdsConfig.enabled else {
+            adContainer.isHidden = true
+            return
+        }
+
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = AdsConfig.bannerUnitID
+        bv.rootViewController = self
+        bv.delegate = self
+        bv.adSize = AdSizeBanner
+
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.centerXAnchor.constraint(equalTo: adContainer.centerXAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
+        ])
+
+        bannerView = bv
+        adContainer.isHidden = false
+    }
+
+    private func loadBannerIfNeeded() {
+        guard AdsConfig.enabled, let bv = bannerView else { return }
+        let width = view.bounds.inset(by: view.safeAreaInsets).width
+        guard width > 0 else { return }
+
+        let useWidth = floor(width)
+        if abs(useWidth - lastBannerWidth) < 0.5 { return }
+        lastBannerWidth = useWidth
+
+        bv.adSize = circlesCurrentOrientationAnchoredAdaptiveBanner(width: useWidth)
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+    
     // MARK: - Campus Matching
     private func normalizeCampusForFilter(_ raw: String) -> String {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -589,5 +664,14 @@ final class CirclesViewController: UIViewController,
         } else {
             present(UINavigationController(rootViewController: vc), animated: true)
         }
+    }
+    
+    // MARK: - BannerViewDelegate
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        adContainer.isHidden = false
+    }
+
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainer.isHidden = true
     }
 }

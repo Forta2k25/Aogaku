@@ -619,7 +619,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         var maxY = centerYear + 2
 
         // 既に保存されている学期の年があれば、それも範囲に含める
-        let saved = TermStore.allSavedTerms()
+        let saved = allSavedTermsIncludingOnline()
         if let yMin = saved.map({ $0.year }).min() { minY = min(minY, yMin) }
         if let yMax = saved.map({ $0.year }).max() { maxY = max(maxY, yMax) }
 
@@ -646,14 +646,53 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
     private var currentTermText: String { currentTerm.displayTitle }  // displayTitle は既存で使用中
     
+    /// オンデマンド行（period==0）として保存された科目を学期単位で読む
+    private func loadOnlineCourses(for term: TermKey) -> [Course] {
+        let ud = UserDefaults.standard
+        let dayPrefix = "tt.online.\(term.storageKey).d"
+        let keys = ud.dictionaryRepresentation().keys
+            .filter { $0.hasPrefix(dayPrefix) }
+
+        var out: [Course] = []
+        for key in keys {
+            guard let data = ud.data(forKey: key),
+                  let arr = try? JSONDecoder().decode([Course].self, from: data) else { continue }
+            out.append(contentsOf: arr)
+        }
+        return out
+    }
+
+    /// 通常時間割 + オンデマンド保存の両方を見て、保存済み学期を列挙
+    private func allSavedTermsIncludingOnline() -> [TermKey] {
+        var set = Set(TermStore.allSavedTerms())
+        let prefix = "tt.online.assignedCourses."
+        let keys = UserDefaults.standard.dictionaryRepresentation().keys
+            .filter { $0.hasPrefix(prefix) }
+        for key in keys {
+            // 形式: tt.online.assignedCourses.<year>_<前期|後期>.d<day>
+            let tail = String(key.dropFirst(prefix.count))
+            let parts = tail.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: true)
+            guard let termRaw = parts.first else { continue }
+            let termParts = termRaw.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: true)
+            guard termParts.count == 2,
+                  let y = Int(termParts[0]),
+                  let sem = Semester(rawValue: String(termParts[1])) else { continue }
+            set.insert(TermKey(year: y, semester: sem))
+        }
+        return set.sorted()
+    }
+    
+    
     // MARK: - 集計
     private func compute() {
         // データ読み出し
-        let now = TermStore.loadAssigned(for: currentTerm)
+        let now = TermStore.loadAssigned(for: currentTerm) + loadOnlineCourses(for: currentTerm)
         var plannedCourses = uniqueCourses(now)
         var all: [Course] = []
-        for term in TermStore.allSavedTerms().sorted(by: <) where term < currentTerm {
+        let allTerms = allSavedTermsIncludingOnline()
+        for term in allTerms where term < currentTerm {
             all.append(contentsOf: TermStore.loadAssigned(for: term))
+            all.append(contentsOf: loadOnlineCourses(for: term))
         }
         var earnedCourses = uniqueCourses(all)
         
@@ -667,8 +706,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         // --- ここから追加：取得学期マップを組み立てる ---
         earnedTermText.removeAll()
         // 過去学期分
-        for term in TermStore.allSavedTerms().sorted(by: <) where term < currentTerm {
-            let arr = TermStore.loadAssigned(for: term)
+        for term in allTerms where term < currentTerm {
+            let arr = TermStore.loadAssigned(for: term) + loadOnlineCourses(for: term)
             for c in arr {
                 earnedTermText[courseKey(c)] = term.displayTitle   // 例: "2024 年前期"
             }

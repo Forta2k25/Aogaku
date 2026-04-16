@@ -314,15 +314,22 @@ final class MemoTaskViewController: UIViewController, UITableViewDataSource, UIT
     // MARK: Notifications
     private func requestNotificationPermissionIfNeeded(completion: @escaping (Bool) -> Void) {
         let center = UNUserNotificationCenter.current()
+        let completeOnMain: (Bool) -> Void = { granted in
+                    if Thread.isMainThread {
+                        completion(granted)
+                    } else {
+                        DispatchQueue.main.async { completion(granted) }
+                    }
+                }
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
-            case .authorized, .provisional, .ephemeral: completion(true)
-            case .denied: completion(false)
+            case .authorized, .provisional, .ephemeral: completeOnMain(true)
+            case .denied: completeOnMain(false)
             case .notDetermined:
                 center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
-                    completion(granted)
+                    completeOnMain(granted)
                 }
-            @unknown default: completion(false)
+            @unknown default: completeOnMain(false)
             }
         }
     }

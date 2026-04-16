@@ -7,29 +7,19 @@ import Foundation
 /// 本番IDを使う場合は Info.plist に `ADMOB_BANNER_UNIT_ID` を追加して埋めてください。
 enum AdsConfig {
 
-    /// 広告を出すか（必要なら UserDefaults で強制OFFできる）
+    /// 広告を出すか（UserDefaults "ads_enabled" があれば最優先）
     static var enabled: Bool {
 
         // UserDefaults に "ads_enabled" があればそれを優先（テストでOFFに便利）
-       if UserDefaults.standard.object(forKey: "ads_enabled") != nil {
+        if UserDefaults.standard.object(forKey: "ads_enabled") != nil {
             return UserDefaults.standard.bool(forKey: "ads_enabled")
         }
-        return true
+        return AdsSwitchboard.shared.enabled
 
     }
 
-    /// バナー広告 Unit ID
+    /// 画面下バー向けバナー Unit ID（RC の本番/テスト切替を利用）
     static var bannerUnitID: String {
-        #if DEBUG
-        // Google公式テスト用バナーUnitID
-        return "ca-app-pub-3940256099942544/2934735716"
-        #else
-        // Info.plist から取得（無ければテストIDにフォールバック）
-        if let s = Bundle.main.object(forInfoDictionaryKey: "ADMOB_BANNER_UNIT_ID") as? String,
-           !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return s
-        }
-        return "ca-app-pub-3940256099942544/2934735716"
-        #endif
+        AdsSwitchboard.shared.unitID(for: .adaptive)
     }
 }

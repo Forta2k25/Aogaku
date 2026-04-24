@@ -5,13 +5,25 @@ enum SlotColorKey: String, Codable, CaseIterable {
 
     var uiColor: UIColor {
         switch self {
-        case .teal:   return .systemTeal
+        case .teal:   return HackColors.cellFill   // アダプティブ: ライト=深緑 / ダーク=ターミナル深緑
         case .blue:   return .systemBlue
         case .green:  return .systemGreen
         case .orange: return .systemOrange
         case .red:    return .systemRed
         case .gray:   return .systemGray
         case .purple: return .systemPurple
+        }
+    }
+
+    /// セルと同じ混色を適用したアダプティブ表示色（カラーピッカー用）
+    var cellDisplayColor: UIColor {
+        UIColor { trait in
+            let base = self.uiColor.resolvedColor(with: trait)
+            if trait.userInterfaceStyle == .dark {
+                return base.mixed(with: UIColor(white: 0.18, alpha: 1), ratio: 0.15)
+            } else {
+                return base.mixed(with: .white, ratio: 0.50)
+            }
         }
     }
 }

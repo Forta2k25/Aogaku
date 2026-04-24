@@ -431,6 +431,7 @@
                         <segue destination="L6K-4w-hUC" kind="relationship" relationship="viewControllers" id="Oxi-yP-R2H"/>
                         <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="vVN-td-rlW"/>
                         <segue destination="gfZ-Fw-sJx" kind="relationship" relationship="viewControllers" id="FpO-6s-0Lf"/>
+                        <segue destination="tjr-pj-p3J" kind="relationship" relationship="viewControllers" id="W1d-Wz-gEe"/>
                     </connections>
                 </tabBarController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="A0p-Uc-iZb" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
@@ -697,6 +698,42 @@
                 <placeholder placeholderIdentifier="IBFirstResponder" id="HXj-hZ-LNz" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
             <point key="canvasLocation" x="-780" y="3067"/>
+        </scene>
+        <!--Item-->
+        <scene sceneID="rvR-TB-8kl">
+            <objects>
+                <viewController id="tjr-pj-p3J" customClass="MoodleViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="qsx-56-AAH">
+                        <rect key="frame" x="0.0" y="0.0" width="440" height="956"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <wkWebView contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="yuQ-dD-OCu">
+                                <rect key="frame" x="0.0" y="124" width="440" height="715"/>
+                                <color key="backgroundColor" red="0.36078431370000003" green="0.38823529410000002" blue="0.4039215686" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                <wkWebViewConfiguration key="configuration">
+                                    <audiovisualMediaTypes key="mediaTypesRequiringUserActionForPlayback" none="YES"/>
+                                    <wkPreferences key="preferences"/>
+                                </wkWebViewConfiguration>
+                            </wkWebView>
+                        </subviews>
+                        <viewLayoutGuide key="safeArea" id="Asv-XA-5cD"/>
+                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                        <constraints>
+                            <constraint firstItem="yuQ-dD-OCu" firstAttribute="leading" secondItem="Asv-XA-5cD" secondAttribute="leading" id="1rU-G2-Z0f"/>
+                            <constraint firstItem="yuQ-dD-OCu" firstAttribute="top" secondItem="Asv-XA-5cD" secondAttribute="top" id="QHt-RF-6cj"/>
+                            <constraint firstItem="Asv-XA-5cD" firstAttribute="bottom" secondItem="yuQ-dD-OCu" secondAttribute="bottom" id="dve-QF-Wwb"/>
+                            <constraint firstItem="Asv-XA-5cD" firstAttribute="trailing" secondItem="yuQ-dD-OCu" secondAttribute="trailing" id="wCQ-Rg-i9C"/>
+                        </constraints>
+                    </view>
+                    <tabBarItem key="tabBarItem" title="Item" id="BF1-6v-biS"/>
+                    <navigationItem key="navigationItem" id="N2E-oO-q2e"/>
+                    <connections>
+                        <outlet property="containerView" destination="yuQ-dD-OCu" id="bti-MC-KLj"/>
+                    </connections>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="EmF-CV-ool" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="-1572" y="3791"/>
         </scene>
     </scenes>
     <resources>

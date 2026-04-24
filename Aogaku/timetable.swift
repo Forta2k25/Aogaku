@@ -66,7 +66,7 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
                   credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
 }
 
-private let cellPastelRatio: CGFloat = 0.25 // 0.15〜0.35あたりでお好み調整
+private let cellPastelRatio: CGFloat = 0.50 // 0.35〜0.65あたりでお好み調整
 //こまのセルの濃さ調整↑
 private let headerHighlightAlpha: CGFloat = 0.25  // 0.20〜0.28で好みに調整
 //時限と曜日の濃さ調整↑
@@ -430,7 +430,7 @@ final class timetable: UIViewController,
         let mode = TTBackground(rawValue: raw) ?? .system
         switch mode {
         case .system:
-            return .systemBackground
+            return HackColors.background   // Light: 白 / Dark: #0D0D0D
         case .lightGray:
             // ダーク: 薄いグレー / ライト: ほぼ白グレー
             return UIColor { trait in
@@ -580,15 +580,17 @@ final class timetable: UIViewController,
         if list.isEmpty {
             stack.isHidden = true
 
-            var cfg = baseCellConfig(bg: .secondarySystemBackground,
-                                     fg: .tertiaryLabel,
-                                     stroke: UIColor.separator,
-                                     strokeWidth: 1)
+            var cfg = baseCellConfig(
+                bg: HackColors.emptyCellBg,
+                fg: HackColors.plusIcon,
+                stroke: HackColors.gridLine,
+                strokeWidth: HackColors.emptyCellBorderWidth(for: traitCollection)
+            )
             cfg.title = viewOnly ? " " : "＋"
             cfg.titleAlignment = .center
             cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { inAttr in
                 var out = inAttr
-                out.font = .systemFont(ofSize: 22, weight: .semibold)
+                out.font = .systemFont(ofSize: 16, weight: .light)
                 let p = NSMutableParagraphStyle()
                 p.alignment = .center
                 out.paragraphStyle = p
@@ -600,10 +602,12 @@ final class timetable: UIViewController,
 
         // 複数あれば上下に等分して全部並べる
         stack.isHidden = false
-        var cfg = baseCellConfig(bg: .secondarySystemBackground,
-                                 fg: .label,
-                                 stroke: UIColor.separator,
-                                 strokeWidth: 1)
+        var cfg = baseCellConfig(
+            bg: HackColors.emptyCellBg,
+            fg: .label,
+            stroke: HackColors.gridLine,
+            strokeWidth: HackColors.emptyCellBorderWidth(for: traitCollection)
+        )
         cfg.title = " " // タイトル領域は使わず、上に載せるスタックで描画
         btn.configuration = cfg
 
@@ -616,7 +620,10 @@ final class timetable: UIViewController,
         // 1〜5限のセルと同じ「色の作り方」「角丸」「フォント」に寄せる
         let loc = SlotLocation(day: day, period: 0)
         let colorKey = SlotColorStore.color(for: loc) ?? .teal
-        let pastel = colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
+        let isDark = traitCollection.userInterfaceStyle == .dark
+        let pastel = isDark
+            ? colorKey.uiColor.mixed(with: UIColor(white: 0.08, alpha: 1), ratio: 0.35)
+            : colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
 
         let v = UIView()
         v.backgroundColor = pastel
@@ -628,9 +635,8 @@ final class timetable: UIViewController,
         content.translatesAutoresizingMaskIntoConstraints = false
         content.titleLabel.text = course.title
         content.titleLabel.textColor = .white
-        // オンデマは教室（登録番号も）不要なので非表示
-        content.roomLabel.isHidden = true
-        content.roomLabel.text = ""
+        // オンデマは教室不要 → setRoom("") でピル非表示＋タイトルをセル全体に
+        content.setRoom("")
         v.addSubview(content)
         NSLayoutConstraint.activate([
             content.leadingAnchor.constraint(equalTo: v.leadingAnchor),
@@ -1202,6 +1208,11 @@ private func placeOnlineRow() {
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
         super.traitCollectionDidChange(previous)
         applyTheme()
+        // ダーク/ライト切替時にセル色・角丸を即時更新
+        if previous?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            reloadAllButtons()
+            updateNowHighlight()
+        }
     }
 
     private func startNowTicker() {
@@ -1480,12 +1491,11 @@ private func placeOnlineRow() {
         leftButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: 6, bottom: 0, right: -6)
         leftButton.addTarget(self, action: #selector(tapLeft), for: .touchUpInside)
 
-        // 共通ボタンスタイル（薄いフラット）
-        func configureFlat(_ b: UIButton, title: String,
-                           titleSize: CGFloat = 18, hPad: CGFloat = 14) {
+        // 共通ボタンスタイル（薄いフラット）— テキスト用
+        func configureFlat(_ b: UIButton, title: String, titleSize: CGFloat = 17) {
             var cfg = UIButton.Configuration.plain()
             cfg.baseForegroundColor = UIColor.secondaryLabel
-            cfg.contentInsets = .init(top: 6, leading: hPad, bottom: 6, trailing: hPad)
+            cfg.contentInsets = .init(top: 6, leading: 10, bottom: 6, trailing: 10)
             cfg.cornerStyle = .capsule
             cfg.attributedTitle = AttributedString(title,
                 attributes: .init([.font: UIFont.systemFont(ofSize: titleSize, weight: .semibold)]))
@@ -1499,33 +1509,29 @@ private func placeOnlineRow() {
         rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
         tasksButton.addTarget(self, action: #selector(tapTasks), for: .touchUpInside)
 
-        // --- 共有 / 設定 ---
+        // --- 共有 / 設定 --- アイコン用（同じ contentInsets でテキスト系と均一に）
         func configureIcon(_ b: UIButton, systemName: String) {
             var cfg = UIButton.Configuration.plain()
             cfg.baseForegroundColor = UIColor.secondaryLabel
             cfg.image = UIImage(systemName: systemName)
             cfg.preferredSymbolConfigurationForImage =
-                UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+                UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
             cfg.cornerStyle = .capsule
-            cfg.contentInsets = .init(top: 6, leading: 12, bottom: 6, trailing: 12)
+            cfg.contentInsets = .init(top: 6, leading: 10, bottom: 6, trailing: 10)
             b.configuration = cfg
-            b.heightAnchor.constraint(equalToConstant: 35).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
         configureIcon(rightB, systemName: "square.and.arrow.up") // 共有
         configureIcon(rightC, systemName: "gearshape")           // 設定
         rightB.addTarget(self, action: #selector(tapRightB), for: .touchUpInside)
         rightC.addTarget(self, action: #selector(tapRightC), for: .touchUpInside)
 
-        // --- 並び順：学期 → 単 → 課 → 共有 → 設定（左寄せ） ---
+        // --- 並び順：学期 → 単 → 課 → 共有 → 設定（均一8pt間隔）---
+        headerBar.spacing = 8
         headerBar.addArrangedSubview(leftButton)
-        headerBar.setCustomSpacing(19, after: leftButton)
-        
+        headerBar.setCustomSpacing(16, after: leftButton)
         headerBar.addArrangedSubview(rightA)
         headerBar.addArrangedSubview(tasksButton)
-
-        // ★ここを追加：課題と共有の間だけ少し狭く（例: 4pt）
-        headerBar.setCustomSpacing(2, after: tasksButton)
-        
         headerBar.addArrangedSubview(rightB)
         headerBar.addArrangedSubview(rightC)
 
@@ -1736,25 +1742,28 @@ private func placeOnlineRow() {
             v.backgroundColor = .clear
             v.layer.cornerRadius = 0
             v.clipsToBounds = false
+            // mid ラベル（時限数字）を通常色に戻す
+            (v.viewWithTag(88881) as? UILabel)?.textColor = .label
         }
 
         // ← 追加：撮影モードならここで終了（＝ハイライト無しのまま）
         guard highlightEnabled else { return }
 
-        let hiBG = UIColor.systemBlue.withAlphaComponent(headerHighlightAlpha)
-
         let nowPos = currentDayAndPeriod()
         if let d = nowPos.day, dayHeaderViews.indices.contains(d) {
             let l = dayHeaderViews[d]
-            l.backgroundColor = hiBG
-            l.layer.cornerRadius = 6
+            l.backgroundColor = HackColors.todayHighlightBg
+            l.textColor = HackColors.nowAccent
+            l.layer.cornerRadius = HackColors.cellCornerRadius(for: traitCollection)
             l.clipsToBounds = true
         }
         if let p = nowPos.period, periodHeaderViews.indices.contains(p-1) {
             let v = periodHeaderViews[p-1]
-            v.backgroundColor = hiBG
-            v.layer.cornerRadius = 6
+            v.backgroundColor = HackColors.todayHighlightBg
+            v.layer.cornerRadius = HackColors.cellCornerRadius(for: traitCollection)
             v.clipsToBounds = true
+            // 時限数字を nowAccent で光らせる
+            (v.viewWithTag(88881) as? UILabel)?.textColor = HackColors.nowAccent
         }
     }
 
@@ -1763,7 +1772,12 @@ private func placeOnlineRow() {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
         l.text = text
-        l.font = .systemFont(ofSize: 16, weight: .regular)
+        // Dark: 小さめモノスペース / Light: Apple標準スタイル
+        let isDark = traitCollection.userInterfaceStyle == .dark
+        l.font = isDark
+            ? .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+            : .systemFont(ofSize: 15, weight: .regular)
+        l.textColor = HackColors.headerText
         l.textAlignment = .center
         return l
     }
@@ -1781,6 +1795,7 @@ private func placeOnlineRow() {
         mid.font = .systemFont(ofSize: 16, weight: .semibold)
         mid.textAlignment = .center
         mid.text = "\(period)"
+        mid.tag = 88881  // nowHighlight 用 tag
 
         let end = UILabel()
         end.font = .systemFont(ofSize: 11)
@@ -1817,7 +1832,8 @@ private func placeOnlineRow() {
         cfg.baseBackgroundColor = bg
         cfg.baseForegroundColor = fg
         cfg.contentInsets = .init(top: 8, leading: 10, bottom: 8, trailing: 10)
-        cfg.background.cornerRadius = 5
+        // Light: Apple風の丸み / Dark: ほぼ直角（マイナスの美学）
+        cfg.background.cornerRadius = HackColors.cellCornerRadius(for: traitCollection)
         cfg.background.backgroundInsets = .zero
         cfg.background.strokeColor = stroke
         cfg.background.strokeWidth = strokeWidth
@@ -1828,13 +1844,23 @@ private func placeOnlineRow() {
         b.backgroundColor = .clear; b.layer.borderWidth = 0; b.layer.cornerRadius = 0
         if !(assigned.indices.contains(idx) && assigned[idx] != nil) {
             b.removeTimetableContentView()
-            var cfg = baseCellConfig(bg: .secondarySystemBackground, fg: .tertiaryLabel,
-                                     stroke: UIColor.separator, strokeWidth: 1)
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            // Dark: 空きコマは背景に溶け込む（グリッド線のみ）
+            // Light: 薄い白セル + 細い separator ライン
+            var cfg = baseCellConfig(
+                bg: HackColors.emptyCellBg,
+                fg: HackColors.plusIcon,
+                stroke: HackColors.gridLine,
+                strokeWidth: HackColors.emptyCellBorderWidth(for: traitCollection)
+            )
+            // viewOnly: 空白 / 通常: ＋を表示（Dark でも薄く表示）
             cfg.title = viewOnly ? " " : "＋"
             cfg.titleAlignment = .center
             cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { inAttr in
-                var out = inAttr; out.font = .systemFont(ofSize: 22, weight: .semibold)
-                let p = NSMutableParagraphStyle(); p.alignment = .center; out.paragraphStyle = p; return out
+                var out = inAttr
+                out.font = .systemFont(ofSize: 16, weight: .light)
+                let p = NSMutableParagraphStyle(); p.alignment = .center; out.paragraphStyle = p
+                return out
             }
             b.configuration = cfg
             return
@@ -1844,19 +1870,28 @@ private func placeOnlineRow() {
         let col  = idx % cols
         let loc  = SlotLocation(day: col, period: row + 1)
         let colorKey = SlotColorStore.color(for: loc) ?? .teal
-        
-        let pastel = colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
-        var cfg = baseCellConfig(bg: pastel, fg: .white)
+
+        // Dark: ごく僅かに暗色と混ぜて彩度を抑える / Light: 白を混ぜてパステルに
+        let isDark = traitCollection.userInterfaceStyle == .dark
+        let cellBg = isDark
+            ? colorKey.uiColor.mixed(with: UIColor(white: 0.18, alpha: 1), ratio: 0.15)
+            : colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
+        var cfg = baseCellConfig(bg: cellBg, fg: .white)
 
         cfg.title = nil; cfg.subtitle = nil
         b.configuration = cfg
 
         let content = b.ensureTimetableContentView()
         let course = assigned[idx]!
-        content.titleLabel.text = course.title
-        content.roomLabel.text  = course.room
+        let titleText = course.title
+        let titleLimit = settings.includeSaturday ? 12 : 16
+        content.titleLabel.text = titleText.count > titleLimit ? String(titleText.prefix(titleLimit)) : titleText
+        let roomText = course.room.trimmingCharacters(in: .whitespaces)
+        // 最初の半角5文字までに制限。空なら roomPill ごと非表示
+        let displayRoom = roomText.count > 5 ? String(roomText.prefix(5)) : roomText
+        content.setRoom(displayRoom)
         content.titleLabel.textColor = .white
-        content.roomLabel.textColor  = .white
+        content.roomLabel.textColor  = UIColor.white.withAlphaComponent(0.75)
     }
     private func reloadAllButtons() { for b in slotButtons { configureButton(b, at: b.tag) } }
 
@@ -2538,28 +2573,80 @@ private func placeOnlineRow() {
 final class TimetableCellContentView: UIView {
     let titleLabel = UILabel()
     let roomLabel  = UILabel()
+    private let roomPill = UIView()
+
+    /// 教室番号がある場合: titleBottom <= pillTop-3
+    private var titleBottomWithPill: NSLayoutConstraint!
+    /// 教室番号がない場合: titleBottom <= superview.bottom-6
+    private var titleBottomWithoutPill: NSLayoutConstraint!
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
-        let v = UIStackView(arrangedSubviews: [titleLabel, roomLabel])
-        v.axis = .vertical; v.alignment = .center; v.spacing = 4
-        v.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(v)
-        NSLayoutConstraint.activate([
-            v.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            v.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            v.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            v.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
-        ])
+
+        // タイトルラベル（行数無制限・教室番号に重なるまで伸びる）
         titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         titleLabel.textAlignment = .center
-        titleLabel.numberOfLines = 4
+        titleLabel.numberOfLines = 0
         titleLabel.lineBreakMode = .byTruncatingTail
-        roomLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        titleLabel.clipsToBounds = true
+
+        // 教室番号ラベル（土曜日など幅が狭い場合はフォントを縮小して5文字を確保）
+        roomLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
         roomLabel.textAlignment = .center
         roomLabel.numberOfLines = 1
-        roomLabel.lineBreakMode = .byTruncatingTail
+        roomLabel.lineBreakMode = .byClipping
+        roomLabel.adjustsFontSizeToFitWidth = true
+        roomLabel.minimumScaleFactor = 0.55
+
+        // ピル型背景
+        roomPill.backgroundColor = UIColor.white.withAlphaComponent(0.15)
+        roomPill.layer.cornerRadius = 3
+        roomPill.layer.masksToBounds = true
+        roomPill.translatesAutoresizingMaskIntoConstraints = false
+        roomLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        roomPill.addSubview(roomLabel)
+        NSLayoutConstraint.activate([
+            roomLabel.topAnchor.constraint(equalTo: roomPill.topAnchor, constant: 2),
+            roomLabel.bottomAnchor.constraint(equalTo: roomPill.bottomAnchor, constant: -2),
+            roomLabel.leadingAnchor.constraint(equalTo: roomPill.leadingAnchor, constant: 5),
+            roomLabel.trailingAnchor.constraint(equalTo: roomPill.trailingAnchor, constant: -5)
+        ])
+
+        addSubview(titleLabel)
+        addSubview(roomPill)
+
+        // 教室あり: titleBottom <= pillTop - 3
+        titleBottomWithPill = titleLabel.bottomAnchor.constraint(
+            lessThanOrEqualTo: roomPill.topAnchor, constant: -3)
+        // 教室なし: titleBottom <= superview.bottom - 6（セル全体を使う）
+        titleBottomWithoutPill = titleLabel.bottomAnchor.constraint(
+            lessThanOrEqualTo: bottomAnchor, constant: -6)
+
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            titleBottomWithPill,          // 初期状態: 教室あり
+
+            roomPill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            roomPill.centerXAnchor.constraint(equalTo: centerXAnchor),
+            roomPill.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 5),
+            roomPill.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -5)
+        ])
     }
+
+    /// 教室番号テキストを設定。空の場合はピルを非表示にしてタイトルをセル全体に広げる
+    func setRoom(_ text: String) {
+        let hasRoom = !text.isEmpty
+        roomLabel.text = text
+        roomPill.isHidden = !hasRoom
+        // 制約を切り替え
+        titleBottomWithPill.isActive    =  hasRoom
+        titleBottomWithoutPill.isActive = !hasRoom
+    }
+
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
@@ -2630,7 +2717,7 @@ final class TermPickerViewController: UIViewController, UIPickerViewDataSource, 
 
 }
 
-private extension UIColor {
+extension UIColor {
     /// self と other を ratio(0.0〜1.0) で混ぜる。ratio=0.25 で白を25%混ぜるイメージ
     func mixed(with other: UIColor, ratio: CGFloat) -> UIColor {
         let r = max(0, min(1, ratio))

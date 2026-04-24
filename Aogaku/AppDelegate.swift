@@ -18,6 +18,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         FirebaseApp.configure()
         PushManager.shared.start()   // ← 追加
+        setupGlobalAppearance()      // ← グローバルUI設定
         
        
         // AdMob 初期化（Google Mobile Ads SDK v12+）
@@ -84,6 +85,38 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
 }
+
+// MARK: - Global Appearance
+private extension AppDelegate {
+    func setupGlobalAppearance() {
+        // アダプティブアクセント: Light=深緑 / Dark=ターミナルグリーン
+        let adaptiveAccent = HackColors.accent
+
+        // タブバー（iOS 15+ は UITabBarAppearance でアイコン・ラベルを同色に統一）
+        let tabBarAppearance = UITabBarAppearance()
+        tabBarAppearance.configureWithDefaultBackground()
+        let selectedAttrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: adaptiveAccent
+        ]
+        tabBarAppearance.stackedLayoutAppearance.selected.iconColor = adaptiveAccent
+        tabBarAppearance.stackedLayoutAppearance.selected.titleTextAttributes = selectedAttrs
+        UITabBar.appearance().standardAppearance = tabBarAppearance
+        if #available(iOS 15.0, *) {
+            UITabBar.appearance().scrollEdgeAppearance = tabBarAppearance
+        }
+        UITabBar.appearance().tintColor = adaptiveAccent
+
+        // セグメントコントロール
+        UISegmentedControl.appearance().selectedSegmentTintColor = adaptiveAccent
+
+        // スイッチ（ライトは systemGreen で見やすく、ダークはターミナルグリーン）
+        UISwitch.appearance().onTintColor = HackColors.switchTint
+
+        // PageControl
+        UIPageControl.appearance().currentPageIndicatorTintColor = adaptiveAccent
+    }
+}
+
 extension Notification.Name {
     static let adMobReady = Notification.Name("AdMobReady")
 }

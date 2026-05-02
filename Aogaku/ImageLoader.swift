@@ -9,6 +9,41 @@ final class ImageLoader {
     // メモリキャッシュ
     private let cache = NSCache<NSString, UIImage>()
 
+    // ディスクキャッシュ（アプリ再起動後も残る）
+    private let fm = FileManager.default
+    private lazy var diskCacheDir: URL = {
+        let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("ImageLoader", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private func diskKey(for urlString: String) -> String {
+        // URLをそのままファイル名に使えないので SHA-256 的に安全なhex文字列に変換
+        var hash: UInt64 = 14695981039346656037
+        for byte in urlString.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return String(hash, radix: 16, uppercase: false) + ".jpg"
+    }
+
+    private func loadFromDisk(urlString: String) -> UIImage? {
+        let file = diskCacheDir.appendingPathComponent(diskKey(for: urlString))
+        guard let data = try? Data(contentsOf: file),
+              let img = UIImage(data: data) else { return nil }
+        cache.setObject(img, forKey: urlString as NSString) // 読み込んだらメモリにも
+        return img
+    }
+
+    private func saveToDisk(_ img: UIImage, urlString: String) {
+        let file = diskCacheDir.appendingPathComponent(diskKey(for: urlString))
+        guard let data = img.jpegData(compressionQuality: 0.9) else { return }
+        let tmp = file.appendingPathExtension("tmp")
+        try? data.write(to: tmp, options: .atomic)
+        try? fm.replaceItemAt(file, withItemAt: tmp)
+    }
+
     // ネットワーク設定（タイムアウト/キャッシュポリシー）
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.default
@@ -50,44 +85,55 @@ final class ImageLoader {
         }
         objc_setAssociatedObject(imageView, &ImageLoader.assocTaskKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
-        // キャッシュ命中なら即反映（assocURLKeyはすでに更新済みなので混線しない）
+        // 1) メモリキャッシュ命中なら即反映
         if let cached = cache.object(forKey: s as NSString) {
-            if Thread.isMainThread {
-                imageView.image = cached
-            } else {
-                DispatchQueue.main.async { imageView.image = cached }
-            }
+            DispatchQueue.main.async { imageView.image = cached }
             return
         }
 
-        // ダウンロード
-        let task = session.dataTask(with: url) { [weak self, weak imageView] data, _, error in
-            guard let self = self, let imageView = imageView else { return }
-            if let _ = error { return }
-            guard let data, !data.isEmpty else { return }
+        // 2) ディスク確認 → なければネットワーク（バックグラウンドで一本化）
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak imageView] in
+            guard let self, let imageView else { return }
 
-            // なるべく軽くデコード（表示はだいたい小さいので downsample）
-            let target = CGSize(width: 120 * UIScreen.main.scale, height: 120 * UIScreen.main.scale) // 余裕を持って
-            let img = Self.downsample(data: data, to: target) ?? UIImage(data: data)
-            guard let img else { return }
-
-            self.cache.setObject(img, forKey: s as NSString)
-
-            // まだ同じURLを待っている時だけセット（セル再利用対策）
-            let current = objc_getAssociatedObject(imageView, &ImageLoader.assocURLKey) as? String
-            guard current == s else { return }
-
-            DispatchQueue.main.async {
-                // 念のためもう一回チェック
-                let current2 = objc_getAssociatedObject(imageView, &ImageLoader.assocURLKey) as? String
-                guard current2 == s else { return }
-                imageView.image = img
+            // ディスクキャッシュ命中
+            if let disk = self.loadFromDisk(urlString: s) {
+                let current = objc_getAssociatedObject(imageView, &ImageLoader.assocURLKey) as? String
+                guard current == s else { return }
+                DispatchQueue.main.async {
+                    let current2 = objc_getAssociatedObject(imageView, &ImageLoader.assocURLKey) as? String
+                    guard current2 == s else { return }
+                    imageView.image = disk
+                }
+                return
             }
-        }
 
-        // task を関連付け（次回呼び出しでキャンセルできる）
-        objc_setAssociatedObject(imageView, &ImageLoader.assocTaskKey, task, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        task.resume()
+            // ── ディスクにも無い → ネットワーク ──
+            let task = self.session.dataTask(with: url) { [weak self, weak imageView] data, _, error in
+                guard let self, let imageView else { return }
+                if let _ = error { return }
+                guard let data, !data.isEmpty else { return }
+
+                let target = CGSize(width: 120 * UIScreen.main.scale, height: 120 * UIScreen.main.scale)
+                let img = Self.downsample(data: data, to: target) ?? UIImage(data: data)
+                guard let img else { return }
+
+                self.cache.setObject(img, forKey: s as NSString)
+                self.saveToDisk(img, urlString: s)
+
+                // まだ同じURLを待っている時だけセット（セル再利用対策）
+                let current = objc_getAssociatedObject(imageView, &ImageLoader.assocURLKey) as? String
+                guard current == s else { return }
+                DispatchQueue.main.async {
+                    let current2 = objc_getAssociatedObject(imageView, &ImageLoader.assocURLKey) as? String
+                    guard current2 == s else { return }
+                    imageView.image = img
+                }
+            }
+
+            // task を関連付け（次回呼び出しでキャンセルできる）
+            objc_setAssociatedObject(imageView, &ImageLoader.assocTaskKey, task, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            task.resume()
+        }
     }
 
     private static func downsample(data: Data, to pointSize: CGSize) -> UIImage? {

@@ -86,6 +86,8 @@ final class CirclesViewController: UIViewController,
     private let campusSegmentedControl: UISegmentedControl = {
         let sc = UISegmentedControl(items: ["青山", "相模原"])
         sc.selectedSegmentIndex = 0
+        sc.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
+        sc.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
         sc.translatesAutoresizingMaskIntoConstraints = false
         return sc
     }()

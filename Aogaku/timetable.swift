@@ -174,8 +174,11 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
     }
 
     func delete(day: Int, period: Int) async {
+        let key = fieldKey(day: day, period: period)
+        // コースデータと ".u" タイムスタンプを両方削除する
         let payload: [String: Any] = [
-            fieldKey(day: day, period: period): FieldValue.delete(),
+            key: FieldValue.delete(),
+            "\(key).u": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp()
         ]
         try? await doc.setData(payload, merge: true)
@@ -183,8 +186,10 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
 
     /// 任意の field key（例: "cells.d0p0_abcd"）を削除したい場合に使う
     func delete(fieldKey key: String) async {
+        // コースデータと ".u" タイムスタンプを両方削除する
         let payload: [String: Any] = [
             key: FieldValue.delete(),
+            "\(key).u": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp()
         ]
         try? await doc.setData(payload, merge: true)

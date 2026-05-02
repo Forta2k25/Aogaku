@@ -79,6 +79,7 @@ final class CourseDetailViewController: UIViewController {
     private let syllabusSection      = UIStackView()
     private let syllabusLoadingRow   = UIView()
     private let syllabusSpinner      = UIActivityIndicatorView(style: .medium)
+    private let syllabusLoadingHint  = UILabel()   // 初回ロード時のみ表示するヒント
     private let syllabusDetailToggle = UIButton(type: .system)
     private let syllabusDetailStack  = UIStackView()
     private var isSyllabusDetailOpen = false
@@ -371,15 +372,27 @@ final class CourseDetailViewController: UIViewController {
         syllabusSection.isHidden = true
         stack.addArrangedSubview(syllabusSection)
 
-        // ローディング行
+        // ローディング行（スピナー + 初回ヒントラベル）
         syllabusLoadingRow.translatesAutoresizingMaskIntoConstraints = false
         syllabusSpinner.translatesAutoresizingMaskIntoConstraints = false
         syllabusSpinner.hidesWhenStopped = true
+
+        syllabusLoadingHint.text          = "初回のみ数秒かかります"
+        syllabusLoadingHint.font          = .systemFont(ofSize: 11)
+        syllabusLoadingHint.textColor     = .tertiaryLabel
+        syllabusLoadingHint.textAlignment = .center
+        syllabusLoadingHint.isHidden      = true   // loadSyllabus() で初回時のみ表示
+        syllabusLoadingHint.translatesAutoresizingMaskIntoConstraints = false
+
         syllabusLoadingRow.addSubview(syllabusSpinner)
+        syllabusLoadingRow.addSubview(syllabusLoadingHint)
         NSLayoutConstraint.activate([
             syllabusSpinner.centerXAnchor.constraint(equalTo: syllabusLoadingRow.centerXAnchor),
-            syllabusSpinner.topAnchor.constraint(equalTo: syllabusLoadingRow.topAnchor, constant: 12),
-            syllabusSpinner.bottomAnchor.constraint(equalTo: syllabusLoadingRow.bottomAnchor, constant: -12)
+            syllabusSpinner.topAnchor.constraint(equalTo: syllabusLoadingRow.topAnchor, constant: 14),
+
+            syllabusLoadingHint.topAnchor.constraint(equalTo: syllabusSpinner.bottomAnchor, constant: 6),
+            syllabusLoadingHint.centerXAnchor.constraint(equalTo: syllabusLoadingRow.centerXAnchor),
+            syllabusLoadingHint.bottomAnchor.constraint(equalTo: syllabusLoadingRow.bottomAnchor, constant: -14)
         ])
         syllabusSection.addArrangedSubview(syllabusLoadingRow)
 
@@ -641,6 +654,16 @@ final class CourseDetailViewController: UIViewController {
         }
         syllabusPageURL = url
         syllabusSection.isHidden = false
+
+        // ── キャッシュがあればオフライン表示 ──
+        let cacheKey = course.id
+        if let cached = SyllabusDataCache.shared.load(for: cacheKey) {
+            buildSyllabusUI(fields: cached)
+            return
+        }
+
+        // ── キャッシュなし → WebView で読み込む（初回ヒントを表示）──
+        syllabusLoadingHint.isHidden = false
         syllabusSpinner.startAnimating()
         webContainer.isHidden = true
         webView.navigationDelegate = self
@@ -652,117 +675,152 @@ final class CourseDetailViewController: UIViewController {
         syllabusSpinner.stopAnimating()
         syllabusLoadingRow.isHidden = true
 
-        // セクションタイトル
+        let currentWeek = currentSyllabusWeek()
+
+        // セクションタイトル行（ラベル + キャッシュ済みなら「更新」ボタン）
+        let headerRow = UIStackView()
+        headerRow.axis = .horizontal
+        headerRow.alignment = .center
+        headerRow.spacing = 8
+
         let header = UILabel()
         header.text = "シラバス"
         header.font = .systemFont(ofSize: 12, weight: .semibold)
         header.textColor = .secondaryLabel
-        syllabusSection.addArrangedSubview(header)
+        headerRow.addArrangedSubview(header)
 
-        // ── メタ情報ピル（常時表示） ──
-        let metaRow = UIStackView()
-        metaRow.axis = .horizontal
-        metaRow.spacing = 8
-        metaRow.alignment = .center
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        headerRow.addArrangedSubview(spacer)
 
+        // キャッシュ済みのとき「更新」ボタンを表示
+        if SyllabusDataCache.shared.exists(for: course.id) {
+            var cfg = UIButton.Configuration.plain()
+            cfg.title = "更新"
+            cfg.image = UIImage(systemName: "arrow.clockwise")
+            cfg.imagePlacement = .leading
+            cfg.imagePadding = 4
+            cfg.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
+            cfg.baseForegroundColor = .tertiaryLabel
+            cfg.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 10)
+            let refreshBtn = UIButton(type: .system)
+            refreshBtn.configuration = cfg
+            refreshBtn.titleLabel?.font = .systemFont(ofSize: 11)
+            refreshBtn.addAction(UIAction { [weak self] _ in
+                guard let self else { return }
+                SyllabusDataCache.shared.clear(for: self.course.id)
+                // シラバスセクションをリセットして再読み込み
+                self.syllabusSection.arrangedSubviews.forEach { $0.removeFromSuperview() }
+                self.syllabusLoadingRow.isHidden = false
+                self.syllabusSection.addArrangedSubview(self.syllabusLoadingRow)
+                self.isSyllabusDetailOpen = false
+                self.loadSyllabus()
+            }, for: .touchUpInside)
+            headerRow.addArrangedSubview(refreshBtn)
+        }
+
+        syllabusSection.addArrangedSubview(headerRow)
+
+        // ── メタ情報（成績評価の上に常時表示） ──
+        // 担当教員を1行目、年度・学期・単位を2行目に縦並び
         var usedKeys = Set<String>()
 
-        // ヘッダーに既出のフィールドをスキップするキーワード
-        let skipKeywords = ["年度", "AcademicYear", "授業科目名", "CourseTitle",
-                            "英文科目名", "CourseName", "学期", "Semester",
-                            "ディプロマ", "Diploma", "学部", "研究科"]
+        let metaBlock = UIStackView()
+        metaBlock.axis = .vertical
+        metaBlock.spacing = 6
+        metaBlock.alignment = .leading
+        var metaBlockHasContent = false
 
-        let pillDefs: [(String, [String])] = [
-            ("担当教員", ["担当教員", "教員名", "担当者", "教員", "Instructor"]),
-            ("単位",     ["単位数", "単位", "Credits", "配当単位"])
-        ]
-        for (label, keywords) in pillDefs {
-            if let entry = fields.first(where: { k, _ in
-                keywords.contains(where: { k.contains($0) })
-            }) {
-                let val = entry.value.components(separatedBy: "\n").first?
-                    .trimmingCharacters(in: .whitespaces) ?? ""
-                if !val.isEmpty {
-                    metaRow.addArrangedSubview(makeSyllabusPill(label: label, value: val))
-                    usedKeys.insert(entry.key)
-                }
-            }
+        // 1行目: 担当教員
+        if let teacher = fields["__教員名"], !teacher.isEmpty {
+            let teacherRow = UIStackView()
+            teacherRow.axis = .horizontal
+            teacherRow.spacing = 8
+            teacherRow.alignment = .center
+            teacherRow.addArrangedSubview(makeSyllabusPill(label: "担当教員", value: teacher))
+            let tsp = UIView()
+            tsp.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            teacherRow.addArrangedSubview(tsp)
+            metaBlock.addArrangedSubview(teacherRow)
+            metaBlockHasContent = true
         }
-        let ms = UIView()
-        ms.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        metaRow.addArrangedSubview(ms)
-        syllabusSection.addArrangedSubview(metaRow)
 
-        // ── 全フィールドを優先順位でソートして並べる ──
-        // まず優先キーワード順に並べ、残りは末尾に追加する
-        let priorityOrder: [(String, [String])] = [
-            ("講義概要",  ["授業概要", "講義概要", "概要", "Coursedescription", "description", "授業内容"]),
-            ("達成目標",  ["到達目標", "達成目標", "学習目標", "objectives", "Courseobjectives"]),
-            ("履修条件",  ["履修条件", "Prerequisite", "受講条件", "事前条件"]),
-            ("授業計画",  ["授業計画", "講義計画", "Lectureplan", "授業スケジュール"]),
-            ("授業方法",  ["授業方法", "授業の方法", "授業形態", "Methodofinstruction", "実施形態"]),
-            ("成績評価",  ["成績評価", "成績評価方法", "評価方法", "Evaluation"]),
-            ("教科書",    ["教科書", "テキスト", "Textbooks"]),
-            ("参考書",    ["参考書", "参考文献", "Referencebooks"]),
-            ("メッセージ",["メッセージ", "Message", "備考", "注意事項", "特記事項"])
+        // 2行目: 年度・学期・単位
+        let subPills: [(String, String?)] = [
+            ("年度", fields["__年度"]),
+            ("学期", fields["__学期"]),
+            ("単位", fields["__単位"].flatMap { $0.isEmpty ? nil : $0 + "単位" })
         ]
+        let filteredSub = subPills.compactMap { (label, val) -> (String, String)? in
+            guard let v = val, !v.isEmpty else { return nil }
+            return (label, v)
+        }
+        if !filteredSub.isEmpty {
+            let subRow = UIStackView()
+            subRow.axis = .horizontal
+            subRow.spacing = 8
+            subRow.alignment = .center
+            for (label, val) in filteredSub {
+                subRow.addArrangedSubview(makeSyllabusPill(label: label, value: val))
+            }
+            let ssp = UIView()
+            ssp.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            subRow.addArrangedSubview(ssp)
+            metaBlock.addArrangedSubview(subRow)
+            metaBlockHasContent = true
+        }
 
-        var orderedEntries: [(String, String)] = []
+        if metaBlockHasContent {
+            syllabusSection.addArrangedSubview(metaBlock)
+        }
 
-        // 優先フィールドを順番通りに取り出す
-        for (displayLabel, keywords) in priorityOrder {
+        // ── 優先表示フィールド（授業計画 + 成績評価）── 常時展開
+        let priorityKeywords: [(String, [String])] = [
+            ("成績評価", ["成績評価", "成績評価方法", "評価方法", "Evaluation"]),
+            ("授業計画", ["授業計画", "講義計画", "Lectureplan", "授業スケジュール"])
+        ]
+        var priorityEntries: [(String, String)] = []
+        for (displayLabel, keywords) in priorityKeywords {
             if let entry = fields.first(where: { k, _ in
                 !usedKeys.contains(k) &&
                 keywords.contains(where: { k.contains($0) || $0.contains(k) })
             }) {
                 guard !entry.value.isEmpty else { continue }
-                orderedEntries.append((displayLabel, entry.value))
+                priorityEntries.append((displayLabel, entry.value))
                 usedKeys.insert(entry.key)
             }
         }
 
-        // 残りのフィールド（スキップ対象・既出以外）を末尾に追加
-        // キーをソートして毎回同じ順序にする
-        for key in fields.keys.sorted() {
-            guard !usedKeys.contains(key) else { continue }
-            guard !fields[key]!.isEmpty else { continue }
-            guard !skipKeywords.contains(where: { key.contains($0) }) else { continue }
-            // "/" の前だけ取り出してラベルに使う（日英併記フォーマット対応）
-            let displayKey = key.components(separatedBy: "/").first.map {
-                String($0.prefix(24))
-            } ?? String(key.prefix(24))
-            orderedEntries.append((displayKey, fields[key]!))
-            usedKeys.insert(key)
+        if !priorityEntries.isEmpty {
+            let cardWrap = UIView()
+            cardWrap.backgroundColor = .secondarySystemBackground
+            cardWrap.layer.cornerRadius = 12
+            cardWrap.layer.masksToBounds = true
+            cardWrap.translatesAutoresizingMaskIntoConstraints = false
+
+            let cardStack = UIStackView()
+            cardStack.axis = .vertical
+            cardStack.spacing = 0
+            cardStack.translatesAutoresizingMaskIntoConstraints = false
+            cardWrap.addSubview(cardStack)
+            NSLayoutConstraint.activate([
+                cardStack.topAnchor.constraint(equalTo: cardWrap.topAnchor),
+                cardStack.leadingAnchor.constraint(equalTo: cardWrap.leadingAnchor, constant: 16),
+                cardStack.trailingAnchor.constraint(equalTo: cardWrap.trailingAnchor, constant: -16),
+                cardStack.bottomAnchor.constraint(equalTo: cardWrap.bottomAnchor)
+            ])
+
+            for (i, (label, body)) in priorityEntries.enumerated() {
+                cardStack.addArrangedSubview(
+                    makeSyllabusFieldCard(label: label, body: body, isFirst: i == 0, currentWeek: currentWeek)
+                )
+            }
+            syllabusSection.addArrangedSubview(cardWrap)
         }
 
-        guard !orderedEntries.isEmpty else {
-            addOpenInBrowserButton()
-            return
-        }
+        // ── 残りのフィールド（折りたたみ）──
+        buildStructuredSecondarySection(fields: fields)
 
-        // 折りたたみトグル
-        var cfg = UIButton.Configuration.plain()
-        cfg.title = "授業概要・詳細を見る (\(orderedEntries.count)項目)"
-        cfg.image = UIImage(systemName: "chevron.down")
-        cfg.imagePlacement = .trailing
-        cfg.imagePadding = 6
-        cfg.contentInsets = .zero
-        cfg.baseForegroundColor = HackColors.accent
-        syllabusDetailToggle.configuration = cfg
-        syllabusDetailToggle.contentHorizontalAlignment = .leading
-        syllabusDetailToggle.addTarget(self, action: #selector(toggleSyllabusDetail), for: .touchUpInside)
-        syllabusSection.addArrangedSubview(syllabusDetailToggle)
-
-        syllabusDetailStack.axis = .vertical
-        syllabusDetailStack.spacing = 0
-        syllabusDetailStack.isHidden = true
-        syllabusDetailStack.alpha = 0
-        for (i, (label, body)) in orderedEntries.enumerated() {
-            syllabusDetailStack.addArrangedSubview(
-                makeSyllabusFieldCard(label: label, body: body, isFirst: i == 0)
-            )
-        }
-        syllabusSection.addArrangedSubview(syllabusDetailStack)
         addOpenInBrowserButton()
     }
 
@@ -791,7 +849,7 @@ final class CourseDetailViewController: UIViewController {
     // MARK: - Field Card Rendering
 
     /// 種類を判定してカードを返すディスパッチャー
-    private func makeSyllabusFieldCard(label: String, body: String, isFirst: Bool) -> UIView {
+    private func makeSyllabusFieldCard(label: String, body: String, isFirst: Bool, currentWeek: Int? = nil) -> UIView {
         let lines = body.components(separatedBy: "\n").filter { !$0.isEmpty }
         let isPercent  = lines.contains { $0.contains("\t") && $0.contains("%") }
         let isNumbered = !isPercent && (lines.first.map {
@@ -799,8 +857,8 @@ final class CourseDetailViewController: UIViewController {
             return parts.count >= 2 && Int(parts[0]) != nil
         } ?? false)
 
-        if isPercent   { return makePercentageCard(label: label, lines: lines, isFirst: isFirst) }
-        if isNumbered  { return makeNumberedListCard(label: label, lines: lines, isFirst: isFirst) }
+        if isPercent   { return makeGradingBarCard(label: label, lines: lines, isFirst: isFirst) }
+        if isNumbered  { return makeNumberedListCard(label: label, lines: lines, isFirst: isFirst, currentWeek: currentWeek) }
         return makeDefaultCard(label: label, body: body, isFirst: isFirst)
     }
 
@@ -858,8 +916,8 @@ final class CourseDetailViewController: UIViewController {
         return wrap
     }
 
-    /// 番号付きリストカード（授業計画用）
-    private func makeNumberedListCard(label: String, lines: [String], isFirst: Bool) -> UIView {
+    /// 番号付きリストカード（授業計画用）。currentWeek が指定されていれば該当行をハイライト
+    private func makeNumberedListCard(label: String, lines: [String], isFirst: Bool, currentWeek: Int? = nil) -> UIView {
         let wrap = UIView()
         wrap.translatesAutoresizingMaskIntoConstraints = false
         var topRef: NSLayoutYAxisAnchor = wrap.topAnchor
@@ -876,29 +934,68 @@ final class CourseDetailViewController: UIViewController {
         }
         let cap = makeFieldCapLabel(text: label)
         wrap.addSubview(cap)
+
+        // 今週バッジ（ラベルの右横に配置）
+        var capTrailingRef: NSLayoutXAxisAnchor = cap.trailingAnchor
+        if let w = currentWeek {
+            let weekBadge = UILabel()
+            weekBadge.text = "\(w)週目"
+            weekBadge.font = .systemFont(ofSize: 10, weight: .bold)
+            weekBadge.textColor = .white
+            weekBadge.backgroundColor = HackColors.accent
+            weekBadge.layer.cornerRadius = 7
+            weekBadge.layer.masksToBounds = true
+            weekBadge.textAlignment = .center
+            weekBadge.translatesAutoresizingMaskIntoConstraints = false
+            wrap.addSubview(weekBadge)
+            NSLayoutConstraint.activate([
+                weekBadge.leadingAnchor.constraint(equalTo: cap.trailingAnchor, constant: 6),
+                weekBadge.centerYAnchor.constraint(equalTo: cap.centerYAnchor),
+                weekBadge.heightAnchor.constraint(equalToConstant: 16),
+                weekBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 38)
+            ])
+            capTrailingRef = weekBadge.trailingAnchor
+        }
+
         NSLayoutConstraint.activate([
             cap.topAnchor.constraint(equalTo: topRef, constant: 12),
             cap.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
-            cap.trailingAnchor.constraint(equalTo: wrap.trailingAnchor)
+            capTrailingRef.constraint(lessThanOrEqualTo: wrap.trailingAnchor)
         ])
 
         let listStack = UIStackView()
         listStack.axis = .vertical
-        listStack.spacing = 4
+        listStack.spacing = 2
         listStack.translatesAutoresizingMaskIntoConstraints = false
         wrap.addSubview(listStack)
 
         for line in lines {
+            let parts = line.components(separatedBy: ". ")
+            let weekNum = (parts.count >= 2) ? Int(parts[0]) : nil
+            let isThisWeek = currentWeek != nil && weekNum == currentWeek
+
+            let rowContainer = UIView()
+            rowContainer.translatesAutoresizingMaskIntoConstraints = false
+
+            if isThisWeek {
+                rowContainer.backgroundColor = HackColors.accent.withAlphaComponent(0.10)
+                rowContainer.layer.cornerRadius = 7
+                rowContainer.layer.masksToBounds = true
+            }
+
             let lbl = UILabel()
             lbl.numberOfLines = 0
-            let parts = line.components(separatedBy: ". ")
-            if parts.count >= 2, let _ = Int(parts[0]) {
+            lbl.translatesAutoresizingMaskIntoConstraints = false
+
+            if let _ = weekNum, parts.count >= 2 {
                 let numStr = parts[0] + ".  "
                 let contentStr = parts.dropFirst().joined(separator: ". ")
                 let astr = NSMutableAttributedString(
                     string: numStr,
-                    attributes: [.font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
-                                 .foregroundColor: UIColor.secondaryLabel]
+                    attributes: [
+                        .font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
+                        .foregroundColor: isThisWeek ? HackColors.accent : UIColor.secondaryLabel
+                    ]
                 )
                 astr.append(NSAttributedString(
                     string: contentStr,
@@ -911,8 +1008,44 @@ final class CourseDetailViewController: UIViewController {
                 lbl.font = .systemFont(ofSize: 13)
                 lbl.textColor = .secondaryLabel
             }
-            listStack.addArrangedSubview(lbl)
+
+            rowContainer.addSubview(lbl)
+            let pad: CGFloat = isThisWeek ? 5 : 3
+            let hPad: CGFloat = isThisWeek ? 8 : 0
+
+            var rowCs: [NSLayoutConstraint] = [
+                lbl.topAnchor.constraint(equalTo: rowContainer.topAnchor, constant: pad),
+                lbl.leadingAnchor.constraint(equalTo: rowContainer.leadingAnchor, constant: hPad),
+                lbl.bottomAnchor.constraint(equalTo: rowContainer.bottomAnchor, constant: -pad)
+            ]
+
+            if isThisWeek {
+                // 「今週」バッジ
+                let badge = UILabel()
+                badge.text = "今週"
+                badge.font = .systemFont(ofSize: 10, weight: .bold)
+                badge.textColor = .white
+                badge.backgroundColor = HackColors.accent
+                badge.layer.cornerRadius = 6
+                badge.layer.masksToBounds = true
+                badge.textAlignment = .center
+                badge.translatesAutoresizingMaskIntoConstraints = false
+                rowContainer.addSubview(badge)
+                rowCs += [
+                    badge.centerYAnchor.constraint(equalTo: rowContainer.centerYAnchor),
+                    badge.trailingAnchor.constraint(equalTo: rowContainer.trailingAnchor, constant: -6),
+                    badge.widthAnchor.constraint(equalToConstant: 34),
+                    badge.heightAnchor.constraint(equalToConstant: 18),
+                    lbl.trailingAnchor.constraint(equalTo: badge.leadingAnchor, constant: -4)
+                ]
+            } else {
+                rowCs.append(lbl.trailingAnchor.constraint(equalTo: rowContainer.trailingAnchor))
+            }
+
+            NSLayoutConstraint.activate(rowCs)
+            listStack.addArrangedSubview(rowContainer)
         }
+
         NSLayoutConstraint.activate([
             listStack.topAnchor.constraint(equalTo: cap.bottomAnchor, constant: 6),
             listStack.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
@@ -922,8 +1055,8 @@ final class CourseDetailViewController: UIViewController {
         return wrap
     }
 
-    /// 割合バッジカード（成績評価用）
-    private func makePercentageCard(label: String, lines: [String], isFirst: Bool) -> UIView {
+    /// 成績評価グラフカード — 横棒グラフ＋凡例
+    private func makeGradingBarCard(label: String, lines: [String], isFirst: Bool) -> UIView {
         let wrap = UIView()
         wrap.translatesAutoresizingMaskIntoConstraints = false
         var topRef: NSLayoutYAxisAnchor = wrap.topAnchor
@@ -946,99 +1079,135 @@ final class CourseDetailViewController: UIViewController {
             cap.trailingAnchor.constraint(equalTo: wrap.trailingAnchor)
         ])
 
-        let evalStack = UIStackView()
-        evalStack.axis = .vertical
-        evalStack.spacing = 0
-        evalStack.translatesAutoresizingMaskIntoConstraints = false
-        wrap.addSubview(evalStack)
+        // パレット（最大8色）
+        let palette: [UIColor] = [
+            UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1),
+            .systemOrange, .systemBlue, .systemPurple,
+            .systemRed, .systemIndigo, .systemTeal, .systemBrown
+        ]
 
-        let validLines = lines.filter { !$0.isEmpty }
-        for (idx, line) in validLines.enumerated() {
+        struct GItem { let name: String; let pct: Double; let pctStr: String; let desc: String }
+        var items: [GItem] = []
+        for line in lines.filter({ !$0.isEmpty }) {
             let parts = line.components(separatedBy: "\t")
-            let name = parts.count > 0 ? parts[0].trimmingCharacters(in: .whitespaces) : ""
-            let pct  = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
-            let desc = parts.count > 2 ? parts[2].trimmingCharacters(in: .whitespaces) : ""
+            let name    = parts.count > 0 ? parts[0].trimmingCharacters(in: .whitespaces) : ""
+            let pctStr  = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+            let desc    = parts.count > 2 ? parts[2].trimmingCharacters(in: .whitespaces) : ""
             guard !name.isEmpty else { continue }
+            let numStr  = pctStr.replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)
+            let pct     = Double(numStr) ?? 0
+            items.append(GItem(name: name, pct: pct, pctStr: pctStr, desc: desc))
+        }
 
-            // アイテム間の仕切り
-            if idx > 0 {
-                let sep = UIView()
-                sep.backgroundColor = UIColor.label.withAlphaComponent(0.06)
-                sep.translatesAutoresizingMaskIntoConstraints = false
-                evalStack.addArrangedSubview(sep)
-                sep.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+        let denom = items.reduce(0.0) { $0 + $1.pct }
+        guard !items.isEmpty else {
+            NSLayoutConstraint.activate([cap.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -12)])
+            return wrap
+        }
+
+        // ── 横棒グラフ ──
+        let barH: CGFloat = 28
+        let barContainer = UIView()
+        barContainer.translatesAutoresizingMaskIntoConstraints = false
+        barContainer.layer.cornerRadius = barH / 2
+        barContainer.layer.masksToBounds = true
+        barContainer.backgroundColor = .systemGray5
+        wrap.addSubview(barContainer)
+        NSLayoutConstraint.activate([
+            barContainer.topAnchor.constraint(equalTo: cap.bottomAnchor, constant: 10),
+            barContainer.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
+            barContainer.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
+            barContainer.heightAnchor.constraint(equalToConstant: barH)
+        ])
+
+        var prevTrailing: NSLayoutXAxisAnchor = barContainer.leadingAnchor
+        let safeTotal = denom > 0 ? denom : 100.0
+        for (i, item) in items.enumerated() {
+            let seg = UIView()
+            seg.translatesAutoresizingMaskIntoConstraints = false
+            seg.backgroundColor = palette[i % palette.count]
+            barContainer.addSubview(seg)
+            NSLayoutConstraint.activate([
+                seg.topAnchor.constraint(equalTo: barContainer.topAnchor),
+                seg.bottomAnchor.constraint(equalTo: barContainer.bottomAnchor),
+                seg.leadingAnchor.constraint(equalTo: prevTrailing)
+            ])
+            if i == items.count - 1 {
+                seg.trailingAnchor.constraint(equalTo: barContainer.trailingAnchor).isActive = true
+            } else {
+                let ratio = CGFloat(item.pct / safeTotal)
+                seg.widthAnchor.constraint(equalTo: barContainer.widthAnchor, multiplier: ratio).isActive = true
             }
+            prevTrailing = seg.trailingAnchor
+        }
 
-            let itemView = UIView()
-            itemView.translatesAutoresizingMaskIntoConstraints = false
+        // ── 凡例 ──
+        let legendStack = UIStackView()
+        legendStack.axis = .vertical
+        legendStack.spacing = 6
+        legendStack.translatesAutoresizingMaskIntoConstraints = false
+        wrap.addSubview(legendStack)
 
-            // 名前ラベル
+        for (i, item) in items.enumerated() {
+            let color = palette[i % palette.count]
+
+            let dot = UIView()
+            dot.backgroundColor = color
+            dot.layer.cornerRadius = 5
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 10).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+
             let nameLbl = UILabel()
-            nameLbl.text = name
-            nameLbl.font = .systemFont(ofSize: 14, weight: .medium)
+            nameLbl.text = item.name
+            nameLbl.font = .systemFont(ofSize: 13)
+            nameLbl.textColor = .label
             nameLbl.numberOfLines = 2
             nameLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            nameLbl.translatesAutoresizingMaskIntoConstraints = false
-
-            // 割合バッジ
-            let pctWrap = UIView()
-            pctWrap.translatesAutoresizingMaskIntoConstraints = false
-            pctWrap.backgroundColor = HackColors.accent.withAlphaComponent(0.12)
-            pctWrap.layer.cornerRadius = 6
-            pctWrap.setContentHuggingPriority(.required, for: .horizontal)
-            pctWrap.setContentCompressionResistancePriority(.required, for: .horizontal)
 
             let pctLbl = UILabel()
-            pctLbl.text = pct
+            pctLbl.text = item.pctStr
             pctLbl.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-            pctLbl.textColor = HackColors.accent
-            pctLbl.translatesAutoresizingMaskIntoConstraints = false
-            pctWrap.addSubview(pctLbl)
-            NSLayoutConstraint.activate([
-                pctLbl.topAnchor.constraint(equalTo: pctWrap.topAnchor, constant: 3),
-                pctLbl.leadingAnchor.constraint(equalTo: pctWrap.leadingAnchor, constant: 8),
-                pctLbl.trailingAnchor.constraint(equalTo: pctWrap.trailingAnchor, constant: -8),
-                pctLbl.bottomAnchor.constraint(equalTo: pctWrap.bottomAnchor, constant: -3)
-            ])
+            pctLbl.textColor = color
+            pctLbl.setContentHuggingPriority(.required, for: .horizontal)
+            pctLbl.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-            let rowStack = UIStackView(arrangedSubviews: [nameLbl, pctWrap])
-            rowStack.axis = .horizontal
-            rowStack.alignment = .center
-            rowStack.spacing = 8
-            rowStack.translatesAutoresizingMaskIntoConstraints = false
-            itemView.addSubview(rowStack)
+            let row = UIStackView(arrangedSubviews: [dot, nameLbl, pctLbl])
+            row.axis = .horizontal
+            row.spacing = 8
+            row.alignment = .center
 
-            var cs: [NSLayoutConstraint] = [
-                rowStack.topAnchor.constraint(equalTo: itemView.topAnchor, constant: 8),
-                rowStack.leadingAnchor.constraint(equalTo: itemView.leadingAnchor),
-                rowStack.trailingAnchor.constraint(equalTo: itemView.trailingAnchor)
-            ]
-            if !desc.isEmpty {
+            if item.desc.isEmpty {
+                legendStack.addArrangedSubview(row)
+            } else {
                 let descLbl = UILabel()
-                descLbl.text = desc
+                descLbl.text = item.desc
                 descLbl.font = .systemFont(ofSize: 12)
                 descLbl.textColor = .secondaryLabel
                 descLbl.numberOfLines = 0
+                // ドット(10pt) + spacing(8pt) = 18pt のインデント
+                let descWrap = UIView()
+                descWrap.translatesAutoresizingMaskIntoConstraints = false
                 descLbl.translatesAutoresizingMaskIntoConstraints = false
-                itemView.addSubview(descLbl)
-                cs += [
-                    descLbl.topAnchor.constraint(equalTo: rowStack.bottomAnchor, constant: 2),
-                    descLbl.leadingAnchor.constraint(equalTo: itemView.leadingAnchor),
-                    descLbl.trailingAnchor.constraint(equalTo: itemView.trailingAnchor),
-                    descLbl.bottomAnchor.constraint(equalTo: itemView.bottomAnchor, constant: -8)
-                ]
-            } else {
-                cs.append(rowStack.bottomAnchor.constraint(equalTo: itemView.bottomAnchor, constant: -8))
+                descWrap.addSubview(descLbl)
+                NSLayoutConstraint.activate([
+                    descLbl.topAnchor.constraint(equalTo: descWrap.topAnchor),
+                    descLbl.leadingAnchor.constraint(equalTo: descWrap.leadingAnchor, constant: 18),
+                    descLbl.trailingAnchor.constraint(equalTo: descWrap.trailingAnchor),
+                    descLbl.bottomAnchor.constraint(equalTo: descWrap.bottomAnchor)
+                ])
+                let itemVStack = UIStackView(arrangedSubviews: [row, descWrap])
+                itemVStack.axis = .vertical
+                itemVStack.spacing = 3
+                legendStack.addArrangedSubview(itemVStack)
             }
-            NSLayoutConstraint.activate(cs)
-            evalStack.addArrangedSubview(itemView)
         }
 
         NSLayoutConstraint.activate([
-            evalStack.topAnchor.constraint(equalTo: cap.bottomAnchor, constant: 6),
-            evalStack.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
-            evalStack.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
-            evalStack.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -12)
+            legendStack.topAnchor.constraint(equalTo: barContainer.bottomAnchor, constant: 12),
+            legendStack.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
+            legendStack.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
+            legendStack.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -12)
         ])
         return wrap
     }
@@ -1069,7 +1238,7 @@ final class CourseDetailViewController: UIViewController {
         if isSyllabusDetailOpen { syllabusDetailStack.isHidden = false }
 
         var cfg = syllabusDetailToggle.configuration ?? .plain()
-        cfg.title = isSyllabusDetailOpen ? "閉じる" : "授業概要・詳細を見る"
+        cfg.title = isSyllabusDetailOpen ? "閉じる" : "詳細シラバス情報"
         cfg.image = UIImage(systemName: isSyllabusDetailOpen ? "chevron.up" : "chevron.down")
         syllabusDetailToggle.configuration = cfg
 
@@ -1364,6 +1533,56 @@ final class CourseDetailViewController: UIViewController {
 
 
     // MARK: - Helpers
+
+    /// 現在の学期において今日が何週目かを返す（計算できない場合は nil）
+    /// 開始日は AcademicCalendar*.swift の springTermStart / autumnTermStart に合わせて管理。
+    private func currentSyllabusWeek() -> Int? {
+
+        // ── 学事暦に基づく学期開始日（月曜日）一覧 ──
+        // 年度を追加するときはここに (前期月, 前期日, 後期月, 後期日) を追記する。
+        // 2025: 前期 4/7（月）、後期 9/22（月）
+        // 2026: AcademicCalendar2026 より 前期 4/6（月）、後期 9/14（月）
+        let termStartDays: [Int: (fm: Int, fd: Int, bm: Int, bd: Int)] = [
+            2025: (fm: 4, fd:  7, bm: 9, bd: 22),
+            2026: (fm: 4, fd:  6, bm: 9, bd: 14),
+        ]
+
+        let termInfo = TermStore.loadSelected()
+        let title = termInfo.displayTitle   // e.g. "2026年前期"
+        guard let year = Int(title.prefix(4)) else { return nil }
+        let isFront = title.contains("前期")
+        let isBack  = title.contains("後期")
+        guard isFront || isBack else { return nil }
+
+        let cal = Calendar(identifier: .gregorian)
+        var startComps = DateComponents()
+        startComps.year = year
+
+        if let k = termStartDays[year] {
+            // 既知の開始日を直接使用
+            startComps.month = isFront ? k.fm : k.bm
+            startComps.day   = isFront ? k.fd : k.bd
+        } else {
+            // 未登録年度: 4月1日 / 9月7日 以降の最初の月曜を推計
+            startComps.month = isFront ? 4 : 9
+            startComps.day   = isFront ? 1 : 7
+            guard let anchor = cal.date(from: startComps) else { return nil }
+            let wd    = cal.component(.weekday, from: anchor)
+            let shift = (9 - wd) % 7
+            guard let est = cal.date(byAdding: .day, value: shift, to: anchor) else { return nil }
+            let ec = cal.dateComponents([.month, .day], from: est)
+            startComps.month = ec.month ?? startComps.month
+            startComps.day   = ec.day   ?? startComps.day
+        }
+
+        guard let semesterStart = cal.date(from: startComps) else { return nil }
+        let today = Date()
+        guard today >= semesterStart else { return nil }
+        let daysPassed = cal.dateComponents([.day], from: semesterStart, to: today).day ?? 0
+        let week = daysPassed / 7 + 1
+        return week <= 16 ? week : nil
+    }
+
     private func courseCreditsText() -> String? {
         let m = Mirror(reflecting: course)
         if let child = m.children.first(where: { $0.label == "credits" }) {
@@ -1371,6 +1590,256 @@ final class CourseDetailViewController: UIViewController {
             if let s = child.value as? String { return s }
         }
         return nil
+    }
+
+    // MARK: - Structured Secondary Section
+
+    /// 詳細シラバス情報を常時表示で syllabusSection に追加する
+    private func buildStructuredSecondarySection(fields: [String: String]) {
+        let contentKeys = ["__講義概要", "__達成目標", "__履修条件",
+                           "__授業方法", "__教科書", "__参考書"]
+        guard contentKeys.contains(where: { !(fields[$0] ?? "").isEmpty }) else { return }
+
+        // ── 講義概要 / 達成目標 / 履修条件 まとめカード ──
+        let textDefs: [(String, String)] = [
+            ("__講義概要", "講義概要"),
+            ("__達成目標", "達成目標"),
+            ("__履修条件", "履修条件")
+        ]
+        let textEntries = textDefs.compactMap { (key, label) -> (String, String)? in
+            guard let v = fields[key], !v.isEmpty else { return nil }
+            return (label, v)
+        }
+        if !textEntries.isEmpty {
+            syllabusSection.addArrangedSubview(makeStyledTextCard(entries: textEntries))
+        }
+
+        // ── 活用される授業方法 ──
+        if let methodStr = fields["__授業方法"], !methodStr.isEmpty {
+            let methods = methodStr.components(separatedBy: "\n").filter { !$0.isEmpty }
+            syllabusSection.addArrangedSubview(makeMethodChipsCard(methods: methods))
+        }
+
+        // ── 教科書 ──
+        if let bookStr = fields["__教科書"], !bookStr.isEmpty {
+            let items = bookStr.components(separatedBy: "\n").filter { !$0.isEmpty }
+            syllabusSection.addArrangedSubview(makeBookListCard(label: "教科書", items: items))
+        }
+
+        // ── 参考書 ──
+        if let refStr = fields["__参考書"], !refStr.isEmpty {
+            let items = refStr.components(separatedBy: "\n").filter { !$0.isEmpty }
+            syllabusSection.addArrangedSubview(makeBookListCard(label: "参考書", items: items))
+        }
+    }
+
+    /// 講義概要・達成目標・履修条件をまとめた角丸カード
+    private func makeStyledTextCard(entries: [(String, String)]) -> UIView {
+        let outer = UIView()
+        outer.backgroundColor = .secondarySystemBackground
+        outer.layer.cornerRadius = 12
+        outer.layer.masksToBounds = true
+        outer.translatesAutoresizingMaskIntoConstraints = false
+
+        let inner = UIStackView()
+        inner.axis = .vertical
+        inner.spacing = 0
+        inner.isLayoutMarginsRelativeArrangement = true
+        inner.layoutMargins = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+        inner.translatesAutoresizingMaskIntoConstraints = false
+        outer.addSubview(inner)
+        NSLayoutConstraint.activate([
+            inner.topAnchor.constraint(equalTo: outer.topAnchor),
+            inner.leadingAnchor.constraint(equalTo: outer.leadingAnchor),
+            inner.trailingAnchor.constraint(equalTo: outer.trailingAnchor),
+            inner.bottomAnchor.constraint(equalTo: outer.bottomAnchor)
+        ])
+
+        for (i, (label, body)) in entries.enumerated() {
+            inner.addArrangedSubview(makeDefaultCard(label: label, body: body, isFirst: i == 0))
+        }
+        return outer
+    }
+
+    /// 活用される授業方法チップカード
+    /// items の各要素は "1\t名前"（該当）または "0\t名前"（非該当）形式
+    private func makeMethodChipsCard(methods: [String]) -> UIView {
+        let outer = UIView()
+        outer.backgroundColor = .secondarySystemBackground
+        outer.layer.cornerRadius = 12
+        outer.layer.masksToBounds = true
+        outer.translatesAutoresizingMaskIntoConstraints = false
+
+        let cap = makeFieldCapLabel(text: "活用される授業方法")
+        cap.translatesAutoresizingMaskIntoConstraints = false
+        outer.addSubview(cap)
+
+        let chipStack = UIStackView()
+        chipStack.axis = .vertical
+        chipStack.spacing = 6
+        chipStack.alignment = .leading
+        chipStack.translatesAutoresizingMaskIntoConstraints = false
+        outer.addSubview(chipStack)
+
+        for raw in methods {
+            let parts = raw.components(separatedBy: "\t")
+            let isChecked = parts[0] == "1"
+            let name = parts.count >= 2 ? parts[1] : raw
+
+            let chip = UIView()
+            if isChecked {
+                chip.backgroundColor = HackColors.accent.withAlphaComponent(0.12)
+            } else {
+                chip.backgroundColor = UIColor.tertiarySystemFill
+            }
+            chip.layer.cornerRadius = 8
+            chip.layer.masksToBounds = true
+            chip.translatesAutoresizingMaskIntoConstraints = false
+
+            // チェック済みにはチェックマークアイコンを追加
+            let iconView = UIImageView()
+            if isChecked {
+                let cfg = UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+                iconView.image = UIImage(systemName: "checkmark", withConfiguration: cfg)
+                iconView.tintColor = HackColors.accent
+            }
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            iconView.setContentHuggingPriority(.required, for: .horizontal)
+            iconView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+            let lbl = UILabel()
+            lbl.text = name
+            lbl.font = .systemFont(ofSize: 13, weight: isChecked ? .medium : .regular)
+            lbl.textColor = isChecked ? HackColors.accent : .secondaryLabel
+            lbl.numberOfLines = 0
+            lbl.translatesAutoresizingMaskIntoConstraints = false
+
+            chip.addSubview(iconView)
+            chip.addSubview(lbl)
+
+            if isChecked {
+                NSLayoutConstraint.activate([
+                    iconView.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+                    iconView.centerYAnchor.constraint(equalTo: chip.centerYAnchor),
+                    lbl.topAnchor.constraint(equalTo: chip.topAnchor, constant: 5),
+                    lbl.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 5),
+                    lbl.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+                    lbl.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -5)
+                ])
+            } else {
+                NSLayoutConstraint.activate([
+                    iconView.widthAnchor.constraint(equalToConstant: 0),
+                    iconView.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+                    iconView.centerYAnchor.constraint(equalTo: chip.centerYAnchor),
+                    lbl.topAnchor.constraint(equalTo: chip.topAnchor, constant: 5),
+                    lbl.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+                    lbl.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+                    lbl.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -5)
+                ])
+            }
+            chipStack.addArrangedSubview(chip)
+        }
+
+        NSLayoutConstraint.activate([
+            cap.topAnchor.constraint(equalTo: outer.topAnchor, constant: 12),
+            cap.leadingAnchor.constraint(equalTo: outer.leadingAnchor, constant: 16),
+            cap.trailingAnchor.constraint(equalTo: outer.trailingAnchor, constant: -16),
+            chipStack.topAnchor.constraint(equalTo: cap.bottomAnchor, constant: 8),
+            chipStack.leadingAnchor.constraint(equalTo: outer.leadingAnchor, constant: 16),
+            chipStack.trailingAnchor.constraint(equalTo: outer.trailingAnchor, constant: -16),
+            chipStack.bottomAnchor.constraint(equalTo: outer.bottomAnchor, constant: -12)
+        ])
+        return outer
+    }
+
+    /// 教科書・参考書リストカード（著者名＋タイトルのみ）
+    private func makeBookListCard(label: String, items: [String]) -> UIView {
+        let outer = UIView()
+        outer.backgroundColor = .secondarySystemBackground
+        outer.layer.cornerRadius = 12
+        outer.layer.masksToBounds = true
+        outer.translatesAutoresizingMaskIntoConstraints = false
+
+        let cap = makeFieldCapLabel(text: label)
+        cap.translatesAutoresizingMaskIntoConstraints = false
+        outer.addSubview(cap)
+
+        let listStack = UIStackView()
+        listStack.axis = .vertical
+        listStack.spacing = 10
+        listStack.translatesAutoresizingMaskIntoConstraints = false
+        outer.addSubview(listStack)
+
+        var visibleIndex = 0
+        for item in items {
+            let parts = item.components(separatedBy: "\t")
+            let author = parts.count >= 2 ? parts[0].trimmingCharacters(in: .whitespaces) : ""
+            let title  = (parts.count >= 2 ? parts[1] : parts[0]).trimmingCharacters(in: .whitespaces)
+            guard !title.isEmpty else { continue }
+            visibleIndex += 1
+
+            let wrap = UIView()
+            wrap.translatesAutoresizingMaskIntoConstraints = false
+
+            // 番号
+            let numLbl = UILabel()
+            numLbl.text = "\(visibleIndex)"
+            numLbl.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+            numLbl.textColor = .tertiaryLabel
+            numLbl.translatesAutoresizingMaskIntoConstraints = false
+            numLbl.setContentHuggingPriority(.required, for: .horizontal)
+            numLbl.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+            // タイトル
+            let titleLbl = UILabel()
+            titleLbl.text = "『\(title)』"
+            titleLbl.font = .systemFont(ofSize: 13, weight: .medium)
+            titleLbl.textColor = .label
+            titleLbl.numberOfLines = 2
+            titleLbl.translatesAutoresizingMaskIntoConstraints = false
+
+            wrap.addSubview(numLbl)
+            wrap.addSubview(titleLbl)
+
+            var cs: [NSLayoutConstraint] = [
+                numLbl.topAnchor.constraint(equalTo: wrap.topAnchor),
+                numLbl.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
+                titleLbl.topAnchor.constraint(equalTo: wrap.topAnchor),
+                titleLbl.leadingAnchor.constraint(equalTo: numLbl.trailingAnchor, constant: 6),
+                titleLbl.trailingAnchor.constraint(equalTo: wrap.trailingAnchor)
+            ]
+
+            if author.isEmpty {
+                cs.append(titleLbl.bottomAnchor.constraint(equalTo: wrap.bottomAnchor))
+            } else {
+                let authorLbl = UILabel()
+                authorLbl.text = author
+                authorLbl.font = .systemFont(ofSize: 11)
+                authorLbl.textColor = .secondaryLabel
+                authorLbl.numberOfLines = 1
+                authorLbl.translatesAutoresizingMaskIntoConstraints = false
+                wrap.addSubview(authorLbl)
+                cs += [
+                    authorLbl.topAnchor.constraint(equalTo: titleLbl.bottomAnchor, constant: 2),
+                    authorLbl.leadingAnchor.constraint(equalTo: titleLbl.leadingAnchor),
+                    authorLbl.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
+                    authorLbl.bottomAnchor.constraint(equalTo: wrap.bottomAnchor)
+                ]
+            }
+            NSLayoutConstraint.activate(cs)
+            listStack.addArrangedSubview(wrap)
+        }
+
+        NSLayoutConstraint.activate([
+            cap.topAnchor.constraint(equalTo: outer.topAnchor, constant: 12),
+            cap.leadingAnchor.constraint(equalTo: outer.leadingAnchor, constant: 16),
+            cap.trailingAnchor.constraint(equalTo: outer.trailingAnchor, constant: -16),
+            listStack.topAnchor.constraint(equalTo: cap.bottomAnchor, constant: 8),
+            listStack.leadingAnchor.constraint(equalTo: outer.leadingAnchor, constant: 16),
+            listStack.trailingAnchor.constraint(equalTo: outer.trailingAnchor, constant: -16),
+            listStack.bottomAnchor.constraint(equalTo: outer.bottomAnchor, constant: -12)
+        ])
+        return outer
     }
 }
 
@@ -1392,9 +1861,50 @@ extension CourseDetailViewController: WKNavigationDelegate {
           var evalItems    = [];
           function clean(s)    { return s.trim().replace(/[\\s\\u3000\\n\\r]+/g, ''); }
           function cleanVal(s) { return s.trim().replace(/[ \\t\\u3000]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n'); }
+          function cleanLine(s){ return (s || '').replace(/[\\s\\u3000\\n\\r]+/g, ' ').trim(); }
           function isNum(s)    { return /^\\d+$/.test(s.trim()); }
 
+          // ── 青山専用: CPH1_gvKeikaku_* ID パターンで授業計画を直接抽出 ──
+          // ASP.NET は ctl00_ プレフィックスが付く場合があるため属性セレクタで検索
+          (function() {
+            // 番号ラベルを全て取得（ID に "gvKeikaku_lblSQ_NO_" を含むもの）
+            var numEls     = Array.from(document.querySelectorAll('[id*="gvKeikaku_lblSQ_NO_"]'));
+            var contentEls = Array.from(document.querySelectorAll('[id*="gvKeikaku_lblKeikaku_"]'));
+            // インデックス順にソート（末尾の数字で並べ替え）
+            function rowIdx(el) { return parseInt(el.id.match(/\\d+$/) || [0], 10); }
+            numEls.sort(function(a,b){ return rowIdx(a) - rowIdx(b); });
+            contentEls.sort(function(a,b){ return rowIdx(a) - rowIdx(b); });
+            var len = Math.min(numEls.length, contentEls.length);
+            for (var i = 0; i < len; i++) {
+              var num     = (numEls[i].textContent || '').trim();
+              var content = cleanLine(contentEls[i].innerText || contentEls[i].textContent || '');
+              if (num && content) lectureItems.push(num + '. ' + content);
+            }
+          })();
+
+          // ── 青山専用: table.table-seiseki で成績評価を直接抽出 ──
+          (function() {
+            var rows = document.querySelectorAll('table.table-seiseki tr');
+            rows.forEach(function(row) {
+              var c1 = row.querySelector('td.col1');
+              var c2 = row.querySelector('td.col2');
+              var c3 = row.querySelector('td.col3');
+              var c4 = row.querySelector('td.col4');
+              if (!c1 || !c2 || !c3) return;
+              if (!isNum((c1.textContent || '').trim())) return;
+              var nm   = cleanLine(c2.innerText || c2.textContent || '');
+              var pct  = (c3.textContent || '').trim();
+              var desc = c4 ? cleanLine(c4.innerText || c4.textContent || '') : '';
+              if (nm && pct.includes('%')) evalItems.push(nm + '\\t' + pct + '\\t' + desc);
+            });
+          })();
+
+          // ── 汎用テーブル抽出 ──
           document.querySelectorAll('table tr').forEach(function(row) {
+            // keikakuDetail / table-seiseki 内の行はスキップ
+            if (row.closest && row.closest('table.keikakuDetail')) return;
+            if (row.closest && row.closest('table.table-seiseki')) return;
+
             var ths = row.querySelectorAll('th');
             var tds = row.querySelectorAll('td');
             if (ths.length > 0 && tds.length > 0) {
@@ -1408,19 +1918,22 @@ extension CourseDetailViewController: WKNavigationDelegate {
             var t2 = tds.length >= 3 ? tds[2].innerText.trim() : '';
             var t3 = tds.length >= 4 ? tds[3].innerText.trim() : '';
             if (isNum(t0) && tds.length >= 3) {
-              // 授業計画行: 番号 | "授業計画/Class" | 内容
-              if (t1.includes('授業計画') || t1.includes('Lecture') || t1.includes('Class')) {
-                if (t2) lectureItems.push(t0 + '. ' + t2);
+              // 授業計画行（CPH1 ID 形式以外の3列形式: 番号|ラベル|内容）
+              if (lectureItems.length === 0 &&
+                  (t1.includes('授業計画') || t1.includes('Lecture') || t1.includes('Class'))) {
+                if (t2) lectureItems.push(t0 + '. ' + t2.replace(/[\\n\\r]+/g, ' ').trim());
               }
               // 成績評価行（3列）: 番号 | 項目名 | %
-              else if (t2.includes('%')) {
-                var nm = t1.replace(/\\n/g, ' ').trim();
-                if (nm) evalItems.push(nm + '\\t' + t2 + '\\t' + t3);
+              else if (t2.includes('%') && evalItems.length === 0) {
+                var nm  = t1.replace(/[\\n\\r]+/g, ' ').trim();
+                var dsc = t3.replace(/[\\n\\r]+/g, ' ').trim();
+                if (nm) evalItems.push(nm + '\\t' + t2 + '\\t' + dsc);
               }
-              // 成績評価行（4列）: 番号 | 項目名 | 何か | % or desc
-              else if (t3.includes('%')) {
-                var nm = t1.replace(/\\n/g, ' ').trim();
-                if (nm) evalItems.push(nm + '\\t' + t3 + '\\t' + t2);
+              // 成績評価行（4列）: 番号 | 項目名 | 何か | %
+              else if (t3.includes('%') && evalItems.length === 0) {
+                var nm  = t1.replace(/[\\n\\r]+/g, ' ').trim();
+                var dsc = t2.replace(/[\\n\\r]+/g, ' ').trim();
+                if (nm) evalItems.push(nm + '\\t' + t3 + '\\t' + dsc);
               }
             } else {
               var k = clean(t0); var v = cleanVal(t1);
@@ -1428,8 +1941,14 @@ extension CourseDetailViewController: WKNavigationDelegate {
             }
           });
 
-          if (lectureItems.length > 0) data['授業計画'] = lectureItems.join('\\n');
-          if (evalItems.length > 0)    data['成績評価'] = evalItems.join('\\n');
+          if (lectureItems.length > 0) {
+            data['授業計画'] = lectureItems.join('\\n');
+            // 旧抽出で残った「授業計画/Class」等の重複キーを削除
+            Object.keys(data).forEach(function(k) {
+              if (k !== '授業計画' && k.indexOf('授業計画') >= 0) delete data[k];
+            });
+          }
+          if (evalItems.length > 0) data['成績評価'] = evalItems.join('\\n');
 
           // dl/dt/dd
           document.querySelectorAll('dt').forEach(function(dt) {
@@ -1439,6 +1958,86 @@ extension CourseDetailViewController: WKNavigationDelegate {
               if (k && v) data[k] = v;
             }
           });
+
+          // ── 青山専用: 構造化フィールドを __キー で抽出 ──
+          (function() {
+            function xtrim(s) { return (s || '').trim(); }
+
+            // 年度・授業科目名・担当教員名（日本語）を editTable の th/td パターンから抽出
+            document.querySelectorAll('table.editTable tr').forEach(function(row) {
+              var th = row.querySelector('th');
+              if (!th) return;
+              var k = (th.textContent || '').replace(/[\\s\\u3000\\n\\r\\/]+/g, '');
+              var td = row.querySelector('td');
+              if (!td) return;
+              var v = xtrim(td.textContent);
+              if (!v) return;
+              if (!data['__年度']      && k.includes('年度'))      data['__年度']      = v;
+              if (!data['__授業科目名'] && k.includes('授業科目名')) data['__授業科目名'] = v;
+              // 教員名（日本語）: 「教員名/Instructor (Japanese)」行。英文氏名行は英字キーのみなので除外
+              if (!data['__教員名'] && k.includes('教員名') && !k.includes('英文')) data['__教員名'] = v;
+            });
+
+            // 学期・単位（CPH1_trGakki）
+            var gakkiRow = document.getElementById('CPH1_trGakki');
+            if (gakkiRow) {
+              var tds = gakkiRow.querySelectorAll('td');
+              if (tds.length >= 2) {
+                data['__学期'] = xtrim(tds[0].textContent);
+                data['__単位'] = xtrim(tds[1].textContent);
+              }
+            }
+
+            // 講義概要
+            var gaiyou = document.getElementById('CPH1_lblGaiyou');
+            if (gaiyou) data['__講義概要'] = xtrim(gaiyou.textContent);
+
+            // 達成目標（br タグを改行として保持するため innerText を使用）
+            var moku = document.getElementById('CPH1_lblMokuhyou');
+            if (moku) data['__達成目標'] = xtrim(moku.innerText || moku.textContent);
+
+            // 履修条件
+            var jouken = document.getElementById('CPH1_lblJouken');
+            if (jouken) data['__履修条件'] = xtrim(jouken.textContent);
+
+            // 活用される授業方法（全件・チェック有無を "1\t名前" / "0\t名前" で格納）
+            var methods = [];
+            document.querySelectorAll('[id*="rptHouhou_chkHouhou_"]').forEach(function(chk) {
+              var lbl = chk.nextElementSibling;
+              if (lbl) {
+                var t = xtrim((lbl.innerText || lbl.textContent || '').split('\\n')[0]);
+                if (t) methods.push((chk.checked ? '1' : '0') + '\\t' + t);
+              }
+            });
+            if (methods.length) data['__授業方法'] = methods.join('\\n');
+
+            // 教科書（著者名 + タイトルのみ、タブ区切り）※ th ヘッダ行は td. で除外
+            var books = [];
+            document.querySelectorAll('#CPH1_gvKyoukasho tr').forEach(function(row) {
+              var a = row.querySelector('td.books-author');
+              var t = row.querySelector('td.books-title');
+              if (!a || !t) return;
+              var av = xtrim(a.textContent);
+              var tv = xtrim(t.textContent);
+              if (!tv) return;
+              books.push(av + '\\t' + tv);
+            });
+            if (books.length) data['__教科書'] = books.join('\\n');
+
+            // 参考書（著者名 + タイトルのみ、タブ区切り）※ th ヘッダ行は td. で除外
+            var refs = [];
+            document.querySelectorAll('#CPH1_gvSankousho tr').forEach(function(row) {
+              var a = row.querySelector('td.books-author');
+              var t = row.querySelector('td.books-title');
+              if (!a || !t) return;
+              var av = xtrim(a.textContent);
+              var tv = xtrim(t.textContent);
+              if (!tv) return;
+              refs.push(av + '\\t' + tv);
+            });
+            if (refs.length) data['__参考書'] = refs.join('\\n');
+          })();
+
           return JSON.stringify(data);
         })()
         """
@@ -1450,6 +2049,8 @@ extension CourseDetailViewController: WKNavigationDelegate {
                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                    !dict.isEmpty {
                     print("🟢 Syllabus keys found: \(Array(dict.keys))")
+                    // 抽出成功 → キャッシュに保存してオフライン化
+                    SyllabusDataCache.shared.save(dict, for: self.course.id)
                     self.buildSyllabusUI(fields: dict)
                 } else {
                     print("🔴 Syllabus extraction empty or failed")

@@ -90,6 +90,12 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     private var friendProfileInfo: [String: ProfileInfo] = [:]
     private var friendProfileLoading: Set<String> = []
 
+    // MARK: - 空きコマグリッド用
+    private var occupiedSlots: [String: Set<Int>] = [:]  // friendUid → 占有スロット (day*10+period)
+    private var loadedUids: Set<String> = []              // 時間割を読み込み済みの UID
+    private var isGridExpanded: Bool = true               // 折りたたみ状態
+    private weak var gridHeaderChevron: UIImageView?      // ヘッダー内の chevron（弱参照）
+
     // MARK: - Pin store (固定)
     private final class FriendPinStore {
         static let shared = FriendPinStore()
@@ -215,6 +221,7 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
 
         tableView.register(SelfHeaderCell.self, forCellReuseIdentifier: SelfHeaderCell.reuseID)
         tableView.register(FriendSettingsCell.self, forCellReuseIdentifier: FriendSettingsCell.reuseID)
+        tableView.register(FreePeriodGridTableCell.self, forCellReuseIdentifier: FreePeriodGridTableCell.reuseID)
 
         if #available(iOS 15.0, *) {
             tableView.sectionHeaderTopPadding = 0
@@ -304,10 +311,39 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
 
     // MARK: - Friend avatar loader
     private func loadFriendAvatarIfNeeded(friendUid: String, onImage: @escaping (UIImage?) -> Void) {
+        // 必ずメインスレッドで呼ぶ（friendAvatarCache / friendAvatarLoading はメインスレッド専用）
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.loadFriendAvatarIfNeeded(friendUid: friendUid, onImage: onImage)
+            }
+            return
+        }
+
+        // 1. セッション内メモリキャッシュ（最速）
         if let img = friendAvatarCache[friendUid] { onImage(img); return }
         if friendAvatarLoading.contains(friendUid) { onImage(nil); return }
         friendAvatarLoading.insert(friendUid)
 
+        // 2. ディスクキャッシュ確認（バックグラウンドでI/O → メインスレッドに返す）
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let diskImg = AvatarCache.shared.anyImage(uid: friendUid)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if let img = diskImg {
+                    self.friendAvatarLoading.remove(friendUid)
+                    self.friendAvatarCache[friendUid] = img
+                    onImage(img)
+                    return
+                }
+                // 3. ディスクになければ URL 取得 → DL へ
+                self.fetchAndCacheAvatar(uid: friendUid, onImage: onImage)
+            }
+        }
+    }
+
+    /// URL取得 → バージョンチェック → ネットワークDL（loadFriendAvatarIfNeeded の続き）
+    /// メインスレッドから呼ぶこと
+    private func fetchAndCacheAvatar(uid friendUid: String, onImage: @escaping (UIImage?) -> Void) {
         let fetchURL: (@escaping (String?) -> Void) -> Void = { done in
             if let cached = self.friendPhotoURLCache[friendUid], !cached.isEmpty {
                 done(cached); return
@@ -332,16 +368,37 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
                 return
             }
 
-            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                guard let self else { return }
-                defer { self.friendAvatarLoading.remove(friendUid) }
+            let version = AvatarCache.shared.versionFrom(urlString: s)
 
-                guard let data, let img = UIImage(data: data) else {
-                    onImage(nil); return
+            // URLのバージョンでディスクを再確認（バックグラウンドで）
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let versionedImg = AvatarCache.shared.image(uid: friendUid, version: version)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    if let img = versionedImg {
+                        self.friendAvatarLoading.remove(friendUid)
+                        self.friendAvatarCache[friendUid] = img
+                        onImage(img)
+                        return
+                    }
+                    // 4. ネットワークからDL → ディスクとメモリ両方に保存
+                    URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+                        guard let data, let img = UIImage(data: data) else {
+                            DispatchQueue.main.async { self?.friendAvatarLoading.remove(friendUid) }
+                            onImage(nil)
+                            return
+                        }
+                        // ディスク保存はバックグラウンドで（store内部は thread-safe）
+                        AvatarCache.shared.store(img, uid: friendUid, version: version)
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self else { return }
+                            self.friendAvatarLoading.remove(friendUid)
+                            self.friendAvatarCache[friendUid] = img
+                            onImage(img)
+                        }
+                    }.resume()
                 }
-                self.friendAvatarCache[friendUid] = img
-                onImage(img)
-            }.resume()
+            }
         }
     }
 
@@ -464,6 +521,31 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
             switch result {
             case .success(let list):
                 self.friends = self.sortFriendsPinnedFirst(list)
+                self.occupiedSlots.removeAll()
+                self.loadedUids.removeAll()
+                self.loadFriendTimetablesForFreeMap()
+                // アバターをプリロード。完了時にグリッドと友達セルの両方を更新する。
+                // （cellForRowAt 側の loadFriendAvatarIfNeeded は friendAvatarLoading により
+                //   即 nil を返すので、プリロード完了コールバックでセルを直接更新する必要がある）
+                for friend in self.friends {
+                    let friendUid = friend.friendUid
+                    self.loadFriendAvatarIfNeeded(friendUid: friendUid) { [weak self] img in
+                        guard let self, img != nil else { return }
+                        // onImage はすでに main thread から呼ばれる
+                        // グリッドを更新
+                        if self.isGridExpanded,
+                           self.tableView.numberOfSections > 1,
+                           self.tableView.numberOfRows(inSection: 1) > 0 {
+                            self.tableView.reloadRows(at: [IndexPath(row: 0, section: 1)], with: .none)
+                        }
+                        // 友達セル（section 2）を更新
+                        if let row = self.friends.firstIndex(where: { $0.friendUid == friendUid }),
+                           self.tableView.numberOfSections > 2,
+                           self.tableView.numberOfRows(inSection: 2) > row {
+                            self.tableView.reloadRows(at: [IndexPath(row: row, section: 2)], with: .none)
+                        }
+                    }
+                }
             case .failure:
                 self.friends = []
             }
@@ -494,43 +576,99 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     }
 
     // MARK: - Table
-    func numberOfSections(in tableView: UITableView) -> Int { 2 }
-    
+    func numberOfSections(in tableView: UITableView) -> Int { 3 }
+
     func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-        guard section == 1 else { return nil }
+        if section == 1 {
+            // 空きコマグリッドヘッダー（タップで折りたたみ）
+            let v = UIView()
+            v.backgroundColor = .clear
 
-        let container = UIView()
-        container.backgroundColor = .clear
+            let icon = UIImageView(image: UIImage(systemName: "person.2.fill"))
+            icon.tintColor = .secondaryLabel
+            icon.contentMode = .scaleAspectFit
+            icon.translatesAutoresizingMaskIntoConstraints = false
 
-        let label = UILabel()
-        label.text = "友だち"
-        label.font = .systemFont(ofSize: 13, weight: .semibold)
-        label.textColor = .secondaryLabel
-        label.translatesAutoresizingMaskIntoConstraints = false
+            let lbl = UILabel()
+            lbl.text = "空きコマで会える友だち"
+            lbl.font = .systemFont(ofSize: 13, weight: .semibold)
+            lbl.textColor = .secondaryLabel
+            lbl.translatesAutoresizingMaskIntoConstraints = false
 
-        container.addSubview(label)
+            let chevronConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+            let chevron = UIImageView(image: UIImage(systemName: "chevron.down", withConfiguration: chevronConfig))
+            chevron.tintColor = .secondaryLabel
+            chevron.contentMode = .scaleAspectFit
+            chevron.translatesAutoresizingMaskIntoConstraints = false
+            // 折りたたみ時は -90° 回転
+            chevron.transform = isGridExpanded ? .identity : CGAffineTransform(rotationAngle: -.pi / 2)
+            self.gridHeaderChevron = chevron
 
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16), // ←ここで余白
-            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
-            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6)
-        ])
+            v.addSubview(icon)
+            v.addSubview(lbl)
+            v.addSubview(chevron)
+            NSLayoutConstraint.activate([
+                icon.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 16),
+                icon.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+                icon.widthAnchor.constraint(equalToConstant: 16),
+                icon.heightAnchor.constraint(equalToConstant: 14),
 
-        return container
+                lbl.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+                lbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+
+                chevron.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -16),
+                chevron.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+                chevron.widthAnchor.constraint(equalToConstant: 22),
+                chevron.heightAnchor.constraint(equalToConstant: 22),
+            ])
+
+            let tap = UITapGestureRecognizer(target: self, action: #selector(toggleGridSection))
+            v.addGestureRecognizer(tap)
+            v.isUserInteractionEnabled = true
+            return v
+        }
+        if section == 2 {
+            let container = UIView()
+            container.backgroundColor = .clear
+            let label = UILabel()
+            label.text = "友だち"
+            label.font = .systemFont(ofSize: 13, weight: .semibold)
+            label.textColor = .secondaryLabel
+            label.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+                label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+                label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
+                label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6)
+            ])
+            return container
+        }
+        return nil
     }
 
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        return section == 1 ? 32 : 0.01
+        switch section {
+        case 1: return 36
+        case 2: return 32
+        default: return 0.01
+        }
     }
 
-
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        section == 0 ? 1 : friends.count
+        switch section {
+        case 0: return 1
+        case 1: return isGridExpanded ? 1 : 0
+        default: return friends.count
+        }
     }
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        indexPath.section == 0 ? 104 : 86
+        switch indexPath.section {
+        case 0: return 104
+        case 1: return FreePeriodGridView.preferredHeight
+        default: return 86
+        }
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -547,6 +685,17 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
 
             // 自分セルはセパレータ無し
             cell.separatorInset = UIEdgeInsets(top: 0, left: 10000, bottom: 0, right: 0)
+            return cell
+        }
+
+        if indexPath.section == 1 {
+            let cell = tableView.dequeueReusableCell(withIdentifier: FreePeriodGridTableCell.reuseID, for: indexPath) as! FreePeriodGridTableCell
+            cell.gridView.freeMap = buildFreeMap()
+            cell.gridView.currentDay    = currentAcademicDay()
+            cell.gridView.currentPeriod = currentAcademicPeriod()
+            cell.gridView.onTapSlot = { [weak self] day, period, entries in
+                self?.showFreeSlotSheet(day: day, period: period, friends: entries)
+            }
             return cell
         }
 
@@ -619,6 +768,8 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
             return
         }
 
+        guard indexPath.section == 2 else { return }
+
         let friend = friends[indexPath.row]
         let vc = FriendTimetableViewController(friendUid: friend.friendUid, friendName: friend.friendName)
         showOnNav(vc, title: friend.friendName)
@@ -627,7 +778,7 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
     // MARK: - Swipe actions (固定 / 削除)
     func tableView(_ tableView: UITableView,
                    leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard indexPath.section == 1 else { return nil }
+        guard indexPath.section == 2 else { return nil }
         let f = friends[indexPath.row]
         let pinned = FriendPinStore.shared.isPinned(f.friendUid)
 
@@ -641,7 +792,7 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
             else { FriendPinStore.shared.pin(f.friendUid) }
 
             self.friends = self.sortFriendsPinnedFirst(self.friends)
-            self.tableView.reloadSections(IndexSet(integer: 1), with: .automatic)
+            self.tableView.reloadSections(IndexSet(integer: 2), with: .automatic)
             done(true)
         }
 
@@ -655,7 +806,7 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
 
     func tableView(_ tableView: UITableView,
                    trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard indexPath.section == 1 else { return nil }
+        guard indexPath.section == 2 else { return nil }
         let f = friends[indexPath.row]
 
         let delete = UIContextualAction(style: .destructive, title: "削除") { [weak self] _,_,done in
@@ -670,22 +821,24 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
                 done(false)
             }))
             alert.addAction(UIAlertAction(title: "はい", style: .destructive, handler: { _ in
-                // ローカル保持を掃除
+                // ローカル保持を即座に掃除
                 FriendPinStore.shared.unpin(f.friendUid)
                 self.friendAvatarCache.removeValue(forKey: f.friendUid)
                 self.friendPhotoURLCache.removeValue(forKey: f.friendUid)
                 self.friendProfileInfo.removeValue(forKey: f.friendUid)
+                self.occupiedSlots.removeValue(forKey: f.friendUid)
+                self.loadedUids.remove(f.friendUid)
 
-                self.removeFriendFromBothSides(friendUid: f.friendUid) { success in
-                    DispatchQueue.main.async {
-                        if success {
-                            self.reloadFriends()
-                            done(true)
-                        } else {
-                            done(false)
-                        }
-                    }
+                // 楽観的更新: Firestoreの応答を待たずにUIを即座に更新
+                // （done(true) の後に reloadData を呼ぶとスワイプアニメーションと競合してクラッシュする）
+                if let row = self.friends.firstIndex(where: { $0.friendUid == f.friendUid }) {
+                    self.friends.remove(at: row)
+                    self.tableView.deleteRows(at: [IndexPath(row: row, section: 2)], with: .automatic)
                 }
+                done(true)
+
+                // バックグラウンドでFirestoreから削除（失敗しても次回起動時に整合性は保たれる）
+                self.removeFriendFromBothSides(friendUid: f.friendUid) { _ in }
             }))
             self.present(alert, animated: true)
         }
@@ -718,6 +871,244 @@ final class UserSettingsViewController: UIViewController, UITableViewDataSource,
             button.heightAnchor.constraint(equalToConstant: 56)
         ])
         return container
+    }
+
+    // MARK: - 空きコマグリッド
+
+    // 現在進行中のロードサイクルを識別するトークン（古いコールバックを無視するため）
+    private var freeMapLoadToken: UUID = UUID()
+
+    private func loadFriendTimetablesForFreeMap() {
+        guard Auth.auth().currentUser != nil, !friends.isEmpty else { return }
+
+        // 新しいロードサイクル開始 → 古いコールバックは token 不一致で破棄される
+        let token = UUID()
+        freeMapLoadToken = token
+
+        let cal = Calendar(identifier: .gregorian)
+        let now = Date()
+        let calYear = cal.component(.year, from: now)
+        let month  = cal.component(.month, from: now)
+        // 3月から次の学年度（FriendTimetableViewController.academicYear と同じ）
+        let year   = (month >= 3) ? calYear : (calYear - 1)
+        // 10月以降は後期（FriendSemester.latest() と同じ）
+        let semJP  = (month >= 10) ? "後期" : "前期"
+
+        // ドキュメントIDは "assignedCourses.{year}_{前期|後期}" (A形式)
+        // または  "assignedCourses.{year}.{前期|後期}" (B形式 フォールバック)
+        let idA = "assignedCourses.\(year)_\(semJP)"
+        let idB = "assignedCourses.\(year).\(semJP)"
+
+        let targets = friends.map { $0.friendUid }
+        // 全ロード完了を追跡するカウンタ（atomic な pending 数）
+        var pending = targets.count
+
+        func oneFriendDone() {
+            pending -= 1
+            if pending <= 0 {
+                // 全員分のロードが完了 → グリッドを確実に更新
+                guard self.freeMapLoadToken == token else { return }
+                guard self.isGridExpanded,
+                      self.tableView.numberOfSections > 1,
+                      self.tableView.numberOfRows(inSection: 1) > 0 else { return }
+                self.tableView.reloadRows(at: [IndexPath(row: 0, section: 1)], with: .none)
+            }
+        }
+
+        for uid in targets {
+            let ref = db.collection("users").document(uid).collection("timetable")
+
+            ref.document(idA).getDocument { [weak self] snapA, errA in
+                guard let self else { return }
+
+                // A形式で取得できた場合
+                if errA == nil, let data = snapA?.data(), !data.isEmpty {
+                    let slots = self.parseOccupiedSlots(from: data)
+                    DispatchQueue.main.async {
+                        guard self.freeMapLoadToken == token else { return }
+                        self.occupiedSlots[uid] = slots
+                        self.loadedUids.insert(uid)
+                        oneFriendDone()
+                    }
+                    return
+                }
+
+                // B形式でフォールバック
+                ref.document(idB).getDocument { [weak self] snapB, _ in
+                    guard let self else { return }
+                    DispatchQueue.main.async {
+                        guard self.freeMapLoadToken == token else { return }
+                        if let data = snapB?.data(), !data.isEmpty {
+                            let slots = self.parseOccupiedSlots(from: data)
+                            self.occupiedSlots[uid] = slots
+                            self.loadedUids.insert(uid)
+                        }
+                        // 時間割未登録でも「完了」としてカウント
+                        oneFriendDone()
+                    }
+                }
+            }
+        }
+    }
+
+    private func parseOccupiedSlots(from data: [String: Any]) -> Set<Int> {
+        var slots = Set<Int>()
+
+        func addIfOccupied(key: String, value: Any) {
+            guard let (d, p) = freeMapDayPeriod(from: key) else { return }
+            let occupied: Bool
+            if let dict = value as? [String: Any] {
+                // title が空でなければ授業あり
+                occupied = !(dict["title"] as? String ?? "").isEmpty || !dict.isEmpty
+            } else if let b = value as? Bool {
+                occupied = b
+            } else {
+                occupied = true
+            }
+            if occupied { slots.insert(d * 10 + p) }
+        }
+
+        if let cells = data["cells"] as? [String: Any] {
+            for (k, v) in cells {
+                if let dayDict = v as? [String: Any], freeMapDayPeriod(from: k) == nil {
+                    // "d0": { "p1": {...}, "p3": {...} } 形式
+                    for (pk, pv) in dayDict {
+                        let combined = "\(k)\(pk)"  // e.g. "d0p1"
+                        addIfOccupied(key: combined, value: pv)
+                    }
+                } else {
+                    // "d0p1": {...} 形式
+                    addIfOccupied(key: k, value: v)
+                }
+            }
+        } else {
+            // フラット形式: キーが "cells.d0p1" など
+            for (rawKey, value) in data {
+                let key = rawKey.hasPrefix("cells.") ? String(rawKey.dropFirst("cells.".count)) : rawKey
+                addIfOccupied(key: key, value: value)
+            }
+        }
+
+        return slots
+    }
+
+    private func freeMapDayPeriod(from key: String) -> (Int, Int)? {
+        // "d0p1" 形式に厳密一致（"d0p1.u" や "d0p1_hash" などのサフィックス付きは除外）
+        // これにより upsert 時に書かれる ".u" タイムスタンプキーを誤って occupied 扱いしなくなる
+        guard let regex = try? NSRegularExpression(pattern: #"^d(\d+)p(\d+)$"#),
+              let match = regex.firstMatch(in: key, range: NSRange(key.startIndex..., in: key)),
+              match.numberOfRanges == 3,
+              let rD = Range(match.range(at: 1), in: key),
+              let rP = Range(match.range(at: 2), in: key),
+              let d = Int(key[rD]),
+              let p = Int(key[rP]) else { return nil }
+        guard (0...4).contains(d), (1...5).contains(p) else { return nil }
+        return (d, p)
+    }
+
+    private func buildFreeMap() -> FreePeriodGridView.FreeMap {
+        var map: FreePeriodGridView.FreeMap = [:]
+        let loadedFriends = friends.filter { loadedUids.contains($0.friendUid) }
+        guard !loadedFriends.isEmpty else { return map }
+
+        for day in 0..<5 {
+            for period in 1...5 {
+                let slot = day * 10 + period
+                var entries: [FreeFriendEntry] = []
+                for friend in loadedFriends {
+                    let slots = occupiedSlots[friend.friendUid] ?? []
+                    if !slots.contains(slot) {
+                        let img = friendAvatarCache[friend.friendUid]
+                        let name = friend.friendName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        entries.append(FreeFriendEntry(
+                            uid: friend.friendUid,
+                            name: name.isEmpty ? friend.friendId : name,
+                            avatar: img
+                        ))
+                    }
+                }
+                if !entries.isEmpty {
+                    if map[day] == nil { map[day] = [:] }
+                    map[day]![period] = entries
+                }
+            }
+        }
+        return map
+    }
+
+    private func showFreeSlotSheet(day: Int, period: Int, friends entries: [FreeFriendEntry]) {
+        let dayNames = ["月", "火", "水", "木", "金"]
+        let dayName = day < dayNames.count ? dayNames[day] : "?"
+        let title = "\(dayName)曜 \(period)限が空いている友だち"
+
+        let ac = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
+        for entry in entries.prefix(10) {
+            ac.addAction(UIAlertAction(title: entry.name, style: .default) { [weak self] _ in
+                guard let self else { return }
+                if let friend = self.friends.first(where: { $0.friendUid == entry.uid }) {
+                    let vc = FriendTimetableViewController(friendUid: friend.friendUid, friendName: friend.friendName)
+                    self.showOnNav(vc, title: friend.friendName)
+                }
+            })
+        }
+        if entries.count > 10 { ac.message = "他 \(entries.count - 10) 人" }
+        ac.addAction(UIAlertAction(title: "閉じる", style: .cancel))
+        if let pop = ac.popoverPresentationController {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
+        }
+        present(ac, animated: true)
+    }
+
+    // MARK: - Grid toggle
+    @objc private func toggleGridSection() {
+        isGridExpanded.toggle()
+        let indexPath = IndexPath(row: 0, section: 1)
+
+        // chevron をアニメーション回転
+        UIView.animate(withDuration: 0.22) {
+            self.gridHeaderChevron?.transform = self.isGridExpanded
+                ? .identity
+                : CGAffineTransform(rotationAngle: -.pi / 2)
+        }
+
+        tableView.beginUpdates()
+        if isGridExpanded {
+            tableView.insertRows(at: [indexPath], with: .fade)
+        } else {
+            tableView.deleteRows(at: [indexPath], with: .fade)
+        }
+        tableView.endUpdates()
+    }
+
+    // MARK: - 現在日時計算
+    /// 平日であれば現在の曜日インデックス（0=月〜4=金）を返す
+    private func currentAcademicDay() -> Int? {
+        let weekday = Calendar(identifier: .gregorian).component(.weekday, from: Date())
+        guard weekday >= 2 && weekday <= 6 else { return nil }
+        return weekday - 2  // 2=月→0, 3=火→1, …, 6=金→4
+    }
+
+    /// 平日の授業時間内であれば 1-5 の時限を返す（それ以外は nil）
+    private func currentAcademicPeriod() -> Int? {
+        let cal = Calendar(identifier: .gregorian)
+        let now = Date()
+        let weekday = cal.component(.weekday, from: now)  // 1=日, 2=月, ..., 6=金, 7=土
+        guard weekday >= 2 && weekday <= 6 else { return nil }  // 月〜金のみ
+
+        let h = cal.component(.hour,   from: now)
+        let m = cal.component(.minute, from: now)
+        let total = h * 60 + m
+
+        // 各時限の開始〜終了（分）
+        let periods: [(start: Int, end: Int, period: Int)] = [
+            (9*60,       10*60+30, 1),
+            (11*60,      12*60+30, 2),
+            (13*60+20,   14*60+50, 3),
+            (15*60+5,    16*60+35, 4),
+            (16*60+50,   18*60+20, 5),
+        ]
+        return periods.first { total >= $0.start && total <= $0.end }?.period
     }
 
     // MARK: - Actions

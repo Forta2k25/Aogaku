@@ -136,6 +136,8 @@ final class ClassDayCalendarViewController: UIViewController,
 
         // キャンパス切替（中央・ワイド）
         campusControl.selectedSegmentIndex = 0
+        campusControl.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
+        campusControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
         campusControl.addTarget(self, action: #selector(campusChanged), for: .valueChanged)
         view.addSubview(campusControl)
         campusControl.translatesAutoresizingMaskIntoConstraints = false

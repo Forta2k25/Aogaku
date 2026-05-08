@@ -1,6 +1,9 @@
 
 import UIKit
 import WebKit
+import FirebaseFirestore
+import FirebaseAuth
+import GoogleMobileAds
 
 // すでに別所で定義済みなら削除OK
 struct AttendanceCounts: Codable {
@@ -35,6 +38,10 @@ final class CourseDetailViewController: UIViewController {
     private let course: Course
     private let location: SlotLocation
     private let titleHeader = UIView()   // 緑の帯コンテナ
+    private let showsAttendanceControls: Bool
+    private let allowsCourseManagement: Bool
+    private let showsEnrolledFriends: Bool
+    private let showsMoodleAssignments: Bool
 
     // MARK: - Color Picker
     private let colorKeys: [SlotColorKey] = [.blue, .green, .orange, .red, .teal, .gray, .purple]
@@ -46,30 +53,19 @@ final class CourseDetailViewController: UIViewController {
 
     private let titleLabel = UILabel()
     private let infoLabel  = UILabel()
-    private let roomRow = UIView()            // [ADD] 教室行の入れ物
-    private let roomLabel  = UILabel()       // [ADDED] タップで編集する教室ラベル
-    private let roomEditIcon = UIImageView(       // [ADD] ペンアイコン
-        image: UIImage(systemName: "pencil")
-    )
-    private let roomUnderline = UIView()          // [ADD] 下線
-    
-    private let periodRow = UIView()
-    private let periodUnderline = UIView()
-    private let idRow = UIView()
-    private let idUnderline = UIView()
+    private let roomLabel = UILabel()          // editRoomTapped で text を更新（旧ビューとの互換用）
+    private weak var roomSyllabusPillLabel: UILabel?  // シラバスピル内ラベル（編集後に即時反映）
     
     private let term: TermKey
 
     private let summaryRow = UIStackView()
     private let metaCard   = UIView()
-    private let creditsLabel = UILabel()
-    private let idLabel      = UILabel()
+
 
     private let countersRow = UIStackView()
     private let attendBtn = UIButton(type: .system)
     private let lateBtn   = UIButton(type: .system)
     private let absentBtn = UIButton(type: .system)
-    private let counterNumberYOffset: CGFloat = -6  // 上に寄せる量（-4〜-10でお好み）
 
     private let webView = WKWebView()
     private let webContainer = UIView()          // ← プロパティのコンテナを使う（ローカルで再定義しない）
@@ -85,10 +81,15 @@ final class CourseDetailViewController: UIViewController {
     private var isSyllabusDetailOpen = false
     private var syllabusPageURL: URL?
 
-    private let bottomBar = UIView()
-    private let editButton = UIButton(type: .system)
+    private let editButton   = UIButton(type: .system)
     private let deleteButton = UIButton(type: .system)
-    private let bottomBarHeight: CGFloat = 50
+
+    // MARK: - AdMob
+    private let adContainer = UIView()
+    private var bannerView: BannerView?
+    private var adContainerHeight: NSLayoutConstraint?
+    private var lastBannerWidth: CGFloat = 0
+    private var didLoadBannerOnce = false
     
     // 「コマの色を変更」の横に置くボタン
     private let memoButton = UIButton(type: .system)
@@ -99,9 +100,27 @@ final class CourseDetailViewController: UIViewController {
     private let colorRow = UIStackView()
     private var isColorRowOpen = false
     private let actionsRow = UIStackView()
+
+    // MARK: - Friends in Course
+    private let friendsCourseSection = UIView()
+    private let friendsCourseScroll  = UIScrollView()
+    private let friendsCourseStack   = UIStackView()
     
     //下端のバー
-    private var bottomBarHeightConstraint: NSLayoutConstraint!
+
+    // MARK: - Syllabus Actions (シラバスTabから開いたとき)
+    private let showsSyllabusActions: Bool
+    private let syllabusDocID: String?        // Firestore docID（ブックマーク用）
+    private var isAddFlowBusy = false
+    private weak var syllabusAddButton: UIButton?
+    private weak var syllabusBookmarkButton: UIButton?
+    private let syllabusBookmarkKey = "favoriteClassIDs"
+
+    // MARK: - Moodle Assignments
+    private let moodleSection = UIView()
+    private var courseAssignments: [MoodleEvent] = []
+    private var moodlePastContainer: UIStackView?  // 期限切れ行の親スタック
+    private var moodlePastExpanded = false          // 折りたたみ状態
 
     // MARK: - Attendance
     private var counts = AttendanceCounts(attended: 0, late: 0, absent: 0)
@@ -111,10 +130,24 @@ final class CourseDetailViewController: UIViewController {
 
     // MARK: - Init
     // 変更（引数を term: TermKey 付きに）
-    init(course: Course, location: SlotLocation, term: TermKey) {
+    init(course: Course,
+         location: SlotLocation,
+         term: TermKey,
+         showsAttendanceControls: Bool = true,
+         allowsCourseManagement: Bool = true,
+         showsEnrolledFriends: Bool = true,
+         showsMoodleAssignments: Bool = true,
+         showsSyllabusActions: Bool = false,
+         syllabusDocID: String? = nil) {
         self.course = course
         self.location = location
         self.term = term
+        self.showsAttendanceControls = showsAttendanceControls
+        self.allowsCourseManagement = allowsCourseManagement
+        self.showsEnrolledFriends = showsEnrolledFriends
+        self.showsMoodleAssignments = showsMoodleAssignments
+        self.showsSyllabusActions = showsSyllabusActions
+        self.syllabusDocID = syllabusDocID
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .pageSheet
     }
@@ -134,10 +167,26 @@ final class CourseDetailViewController: UIViewController {
             sheet.prefersGrabberVisible = true
         }
         buildLayout()
-        loadCounts()
-        updateCounterButtons()
+        if showsSyllabusActions {
+            buildSyllabusActionButtons()
+        }
+        if showsAttendanceControls {
+            loadCounts()
+            updateCounterButtons()
+        }
         loadSyllabus()         // URL検証つき読込
-        buildColorPickerRow()  // タイトル直下に設置
+        if allowsCourseManagement {
+            buildColorPickerRow()  // タイトル直下に設置
+        }
+        if showsEnrolledFriends {
+            loadFriendsInCourse()  // この授業を履修してる友だち
+        }
+        if showsMoodleAssignments {
+            loadMoodleAssignments() // Moodle 課題
+        }
+        setupAdBanner()
+        NotificationCenter.default.addObserver(self, selector: #selector(onAdMobReady),
+                                               name: .adMobReady, object: nil)
         
         
     }
@@ -153,12 +202,7 @@ final class CourseDetailViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // 下固定バー分のインセット
-        let safe = view.safeAreaInsets.bottom
-        bottomBarHeightConstraint?.constant = bottomBarHeight + safe
-        scroll.contentInset.bottom = bottomBarHeight + safe + 16
-        scroll.verticalScrollIndicatorInsets.bottom = bottomBarHeight + safe
-        
+        loadBannerIfNeeded()
     }
 
     // MARK: - Layout
@@ -169,6 +213,7 @@ final class CourseDetailViewController: UIViewController {
         stack.alignment = .fill
         stack.translatesAutoresizingMaskIntoConstraints = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.contentInsetAdjustmentBehavior = .never
         view.addSubview(scroll)
         scroll.addSubview(stack)
         
@@ -176,11 +221,23 @@ final class CourseDetailViewController: UIViewController {
         headerContainer.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(headerContainer)
 
+        // adContainer（バナー広告）を画面下部に配置
+        adContainer.translatesAutoresizingMaskIntoConstraints = false
+        adContainer.backgroundColor = .systemBackground
+        view.addSubview(adContainer)
+        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            adContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            adContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            adContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            adContainerHeight!,
+        ])
+
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 0),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: adContainer.topAnchor),
 
             stack.topAnchor.constraint(equalTo: headerContainer.bottomAnchor, constant: 12),
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 16),
@@ -235,136 +292,37 @@ final class CourseDetailViewController: UIViewController {
         // ◆ 担当教員や科目名の重複表示は出さない
         infoLabel.isHidden = true
 
-        // ーー 教室（編集できる表示） ーー
-        roomRow.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(roomRow)
+        if showsEnrolledFriends {
+            // ===== この授業を履修してる友だち（最上部）=====
+            buildFriendsCourseSection()
+        }
 
-        let roomText = course.room.trimmingCharacters(in: .whitespaces)
-        roomLabel.text = "教室  \(roomText.isEmpty ? "-" : "#\(roomText)")"
-        roomLabel.font = .monospacedDigitSystemFont(ofSize: 18, weight: .medium)
-        roomLabel.numberOfLines = 1
-        roomLabel.isUserInteractionEnabled = true
-        roomLabel.translatesAutoresizingMaskIntoConstraints = false
-        roomLabel.setContentHuggingPriority(.required, for: .horizontal)           // ← ラベルを伸ばさない
-        roomLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        if showsAttendanceControls {
+            // 出欠カウンター
+            countersRow.axis         = .horizontal
+            countersRow.alignment    = .fill
+            countersRow.distribution = .fillEqually
+            countersRow.spacing      = 8
+            countersRow.translatesAutoresizingMaskIntoConstraints = false
+            stack.addArrangedSubview(countersRow)
 
-        let tap = UITapGestureRecognizer(target: self, action: #selector(editRoomTapped))
-        roomLabel.addGestureRecognizer(tap)
+            setupCounterButton(attendBtn, tag: 0, label: "出席")
+            setupCounterButton(lateBtn,   tag: 1, label: "遅刻")
+            setupCounterButton(absentBtn, tag: 2, label: "欠席")
+            countersRow.addArrangedSubview(attendBtn)
+            countersRow.addArrangedSubview(lateBtn)
+            countersRow.addArrangedSubview(absentBtn)
+        }
 
-        roomEditIcon.tintColor = .tertiaryLabel
-        roomEditIcon.translatesAutoresizingMaskIntoConstraints = false
-        roomEditIcon.setContentHuggingPriority(.required, for: .horizontal)
-        roomEditIcon.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        roomUnderline.backgroundColor = UIColor.label.withAlphaComponent(0.15)
-        roomUnderline.translatesAutoresizingMaskIntoConstraints = false
-
-        roomRow.addSubview(roomLabel)
-        roomRow.addSubview(roomEditIcon)
-        roomRow.addSubview(roomUnderline)
-
-        NSLayoutConstraint.activate([
-            // ラベル
-            roomLabel.topAnchor.constraint(equalTo: roomRow.topAnchor),
-            roomLabel.leadingAnchor.constraint(equalTo: roomRow.leadingAnchor),
-
-            // ペン：ラベルのすぐ右
-            roomEditIcon.leadingAnchor.constraint(equalTo: roomLabel.trailingAnchor, constant: 6),
-            roomEditIcon.firstBaselineAnchor.constraint(equalTo: roomLabel.firstBaselineAnchor),
-            roomEditIcon.trailingAnchor.constraint(lessThanOrEqualTo: roomRow.trailingAnchor),
-
-            // 下線：ラベルのテキスト幅に合わせる
-            roomUnderline.leadingAnchor.constraint(equalTo: roomLabel.leadingAnchor),
-            roomUnderline.topAnchor.constraint(equalTo: roomLabel.bottomAnchor, constant: 3),
-            roomUnderline.heightAnchor.constraint(equalToConstant: 1),
-            roomUnderline.trailingAnchor.constraint(equalTo: roomLabel.trailingAnchor),
-
-            // 行コンテナの下端・右端を決める
-            roomRow.trailingAnchor.constraint(equalTo: roomEditIcon.trailingAnchor),
-            roomRow.bottomAnchor.constraint(equalTo: roomUnderline.bottomAnchor)
-        ])
-
-
-        // ===== 時限（教室と同じスタイル） =====
-        periodRow.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(periodRow)
-
-        creditsLabel.text = "\(location.dayName) \(location.period)限"
-        creditsLabel.font = .systemFont(ofSize: 18, weight: .medium)
-        creditsLabel.numberOfLines = 1
-        creditsLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        periodUnderline.backgroundColor = UIColor.label.withAlphaComponent(0.15)
-        periodUnderline.translatesAutoresizingMaskIntoConstraints = false
-
-        periodRow.addSubview(creditsLabel)
-        periodRow.addSubview(periodUnderline)
-
-        NSLayoutConstraint.activate([
-            creditsLabel.topAnchor.constraint(equalTo: periodRow.topAnchor),
-            creditsLabel.leadingAnchor.constraint(equalTo: periodRow.leadingAnchor),
-
-            periodUnderline.leadingAnchor.constraint(equalTo: creditsLabel.leadingAnchor),
-            periodUnderline.topAnchor.constraint(equalTo: creditsLabel.bottomAnchor, constant: 3),
-            periodUnderline.heightAnchor.constraint(equalToConstant: 1),
-            periodUnderline.trailingAnchor.constraint(equalTo: creditsLabel.trailingAnchor),
-
-            periodRow.trailingAnchor.constraint(equalTo: periodUnderline.trailingAnchor),
-            periodRow.bottomAnchor.constraint(equalTo: periodUnderline.bottomAnchor)
-        ])
-
-        // ===== 登録番号（教室と同じスタイル） =====
-        idRow.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(idRow)
-
-        idLabel.text = "ID  \(course.id)"
-        idLabel.font = .monospacedDigitSystemFont(ofSize: 18, weight: .medium)
-        idLabel.numberOfLines = 1
-        idLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        idUnderline.backgroundColor = UIColor.label.withAlphaComponent(0.15)
-        idUnderline.translatesAutoresizingMaskIntoConstraints = false
-
-        idRow.addSubview(idLabel)
-        idRow.addSubview(idUnderline)
-
-        NSLayoutConstraint.activate([
-            idLabel.topAnchor.constraint(equalTo: idRow.topAnchor),
-            idLabel.leadingAnchor.constraint(equalTo: idRow.leadingAnchor),
-
-            idUnderline.leadingAnchor.constraint(equalTo: idLabel.leadingAnchor),
-            idUnderline.topAnchor.constraint(equalTo: idLabel.bottomAnchor, constant: 3),
-            idUnderline.heightAnchor.constraint(equalToConstant: 1),
-            idUnderline.trailingAnchor.constraint(equalTo: idLabel.trailingAnchor),
-
-            idRow.trailingAnchor.constraint(equalTo: idUnderline.trailingAnchor),
-            idRow.bottomAnchor.constraint(equalTo: idUnderline.bottomAnchor)
-        ])
-
-
-        // 出欠カウンター
-        let countersWrap = UIStackView()
-        
-        countersRow.axis = .horizontal
-        countersRow.alignment = .center
-        countersRow.distribution = .equalCentering
-        countersRow.spacing = 16
-        countersRow.translatesAutoresizingMaskIntoConstraints = false
-        countersRow.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
-        
-        
-        countersWrap.axis = .horizontal
-        countersWrap.alignment = .center
-        countersWrap.distribution = .fill
-        stack.addArrangedSubview(countersWrap)
-        countersWrap.addArrangedSubview(countersRow)
-
-        setupCounterButton(attendBtn, tag: 0, label: "出席")
-        setupCounterButton(lateBtn,   tag: 1, label: "遅刻")
-        setupCounterButton(absentBtn, tag: 2, label: "欠席")
-        countersRow.addArrangedSubview(attendBtn)
-        countersRow.addArrangedSubview(lateBtn)
-        countersRow.addArrangedSubview(absentBtn)
+        if showsMoodleAssignments {
+            // ──── Moodle 課題セクション ────
+            moodleSection.translatesAutoresizingMaskIntoConstraints = false
+            moodleSection.backgroundColor = .secondarySystemBackground
+            moodleSection.layer.cornerRadius = 12
+            moodleSection.layer.masksToBounds = true
+            moodleSection.isHidden = true
+            stack.addArrangedSubview(moodleSection)
+        }
 
         // ──── シラバスセクション（JS抽出のネイティブカード） ────
         syllabusSection.axis = .vertical
@@ -412,10 +370,249 @@ final class CourseDetailViewController: UIViewController {
         stack.addArrangedSubview(webContainer)
         webContainer.isHidden = true  // JSでデータ抽出するが生WebViewはUIに出さない
 
-        // 下部固定バー
-        buildBottomBar()
+        if allowsCourseManagement {
+            // 編集・削除ボタン（スクロール末尾）
+            buildActionButtonsInScroll()
+        }
     }
     
+
+    // MARK: - Friends in Course
+
+    private func buildFriendsCourseSection() {
+        friendsCourseSection.translatesAutoresizingMaskIntoConstraints = false
+        friendsCourseSection.isHidden = true   // 該当する友だちが見つかるまで非表示
+        stack.addArrangedSubview(friendsCourseSection)
+
+        // セクションラベル
+        let label = UILabel()
+        label.text = "この授業を履修してる友だち"
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .secondaryLabel
+        label.translatesAutoresizingMaskIntoConstraints = false
+        friendsCourseSection.addSubview(label)
+
+        // 下線
+        let underline = UIView()
+        underline.backgroundColor = UIColor.label.withAlphaComponent(0.15)
+        underline.translatesAutoresizingMaskIntoConstraints = false
+        friendsCourseSection.addSubview(underline)
+
+        // 横スクロール
+        friendsCourseScroll.translatesAutoresizingMaskIntoConstraints = false
+        friendsCourseScroll.showsHorizontalScrollIndicator = false
+        friendsCourseSection.addSubview(friendsCourseScroll)
+
+        // 横並びスタック（名前付きアイコン）
+        friendsCourseStack.axis = .horizontal
+        friendsCourseStack.spacing = 16
+        friendsCourseStack.alignment = .top
+        friendsCourseStack.translatesAutoresizingMaskIntoConstraints = false
+        friendsCourseScroll.addSubview(friendsCourseStack)
+
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: friendsCourseSection.topAnchor),
+            label.leadingAnchor.constraint(equalTo: friendsCourseSection.leadingAnchor),
+
+            underline.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 3),
+            underline.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+            underline.trailingAnchor.constraint(equalTo: label.trailingAnchor),
+            underline.heightAnchor.constraint(equalToConstant: 1),
+
+            friendsCourseScroll.topAnchor.constraint(equalTo: underline.bottomAnchor, constant: 10),
+            friendsCourseScroll.leadingAnchor.constraint(equalTo: friendsCourseSection.leadingAnchor),
+            friendsCourseScroll.trailingAnchor.constraint(equalTo: friendsCourseSection.trailingAnchor),
+            friendsCourseScroll.bottomAnchor.constraint(equalTo: friendsCourseSection.bottomAnchor),
+            friendsCourseScroll.heightAnchor.constraint(equalToConstant: 76),
+
+            friendsCourseStack.topAnchor.constraint(equalTo: friendsCourseScroll.contentLayoutGuide.topAnchor),
+            friendsCourseStack.leadingAnchor.constraint(equalTo: friendsCourseScroll.contentLayoutGuide.leadingAnchor),
+            friendsCourseStack.trailingAnchor.constraint(equalTo: friendsCourseScroll.contentLayoutGuide.trailingAnchor),
+            friendsCourseStack.bottomAnchor.constraint(equalTo: friendsCourseScroll.contentLayoutGuide.bottomAnchor),
+            friendsCourseStack.heightAnchor.constraint(equalTo: friendsCourseScroll.frameLayoutGuide.heightAnchor)
+        ])
+    }
+
+    private func loadFriendsInCourse() {
+        guard Auth.auth().currentUser != nil else { return }
+        let db = Firestore.firestore()
+        let docId = term.storageKey
+
+        FriendService.shared.fetchFriends { [weak self] result in
+            guard let self else { return }
+            guard case .success(let friends) = result, !friends.isEmpty else { return }
+
+            DispatchQueue.main.async {
+                self.friendsCourseSection.isHidden = true
+                self.friendsCourseStack.arrangedSubviews.forEach {
+                    self.friendsCourseStack.removeArrangedSubview($0)
+                    $0.removeFromSuperview()
+                }
+
+                // All mutations to matched/pending happen on the main thread
+                var matched: [(uid: String, name: String)] = []
+                var pending = friends.count
+
+                func onMain_checkDone() {
+                    // Must be called on main thread
+                    pending -= 1
+                    guard pending <= 0 else { return }
+                    guard !matched.isEmpty else { return }
+                    self.friendsCourseSection.isHidden = false
+                    for m in matched { self.addFriendChip(uid: m.uid, name: m.name) }
+                }
+
+                for friend in friends {
+                    let uid = friend.friendUid
+                    let name = friend.friendName
+                    db.collection("users").document(uid)
+                      .collection("timetable").document(docId)
+                      .getDocument { snap, _ in
+                          DispatchQueue.main.async {
+                              guard let data = snap?.data() else { onMain_checkDone(); return }
+                              let found = self.courseCells(from: data).contains {
+                                  self.courseCell($0, matches: self.course)
+                              }
+                              if found { matched.append((uid: uid, name: name)) }
+                              onMain_checkDone()
+                          }
+                      }
+                }
+            }
+        }
+    }
+
+    private func courseCells(from data: [String: Any]) -> [[String: Any]] {
+        var cells: [[String: Any]] = []
+
+        // Current flat shape: ["cells.d0p1": courseMap, "cells.d0p0_hash": courseMap]
+        for (key, value) in data {
+            guard key.hasPrefix("cells.d"), !key.hasSuffix(".u"),
+                  let cell = value as? [String: Any] else { continue }
+            cells.append(cell)
+        }
+
+        // Firestore can also materialize dotted writes as nested maps:
+        // ["cells": ["d0p1": courseMap]] or ["cells": ["d0": ["p1": courseMap]]]
+        if let nested = data["cells"] as? [String: Any] {
+            for (key, value) in nested {
+                if key.hasPrefix("d"),
+                   let cell = value as? [String: Any],
+                   isCourseCell(cell) {
+                    cells.append(cell)
+                    continue
+                }
+
+                guard let dayMap = value as? [String: Any] else { continue }
+                for (_, periodValue) in dayMap {
+                    if let cell = periodValue as? [String: Any], isCourseCell(cell) {
+                        cells.append(cell)
+                    }
+                }
+            }
+        }
+
+        return cells
+    }
+
+    private func isCourseCell(_ cell: [String: Any]) -> Bool {
+        let id = normalizedCourseText(cell["id"] as? String)
+        let title = normalizedCourseText(cell["title"] as? String)
+        return !id.isEmpty || !title.isEmpty
+    }
+
+    private func courseCell(_ cell: [String: Any], matches target: Course) -> Bool {
+        let cellId = normalizedCourseText(cell["id"] as? String)
+        let targetId = normalizedCourseText(target.id)
+        let cellTitle = normalizedCourseText(cell["title"] as? String)
+        let targetTitle = normalizedCourseText(target.title)
+        let cellTeacher = normalizedCourseText(cell["teacher"] as? String)
+        let targetTeacher = normalizedCourseText(target.teacher)
+
+        if !targetId.isEmpty, !cellId.isEmpty, cellId != targetId { return false }
+        if !targetTitle.isEmpty, !cellTitle.isEmpty, cellTitle != targetTitle { return false }
+        if !targetTeacher.isEmpty, !cellTeacher.isEmpty, cellTeacher != targetTeacher { return false }
+
+        if !targetId.isEmpty, !cellId.isEmpty { return true }
+        if !targetTitle.isEmpty, !cellTitle.isEmpty {
+            return targetTeacher.isEmpty || cellTeacher.isEmpty || cellTeacher == targetTeacher
+        }
+        return false
+    }
+
+    private func normalizedCourseText(_ value: String?) -> String {
+        (value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.widthInsensitive, .caseInsensitive], locale: .current)
+    }
+
+    private func addFriendChip(uid: String, name: String) {
+        // 外コンテナ（縦：アイコン＋名前）
+        let chip = UIStackView()
+        chip.axis = .vertical
+        chip.alignment = .center
+        chip.spacing = 4
+
+        // アバター画像ビュー
+        let av = UIImageView()
+        av.translatesAutoresizingMaskIntoConstraints = false
+        av.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        av.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        av.layer.cornerRadius = 22
+        av.layer.masksToBounds = true
+        av.contentMode = .scaleAspectFill
+        av.backgroundColor = .systemGray5
+        av.image = UIImage(systemName: "person.crop.circle.fill")
+        av.tintColor = .systemGray3
+        av.contentMode = .scaleAspectFit
+
+        // 名前ラベル
+        let nameLabel = UILabel()
+        nameLabel.text = name
+        nameLabel.font = .systemFont(ofSize: 11)
+        nameLabel.textColor = .secondaryLabel
+        nameLabel.textAlignment = .center
+        nameLabel.numberOfLines = 1
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 52).isActive = true
+
+        chip.addArrangedSubview(av)
+        chip.addArrangedSubview(nameLabel)
+        friendsCourseStack.addArrangedSubview(chip)
+
+        // ディスクキャッシュ確認 → なければネット取得
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let diskImg = AvatarCache.shared.anyImage(uid: uid)
+            DispatchQueue.main.async {
+                if let img = diskImg {
+                    av.image = img
+                    av.contentMode = .scaleAspectFill
+                    av.backgroundColor = .systemGray5
+                    return
+                }
+                // FirestoreからphotoURLを取得してダウンロード
+                self?.fetchAvatarForChip(uid: uid, imageView: av)
+            }
+        }
+    }
+
+    private func fetchAvatarForChip(uid: String, imageView: UIImageView) {
+        let db = Firestore.firestore()
+        db.collection("users").document(uid).getDocument { snap, _ in
+            guard let urlString = snap?.data()?["photoURL"] as? String else { return }
+            ImageFetcher.fetch(urlString: urlString) { img in
+                guard let img else { return }
+                DispatchQueue.global(qos: .background).async {
+                    AvatarCache.shared.store(img, uid: uid, version: nil)
+                }
+                DispatchQueue.main.async {
+                    imageView.image = img
+                    imageView.contentMode = .scaleAspectFill
+                    imageView.backgroundColor = .systemGray5
+                }
+            }
+        }
+    }
 
     // MARK: - Color Picker Row（「コマの色を変更」ボタン → 折りたたみ展開）
     private func buildColorPickerRow() {
@@ -446,28 +643,26 @@ final class CourseDetailViewController: UIViewController {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        //actionsRow.addArrangedSubview(spacer)
-        
-        // 「メモ・課題を追加」ボタン（色ボタンと同じサイズ感）
-        var memoCfg = UIButton.Configuration.plain()
-        memoCfg.title = "メモ・課題を追加"
-        memoCfg.image = UIImage(systemName: "square.and.pencil")
-        memoCfg.imagePlacement = .leading
-        memoCfg.imagePadding = 6
-        memoCfg.contentInsets = .init(top: 4, leading: 10, bottom: 4, trailing: 10)
-        memoButton.configuration = memoCfg
+        // 「教室番号を編集」ボタン
+        var editRoomCfg = UIButton.Configuration.plain()
+        editRoomCfg.title = "教室番号を編集"
+        editRoomCfg.image = UIImage(systemName: "pencil")
+        editRoomCfg.imagePlacement = .leading
+        editRoomCfg.imagePadding = 6
+        editRoomCfg.contentInsets = .init(top: 4, leading: 10, bottom: 4, trailing: 10)
+        memoButton.configuration = editRoomCfg
         memoButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
         memoButton.backgroundColor = .secondarySystemBackground
         memoButton.layer.cornerRadius = 12
         memoButton.layer.masksToBounds = true
         memoButton.setContentHuggingPriority(.required, for: .horizontal)
         memoButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        memoButton.addTarget(self, action: #selector(openMemoTasks), for: .touchUpInside)
+        memoButton.addTarget(self, action: #selector(editRoomTapped), for: .touchUpInside)
 
         actionsRow.spacing = 8
         actionsRow.addArrangedSubview(spacer)
-        actionsRow.addArrangedSubview(memoButton)   // ← 追加
-        actionsRow.addArrangedSubview(colorToggle)  // ← 既存
+        actionsRow.addArrangedSubview(memoButton)
+        actionsRow.addArrangedSubview(colorToggle)
 
 
         // stack のいちばん上に差し込む（緑ヘッダーの直下）
@@ -591,7 +786,8 @@ final class CourseDetailViewController: UIViewController {
             let newRoom = raw.isEmpty ? "-" : raw
 
             // 画面は即時更新
-            self.roomLabel.text = "教室: \(newRoom)"
+            self.roomLabel.text = "教室  \(newRoom)"
+            self.roomSyllabusPillLabel?.text = "教室： \(newRoom)"
 
             // 親へ更新済み Course を通知（親側でローカル配列更新＋Firestore upsert）
             var edited = self.course            // Course が struct でプロパティが var の想定
@@ -656,7 +852,11 @@ final class CourseDetailViewController: UIViewController {
         syllabusSection.isHidden = false
 
         // ── キャッシュがあればオフライン表示 ──
-        let cacheKey = course.id
+        // URLをキーにすることで、同じ登録番号の別授業（担当教員違い）でもキャッシュが混在しない
+        let cacheKey: String = {
+            let u = (course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return u.isEmpty ? course.id : u
+        }()
         if let cached = SyllabusDataCache.shared.load(for: cacheKey) {
             buildSyllabusUI(fields: cached)
             return
@@ -694,7 +894,11 @@ final class CourseDetailViewController: UIViewController {
         headerRow.addArrangedSubview(spacer)
 
         // キャッシュ済みのとき「更新」ボタンを表示
-        if SyllabusDataCache.shared.exists(for: course.id) {
+        let syllabusKey: String = {
+            let u = (course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return u.isEmpty ? course.id : u
+        }()
+        if SyllabusDataCache.shared.exists(for: syllabusKey) {
             var cfg = UIButton.Configuration.plain()
             cfg.title = "更新"
             cfg.image = UIImage(systemName: "arrow.clockwise")
@@ -708,7 +912,11 @@ final class CourseDetailViewController: UIViewController {
             refreshBtn.titleLabel?.font = .systemFont(ofSize: 11)
             refreshBtn.addAction(UIAction { [weak self] _ in
                 guard let self else { return }
-                SyllabusDataCache.shared.clear(for: self.course.id)
+                let ck: String = {
+                    let u = (self.course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    return u.isEmpty ? self.course.id : u
+                }()
+                SyllabusDataCache.shared.clear(for: ck)
                 // シラバスセクションをリセットして再読み込み
                 self.syllabusSection.arrangedSubviews.forEach { $0.removeFromSuperview() }
                 self.syllabusLoadingRow.isHidden = false
@@ -770,6 +978,38 @@ final class CourseDetailViewController: UIViewController {
             metaBlockHasContent = true
         }
 
+        // 3行目: 教室・ID（担当教員・年度と同じスタイル）
+        let roomText = course.room.trimmingCharacters(in: .whitespaces)
+        let roomVal  = roomText.isEmpty ? "-" : roomText
+
+        // 教室ピルは編集後に即時更新できるようラベルを保持
+        let roomInnerLbl = UILabel()
+        roomInnerLbl.text          = "教室： \(roomVal)"
+        roomInnerLbl.font          = .systemFont(ofSize: 13, weight: .medium)
+        roomInnerLbl.numberOfLines = 1
+        roomInnerLbl.lineBreakMode = .byTruncatingTail
+        roomSyllabusPillLabel = roomInnerLbl
+
+        let roomSyllabusPill = makeSyllabusPillWithLabel(roomInnerLbl)
+        if allowsCourseManagement {
+            roomSyllabusPill.isUserInteractionEnabled = true
+            roomSyllabusPill.addGestureRecognizer(
+                UITapGestureRecognizer(target: self, action: #selector(editRoomTapped)))
+        }
+
+        let idSyllabusPill = makeSyllabusPill(label: "ID", value: course.id)
+
+        let courseInfoRow = UIStackView(arrangedSubviews: [roomSyllabusPill, idSyllabusPill])
+        courseInfoRow.axis      = .horizontal
+        courseInfoRow.spacing   = 8
+        courseInfoRow.alignment = .center
+        let csp = UIView()
+        csp.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        courseInfoRow.addArrangedSubview(csp)
+
+        metaBlock.addArrangedSubview(courseInfoRow)
+        metaBlockHasContent = true
+
         if metaBlockHasContent {
             syllabusSection.addArrangedSubview(metaBlock)
         }
@@ -825,16 +1065,21 @@ final class CourseDetailViewController: UIViewController {
     }
 
     private func makeSyllabusPill(label: String, value: String) -> UIView {
-        let pill = UIView()
-        pill.backgroundColor = .secondarySystemBackground
-        pill.layer.cornerRadius = 10
-        pill.layer.masksToBounds = true
-
         let lbl = UILabel()
         lbl.text = "\(label)： \(value)"
         lbl.font = .systemFont(ofSize: 13, weight: .medium)
         lbl.numberOfLines = 1
         lbl.lineBreakMode = .byTruncatingTail
+        return makeSyllabusPillWithLabel(lbl)
+    }
+
+    /// 外部から生成したラベルをピルに包む（ラベルへの参照を保持したい場合に使用）
+    private func makeSyllabusPillWithLabel(_ lbl: UILabel) -> UIView {
+        let pill = UIView()
+        pill.backgroundColor = .secondarySystemBackground
+        pill.layer.cornerRadius = 10
+        pill.layer.masksToBounds = true
+
         lbl.translatesAutoresizingMaskIntoConstraints = false
         pill.addSubview(lbl)
         NSLayoutConstraint.activate([
@@ -1255,44 +1500,24 @@ final class CourseDetailViewController: UIViewController {
         UIApplication.shared.open(url)
     }
 
-    // MARK: - Bottom Bar
-    private func buildBottomBar() {
-        bottomBar.translatesAutoresizingMaskIntoConstraints = false
-        bottomBar.backgroundColor = .secondarySystemBackground
-        view.addSubview(bottomBar)
-
-        let hair = UIView()
-        hair.backgroundColor = UIColor.separator
-        hair.translatesAutoresizingMaskIntoConstraints = false
-        bottomBar.addSubview(hair)
-
-        let hStack = UIStackView()
-        hStack.axis = .horizontal
-        hStack.alignment = .center
-        hStack.distribution = .fillEqually
-        hStack.spacing = 16
-        hStack.translatesAutoresizingMaskIntoConstraints = false
-        bottomBar.addSubview(hStack)
-
-        // --- ボタン設定（先に全部盛ってから適用） ---
+    // MARK: - Action Buttons（スクロール末尾）
+    private func buildActionButtonsInScroll() {
         var editCfg = UIButton.Configuration.filled()
         editCfg.title = "編集"
         editCfg.baseBackgroundColor = .systemBlue.withAlphaComponent(0.15)
         editCfg.baseForegroundColor = .systemBlue
         editCfg.cornerStyle = .large
-        editCfg.contentInsets = .init(top: 10, leading: 26, bottom: 10, trailing: 26)
+        editCfg.contentInsets = .init(top: 12, leading: 0, bottom: 12, trailing: 0)
 
         var delCfg = UIButton.Configuration.filled()
         delCfg.title = "削除"
-        delCfg.baseBackgroundColor = .systemRed.withAlphaComponent(0.15)
+        delCfg.baseBackgroundColor = .systemRed.withAlphaComponent(0.12)
         delCfg.baseForegroundColor = .systemRed
         delCfg.cornerStyle = .large
-        delCfg.contentInsets  = .init(top: 10, leading: 26, bottom: 10, trailing: 26)
+        delCfg.contentInsets = .init(top: 12, leading: 0, bottom: 12, trailing: 0)
 
         let fontTF = UIConfigurationTextAttributesTransformer { incoming in
-            var out = incoming
-            out.font = .systemFont(ofSize: 18, weight: .semibold)
-            return out
+            var out = incoming; out.font = .systemFont(ofSize: 17, weight: .semibold); return out
         }
         editCfg.titleTextAttributesTransformer = fontTF
         delCfg.titleTextAttributesTransformer  = fontTF
@@ -1302,48 +1527,33 @@ final class CourseDetailViewController: UIViewController {
         editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
         deleteButton.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
 
-        hStack.addArrangedSubview(editButton)
-        hStack.addArrangedSubview(deleteButton)
+        let hStack = UIStackView(arrangedSubviews: [editButton, deleteButton])
+        hStack.axis         = .horizontal
+        hStack.distribution = .fillEqually
+        hStack.spacing      = 12
 
-        // --- 下端に張り付け & 高さは Home インジケータぶん加算 ---
-        NSLayoutConstraint.activate([
-            bottomBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            bottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-        bottomBarHeightConstraint = bottomBar.heightAnchor.constraint(
-            equalToConstant: bottomBarHeight + view.safeAreaInsets.bottom
-        )
-        bottomBarHeightConstraint.isActive = true   // ← ここに「,」は付けない
+        stack.addArrangedSubview(hStack)
 
-        // --- 仕切り線 & ボタン行の制約 ---
-        NSLayoutConstraint.activate([
-            hair.topAnchor.constraint(equalTo: bottomBar.topAnchor),
-            hair.leadingAnchor.constraint(equalTo: bottomBar.leadingAnchor),
-            hair.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor),
-            hair.heightAnchor.constraint(equalToConstant: 0.5),
-
-            hStack.leadingAnchor.constraint(equalTo: bottomBar.leadingAnchor, constant: 16),
-            hStack.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor, constant: -16),
-            hStack.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
-            hStack.heightAnchor.constraint(equalToConstant: 60) // ← 大きめに
-        ])
+        // ボタン下の余白
+        let spacer = UIView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        stack.addArrangedSubview(spacer)
     }
 
 
     // MARK: - Counters
     private func setupCounterButton(_ b: UIButton, tag: Int, label: String) {
         b.tag = tag
-        b.layer.cornerRadius = 44
+        b.layer.cornerRadius = 12
         b.layer.masksToBounds = true
         b.layer.borderWidth = 1
         b.layer.borderColor = UIColor.separator.cgColor
         b.backgroundColor = .systemGray6
-        b.widthAnchor.constraint(equalToConstant: 88).isActive = true
-        b.heightAnchor.constraint(equalToConstant: 88).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 56).isActive = true
 
         b.addTarget(self, action: #selector(counterTapped(_:)), for: .touchUpInside)
-        b.configuration = nil    // ← 改行タイトルは使わず、ラベルを自前配置に
+        b.configuration = nil
 
         let lp = UILongPressGestureRecognizer(target: self, action: #selector(counterLongPressed(_:)))
         lp.minimumPressDuration = 0.5
@@ -1353,35 +1563,34 @@ final class CourseDetailViewController: UIViewController {
     }
 
     private func setCounterButtonTitle(_ b: UIButton, count: Int, label: String) {
-        // ボタン内に 2 ラベル（数値・キャプション）を敷く
+        // ボタン内に 2 ラベル（キャプション・数値）を縦に並べる
         let numTag = 9001
         let capTag = 9002
-
-        let numL: UILabel = (b.viewWithTag(numTag) as? UILabel) ?? {
-            let l = UILabel()
-            l.tag = numTag
-            l.translatesAutoresizingMaskIntoConstraints = false
-            l.font = .monospacedDigitSystemFont(ofSize: 32, weight: .semibold)
-            l.textAlignment = .center
-            b.addSubview(l)
-            NSLayoutConstraint.activate([
-                l.centerXAnchor.constraint(equalTo: b.centerXAnchor),
-                l.centerYAnchor.constraint(equalTo: b.centerYAnchor,
-                                           constant: counterNumberYOffset) // 少し上へ
-            ])
-            return l
-        }()
 
         let capL: UILabel = (b.viewWithTag(capTag) as? UILabel) ?? {
             let l = UILabel()
             l.tag = capTag
             l.translatesAutoresizingMaskIntoConstraints = false
-            l.font = .systemFont(ofSize: 14, weight: .regular)
+            l.font = .systemFont(ofSize: 11, weight: .medium)
             l.textAlignment = .center
             b.addSubview(l)
             NSLayoutConstraint.activate([
                 l.centerXAnchor.constraint(equalTo: b.centerXAnchor),
-                l.bottomAnchor.constraint(equalTo: b.bottomAnchor, constant: -8) // ★下寄せ
+                l.topAnchor.constraint(equalTo: b.topAnchor, constant: 10)
+            ])
+            return l
+        }()
+
+        let numL: UILabel = (b.viewWithTag(numTag) as? UILabel) ?? {
+            let l = UILabel()
+            l.tag = numTag
+            l.translatesAutoresizingMaskIntoConstraints = false
+            l.font = .monospacedDigitSystemFont(ofSize: 22, weight: .semibold)
+            l.textAlignment = .center
+            b.addSubview(l)
+            NSLayoutConstraint.activate([
+                l.centerXAnchor.constraint(equalTo: b.centerXAnchor),
+                l.topAnchor.constraint(equalTo: capL.bottomAnchor, constant: 2)
             ])
             return l
         }()
@@ -1841,6 +2050,337 @@ final class CourseDetailViewController: UIViewController {
         ])
         return outer
     }
+
+    // MARK: - Moodle Assignments
+
+    private func loadMoodleAssignments() {
+        let moodleGreen = UIColor(red: 0/255, green: 150/255, blue: 108/255, alpha: 1)
+        let events = MoodleService.shared.cachedEvents()
+        let courseId = course.id.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let matching = events.filter { event in
+            if let regNum = MoodleService.shared.registrationNumber(from: event.courseCode) {
+                if regNum.trimmingCharacters(in: .whitespacesAndNewlines) == courseId { return true }
+            }
+            if let mapped = MoodleService.shared.manualCourseMapping[event.courseCode] {
+                let a = mapped.folding(options: [.widthInsensitive, .caseInsensitive], locale: .current)
+                let b = course.title.folding(options: [.widthInsensitive, .caseInsensitive], locale: .current)
+                if a == b { return true }
+            }
+            return false
+        }
+
+        let sorted = matching.sorted { a, b in
+            if a.isPast != b.isPast { return !a.isPast }
+            return (a.dueDate ?? .distantFuture) < (b.dueDate ?? .distantFuture)
+        }
+        courseAssignments = sorted
+
+        moodleSection.subviews.forEach { $0.removeFromSuperview() }
+        moodlePastContainer = nil
+        guard !sorted.isEmpty else {
+            moodleSection.isHidden = true
+            return
+        }
+
+        let outerStack = UIStackView()
+        outerStack.axis = .vertical
+        outerStack.spacing = 0
+        outerStack.translatesAutoresizingMaskIntoConstraints = false
+        moodleSection.addSubview(outerStack)
+        NSLayoutConstraint.activate([
+            outerStack.topAnchor.constraint(equalTo: moodleSection.topAnchor),
+            outerStack.leadingAnchor.constraint(equalTo: moodleSection.leadingAnchor),
+            outerStack.trailingAnchor.constraint(equalTo: moodleSection.trailingAnchor),
+            outerStack.bottomAnchor.constraint(equalTo: moodleSection.bottomAnchor)
+        ])
+
+        // ヘッダー行
+        let headerRow = UIView()
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let iconCfg = UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        let iconView = UIImageView(image: UIImage(systemName: "checkmark.circle.fill",
+                                                  withConfiguration: iconCfg))
+        iconView.tintColor = moodleGreen
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.setContentHuggingPriority(.required, for: .horizontal)
+
+        let headerLabel = UILabel()
+        headerLabel.text = "Moodle 課題"
+        headerLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        headerLabel.textColor = .secondaryLabel
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        headerRow.addSubview(iconView)
+        headerRow.addSubview(headerLabel)
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor, constant: 14),
+            iconView.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
+            headerLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 6),
+            headerLabel.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
+            headerRow.heightAnchor.constraint(equalToConstant: 36)
+        ])
+        outerStack.addArrangedSubview(headerRow)
+
+        let topDiv = UIView()
+        topDiv.backgroundColor = UIColor.label.withAlphaComponent(0.08)
+        topDiv.translatesAutoresizingMaskIntoConstraints = false
+        topDiv.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+        outerStack.addArrangedSubview(topDiv)
+
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "ja_JP")
+        df.dateFormat = "M/d(EEE) HH:mm"
+
+        let upcomingItems = sorted.enumerated().filter { !$0.element.isPast }
+        let pastItems     = sorted.enumerated().filter {  $0.element.isPast }
+
+        // ─── 期限未来の課題 ───
+        for (pos, (i, event)) in upcomingItems.enumerated() {
+            if pos > 0 { outerStack.addArrangedSubview(makeDivider()) }
+            outerStack.addArrangedSubview(makeMoodleRow(event: event, tag: i, df: df))
+        }
+
+        // ─── 期限切れの折りたたみ ───
+        if !pastItems.isEmpty {
+            // 区切り線
+            if !upcomingItems.isEmpty { outerStack.addArrangedSubview(makeDivider()) }
+
+            // 「期限切れ X 件 ▼」トグルボタン
+            let toggleBtn = UIButton(type: .system)
+            let chevronName = moodlePastExpanded ? "chevron.up" : "chevron.down"
+            let btnTitle = "期限切れ \(pastItems.count) 件"
+            var cfg = UIButton.Configuration.plain()
+            cfg.title = btnTitle
+            cfg.image = UIImage(systemName: chevronName,
+                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+            cfg.imagePlacement = .trailing
+            cfg.imagePadding = 6
+            cfg.baseForegroundColor = .tertiaryLabel
+            cfg.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
+            cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attrs in
+                var a = attrs; a.font = UIFont.systemFont(ofSize: 12); return a
+            }
+            toggleBtn.configuration = cfg
+            toggleBtn.contentHorizontalAlignment = .left
+            toggleBtn.addTarget(self, action: #selector(toggleMoodlePastSection(_:)), for: .touchUpInside)
+            toggleBtn.translatesAutoresizingMaskIntoConstraints = false
+            outerStack.addArrangedSubview(toggleBtn)
+
+            // 期限切れ行のコンテナ（初期は非表示）
+            let pastStack = UIStackView()
+            pastStack.axis = .vertical
+            pastStack.spacing = 0
+            pastStack.isHidden = !moodlePastExpanded
+            for (pos, (i, event)) in pastItems.enumerated() {
+                if pos > 0 { pastStack.addArrangedSubview(makeDivider()) }
+                pastStack.addArrangedSubview(makeMoodleRow(event: event, tag: i, df: df))
+            }
+            outerStack.addArrangedSubview(pastStack)
+            moodlePastContainer = pastStack
+        }
+
+        moodleSection.isHidden = false
+    }
+
+    private func makeDivider() -> UIView {
+        let div = UIView()
+        div.backgroundColor = UIColor.label.withAlphaComponent(0.08)
+        div.translatesAutoresizingMaskIntoConstraints = false
+        div.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+        return div
+    }
+
+    private func makeMoodleRow(event: MoodleEvent, tag: Int, df: DateFormatter) -> UIView {
+        let moodleGreen = UIColor(red: 0/255, green: 150/255, blue: 108/255, alpha: 1)
+        let isSubmitted = MoodleService.shared.isSubmitted(uid: event.uid)
+
+        let row = UIView()
+        row.tag = tag
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.isUserInteractionEnabled = true
+        row.accessibilityTraits.insert(.button)
+
+        let statusIcon = UIImageView()
+        let iconName = isSubmitted ? "checkmark.circle.fill" : "square.and.arrow.up"
+        let iconWeight: UIImage.SymbolWeight = isSubmitted ? .medium : .light
+        statusIcon.image = UIImage(systemName: iconName,
+                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: iconWeight))
+        statusIcon.tintColor = isSubmitted ? .systemGreen : .tertiaryLabel
+        statusIcon.alpha = event.isPast && !isSubmitted ? 0.4 : 1.0
+        statusIcon.translatesAutoresizingMaskIntoConstraints = false
+        statusIcon.setContentHuggingPriority(.required, for: .horizontal)
+
+        let titleLbl = UILabel()
+        titleLbl.text = event.cleanTitle
+        titleLbl.font = .systemFont(ofSize: 14, weight: .medium)
+        titleLbl.textColor = isSubmitted ? .secondaryLabel : (event.isPast ? .systemGray3 : moodleGreen)
+        titleLbl.numberOfLines = 2
+        titleLbl.translatesAutoresizingMaskIntoConstraints = false
+
+        let dateLbl = UILabel()
+        dateLbl.text = isSubmitted ? "提出済み" : (event.dueDate.map { df.string(from: $0) } ?? "日時未定")
+        dateLbl.font = isSubmitted
+            ? .systemFont(ofSize: 11, weight: .semibold)
+            : .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        dateLbl.textColor = isSubmitted ? .systemGreen : (event.isPast ? .systemGray4 : .secondaryLabel)
+        dateLbl.translatesAutoresizingMaskIntoConstraints = false
+
+        let chevron = UIImageView(image: UIImage(systemName: "chevron.right",
+                                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)))
+        chevron.tintColor = .tertiaryLabel
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.setContentHuggingPriority(.required, for: .horizontal)
+
+        row.addSubview(statusIcon)
+        row.addSubview(titleLbl)
+        row.addSubview(dateLbl)
+        row.addSubview(chevron)
+        NSLayoutConstraint.activate([
+            statusIcon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 14),
+            statusIcon.topAnchor.constraint(equalTo: row.topAnchor, constant: 12),
+            statusIcon.widthAnchor.constraint(equalToConstant: 18),
+            statusIcon.heightAnchor.constraint(equalToConstant: 18),
+            titleLbl.leadingAnchor.constraint(equalTo: statusIcon.trailingAnchor, constant: 8),
+            titleLbl.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -8),
+            titleLbl.topAnchor.constraint(equalTo: row.topAnchor, constant: 10),
+            dateLbl.leadingAnchor.constraint(equalTo: titleLbl.leadingAnchor),
+            dateLbl.topAnchor.constraint(equalTo: titleLbl.bottomAnchor, constant: 3),
+            dateLbl.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -10),
+            chevron.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -14),
+            chevron.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+        ])
+
+        let tap = UITapGestureRecognizer(target: self,
+                                         action: #selector(moodleAssignmentTapped(_:)))
+        row.addGestureRecognizer(tap)
+        return row
+    }
+
+    @objc private func toggleMoodlePastSection(_ sender: UIButton) {
+        moodlePastExpanded.toggle()
+
+        // シェブロンとコンテナを更新
+        let chevronName = moodlePastExpanded ? "chevron.up" : "chevron.down"
+        var cfg = sender.configuration
+        cfg?.image = UIImage(systemName: chevronName,
+                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        sender.configuration = cfg
+
+        UIView.animate(withDuration: 0.25) {
+            self.moodlePastContainer?.isHidden = !self.moodlePastExpanded
+            self.moodlePastContainer?.superview?.layoutIfNeeded()
+        }
+    }
+
+    @objc private func moodleAssignmentTapped(_ sender: UITapGestureRecognizer) {
+        guard let row = sender.view, row.tag < courseAssignments.count else { return }
+        let event = courseAssignments[row.tag]
+        let detail = MoodleEventDetailViewController(
+            event: event,
+            courseTitle: course.title,
+            pickerTitles: moodleAssignmentPickerTitles()
+        )
+        detail.onCourseChanged = { [weak self] _ in
+            self?.loadMoodleAssignments()
+        }
+        detail.onSubmittedChanged = { [weak self] in
+            self?.loadMoodleAssignments()
+        }
+
+        if let nav = navigationController {
+            nav.pushViewController(detail, animated: true)
+        } else {
+            let nav = UINavigationController(rootViewController: detail)
+            nav.modalPresentationStyle = .pageSheet
+            if let sheet = nav.sheetPresentationController {
+                sheet.detents = [.large()]
+                sheet.prefersGrabberVisible = true
+            }
+            present(nav, animated: true)
+        }
+    }
+
+    private func moodleAssignmentPickerTitles() -> [String] {
+        let termCourses = TermStore.loadAssigned(for: term)
+        let customCourses = CourseStore.load()
+        var titles = Set<String>()
+        for item in termCourses + customCourses {
+            let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty { titles.insert(title) }
+        }
+        let currentTitle = course.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !currentTitle.isEmpty { titles.insert(currentTitle) }
+        return titles.sorted()
+    }
+
+    // MARK: - AdMob Banner
+
+    private func setupAdBanner() {
+        guard AdsConfig.enabled else {
+            adContainer.isHidden = true
+            adContainerHeight?.constant = 0
+            return
+        }
+        let bv = BannerView()
+        bv.translatesAutoresizingMaskIntoConstraints = false
+        bv.adUnitID = AdsConfig.bannerUnitID
+        bv.rootViewController = self
+        bv.adSize = AdSizeBanner
+        bv.delegate = self
+        adContainer.addSubview(bv)
+        NSLayoutConstraint.activate([
+            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
+            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
+            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
+            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor),
+        ])
+        bannerView = bv
+    }
+
+    private func loadBannerIfNeeded() {
+        guard let bv = bannerView else { return }
+        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
+        guard safeWidth > 0 else { return }
+        let useWidth = max(320, floor(safeWidth))
+        guard abs(useWidth - lastBannerWidth) >= 0.5 else { return }
+        lastBannerWidth = useWidth
+        let size = currentOrientationAnchoredAdaptiveBanner(width: useWidth)
+        adContainerHeight?.constant = size.size.height
+        updateScrollInsetForBanner(height: size.size.height)
+        view.layoutIfNeeded()
+        guard size.size.height > 0 else { return }
+        if !CGSizeEqualToSize(bv.adSize.size, size.size) { bv.adSize = size }
+        if !didLoadBannerOnce {
+            didLoadBannerOnce = true
+            bv.load(Request())
+        }
+    }
+
+    private func updateScrollInsetForBanner(height: CGFloat) {
+        var inset = scroll.contentInset
+        inset.bottom = height
+        scroll.contentInset = inset
+        scroll.verticalScrollIndicatorInsets.bottom = height
+    }
+
+    @objc private func onAdMobReady() { loadBannerIfNeeded() }
+}
+
+// MARK: - BannerViewDelegate
+extension CourseDetailViewController: BannerViewDelegate {
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
+        let h = bannerView.adSize.size.height
+        adContainerHeight?.constant = h
+        updateScrollInsetForBanner(height: h)
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+    }
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
+        adContainerHeight?.constant = 0
+        updateScrollInsetForBanner(height: 0)
+        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+    }
 }
 
 // MARK: - WKNavigationDelegate
@@ -2049,8 +2589,12 @@ extension CourseDetailViewController: WKNavigationDelegate {
                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                    !dict.isEmpty {
                     print("🟢 Syllabus keys found: \(Array(dict.keys))")
-                    // 抽出成功 → キャッシュに保存してオフライン化
-                    SyllabusDataCache.shared.save(dict, for: self.course.id)
+                    // 抽出成功 → キャッシュに保存してオフライン化（URLキーで保存）
+                    let saveCK: String = {
+                        let u = (self.course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        return u.isEmpty ? self.course.id : u
+                    }()
+                    SyllabusDataCache.shared.save(dict, for: saveCK)
                     self.buildSyllabusUI(fields: dict)
                 } else {
                     print("🔴 Syllabus extraction empty or failed")
@@ -2066,6 +2610,123 @@ extension CourseDetailViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         DispatchQueue.main.async { self.showSyllabusFallback() }
+    }
+
+    // MARK: - Syllabus Actions（シラバスTabからの＋・ブックマーク）
+
+    private func buildSyllabusActionButtons() {
+        let sym = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+
+        // ＋ボタン
+        var addCfg = UIButton.Configuration.filled()
+        addCfg.image = UIImage(systemName: "plus.circle", withConfiguration: sym)
+        addCfg.title = "時間割に追加"
+        addCfg.imagePadding = 6
+        addCfg.baseBackgroundColor = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+        addCfg.baseForegroundColor = .white
+        addCfg.cornerStyle = .medium
+        addCfg.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
+        let addBtn = UIButton(configuration: addCfg)
+        addBtn.addAction(UIAction { [weak self] _ in self?.startAddFlowForSyllabus() }, for: .touchUpInside)
+        syllabusAddButton = addBtn
+
+        // ブックマークボタン
+        let isBookmarked = isSyllabusBookmarked()
+        var bkCfg = UIButton.Configuration.filled()
+        bkCfg.image = UIImage(systemName: isBookmarked ? "bookmark.fill" : "bookmark", withConfiguration: sym)
+        bkCfg.title = isBookmarked ? "保存済み" : "保存"
+        bkCfg.imagePadding = 6
+        bkCfg.baseBackgroundColor = .secondarySystemBackground
+        bkCfg.baseForegroundColor = isBookmarked ? .systemYellow : .secondaryLabel
+        bkCfg.cornerStyle = .medium
+        bkCfg.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
+        let bookmarkBtn = UIButton(configuration: bkCfg)
+        bookmarkBtn.addAction(UIAction { [weak self] _ in self?.tapSyllabusBookmark() }, for: .touchUpInside)
+        syllabusBookmarkButton = bookmarkBtn
+
+        // ボタン行をスタックの先頭に挿入（タイトルの直下、シラバスセクションの上）
+        let row = UIStackView(arrangedSubviews: [addBtn, bookmarkBtn, UIView()])
+        row.axis = .horizontal
+        row.spacing = 8
+        row.alignment = .center
+        stack.insertArrangedSubview(row, at: 0)
+    }
+
+    private func isSyllabusBookmarked() -> Bool {
+        let key = syllabusDocID ?? course.id
+        guard !key.isEmpty else { return false }
+        let favs = Set(UserDefaults.standard.stringArray(forKey: syllabusBookmarkKey) ?? [])
+        return favs.contains(key)
+    }
+
+    private func tapSyllabusBookmark() {
+        let key = syllabusDocID ?? course.id
+        guard !key.isEmpty else { return }
+        var favs = Set(UserDefaults.standard.stringArray(forKey: syllabusBookmarkKey) ?? [])
+        if favs.contains(key) { favs.remove(key) } else { favs.insert(key) }
+        UserDefaults.standard.set(Array(favs), forKey: syllabusBookmarkKey)
+        let isNow = favs.contains(key)
+        let sym = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+        var cfg = syllabusBookmarkButton?.configuration
+        cfg?.image = UIImage(systemName: isNow ? "bookmark.fill" : "bookmark", withConfiguration: sym)
+        cfg?.title = isNow ? "保存済み" : "保存"
+        cfg?.baseForegroundColor = isNow ? .systemYellow : .secondaryLabel
+        syllabusBookmarkButton?.configuration = cfg
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    private func startAddFlowForSyllabus() {
+        guard !isAddFlowBusy else { return }
+        isAddFlowBusy = true
+        // シラバスに記載された曜日・時限をそのまま使う（ピッカー不要）
+        let day    = location.day
+        let period = location.period > 0 ? location.period : 1
+        presentSyllabusAddConfirm(day: day, period: period)
+    }
+
+    private func presentSyllabusAddConfirm(day: Int, period: Int) {
+        let dayText    = ["月","火","水","木","金","土"][max(0, min(day, 5))]
+        let periodText = "\(period)限"
+        let name       = course.title.isEmpty ? "この授業" : course.title
+        let ac = UIAlertController(
+            title: "登録しますか？",
+            message: "\(dayText) \(periodText) に\n「\(name)」を\n登録します。",
+            preferredStyle: .alert
+        )
+        ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { [weak self] _ in
+            self?.isAddFlowBusy = false
+        })
+        ac.addAction(UIAlertAction(title: "登録", style: .default) { [weak self] _ in
+            guard let self else { return }
+            let sym = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+            var addCfg = self.syllabusAddButton?.configuration
+            addCfg?.image = UIImage(systemName: "checkmark.circle.fill", withConfiguration: sym)
+            addCfg?.title = "追加済み"
+            addCfg?.baseBackgroundColor = .systemGray4
+            self.syllabusAddButton?.configuration = addCfg
+            self.syllabusAddButton?.isEnabled = false
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            let payload: [String: Any] = [
+                "class_name":   self.course.title,
+                "teacher_name": self.course.teacher,
+                "code":         self.course.id,
+                "url":          self.course.syllabusURL ?? "",
+                "room":         self.course.room,
+                "credit":       self.course.credits ?? 0,
+                "category":     self.course.category ?? ""
+            ]
+            let docId = self.syllabusDocID ?? self.course.id
+            NotificationCenter.default.post(
+                name: Notification.Name("RegisterCourseToTimetable"),
+                object: nil,
+                userInfo: ["course": payload, "docID": docId, "day": day, "period": period]
+            )
+            self.isAddFlowBusy = false
+        })
+        DispatchQueue.main.async {
+            let host = self.presentedViewController ?? self
+            host.present(ac, animated: true)
+        }
     }
 }
 

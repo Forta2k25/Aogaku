@@ -1117,6 +1117,10 @@ private func placeOnlineRow() {
             await MainActor.run {
                 self.assigned = localAssigned
                 self.reloadAllButtons()
+                // pullMerge の結果を UserDefaults にも永続化（自分の時間割のみ）
+                if !self.viewOnly, self.overrideUID == nil {
+                    self.saveAssigned()
+                }
             }
         }
     }
@@ -1452,13 +1456,7 @@ private func placeOnlineRow() {
     // MARK: - Header
     
     @objc private func tapTasks() {
-        // timetable 上で把握している「id -> 授業名」マップを作成
-        var courseTitleById: [String: String] = [:]
-        for c in assigned.compactMap({ $0 }) {
-            if !c.id.isEmpty { courseTitleById[c.id] = c.title }
-        }
-        let vc = AssignmentListViewController(courseTitleById: courseTitleById)
-
+        let vc = ClassDayCalendarViewController()
         if let nav = navigationController {
             nav.pushViewController(vc, animated: true)
         } else {
@@ -1508,9 +1506,9 @@ private func placeOnlineRow() {
             b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
 
-        // --- 単 / 課 ---
+        // --- 単 / 暦 ---
         configureFlat(rightA, title: "単")
-        configureFlat(tasksButton, title: "課")
+        configureFlat(tasksButton, title: "暦")
         rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
         tasksButton.addTarget(self, action: #selector(tapTasks), for: .touchUpInside)
 
@@ -1936,16 +1934,21 @@ private func placeOnlineRow() {
 
     // MARK: - Detail / List
     private func presentCourseDetail(_ course: Course, at loc: SlotLocation) {
+        // 既存のシート（前の授業詳細など）が残っていたら先に閉じる
+        if let existing = presentedViewController {
+            existing.dismiss(animated: false) { [weak self] in
+                self?.presentCourseDetail(course, at: loc)
+            }
+            return
+        }
         let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm)
         vc.delegate = self
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController {
             if #available(iOS 16.0, *) {
-                // ① 最初から large で開く
                 sheet.detents = [.large()]
                 sheet.selectedDetentIdentifier = .large
             } else {
-                // iOS 15 では large のみを指定
                 sheet.detents = [.large()]
             }
             sheet.prefersGrabberVisible = true
@@ -2622,12 +2625,15 @@ final class TimetableCellContentView: UIView {
         addSubview(titleLabel)
         addSubview(roomPill)
 
-        // 教室あり: titleBottom <= pillTop - 3
+        // 教室あり: titleBottom == pillTop - 3（等号で確定、長いタイトルはclipsTruncateで対処）
         titleBottomWithPill = titleLabel.bottomAnchor.constraint(
-            lessThanOrEqualTo: roomPill.topAnchor, constant: -3)
-        // 教室なし: titleBottom <= superview.bottom - 6（セル全体を使う）
+            equalTo: roomPill.topAnchor, constant: -3)
+        // 教室なし: titleBottom == superview.bottom - 6（セル全体を使う）
         titleBottomWithoutPill = titleLabel.bottomAnchor.constraint(
-            lessThanOrEqualTo: bottomAnchor, constant: -6)
+            equalTo: bottomAnchor, constant: -6)
+
+        // titleLabel は縦方向に圧縮されやすくして roomPill に譲る
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
         NSLayoutConstraint.activate([
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
@@ -2635,6 +2641,8 @@ final class TimetableCellContentView: UIView {
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
             titleBottomWithPill,          // 初期状態: 教室あり
 
+            // roomPill は高さ固定（18pt）＋下端固定で位置が一切変わらない
+            roomPill.heightAnchor.constraint(equalToConstant: 18),
             roomPill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
             roomPill.centerXAnchor.constraint(equalTo: centerXAnchor),
             roomPill.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 5),

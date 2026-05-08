@@ -13,6 +13,15 @@ final class MoodleViewController: UIViewController {
     @IBOutlet weak var containerView: UIView!
     private var webView: WKWebView!
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        ScreenTracker.shared.appear("Moodle")
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        ScreenTracker.shared.disappear("Moodle")
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 

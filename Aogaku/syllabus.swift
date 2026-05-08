@@ -989,26 +989,28 @@ final class syllabus: UIViewController,
         tableView.deselectRow(at: indexPath, animated: true)
         let item = filteredData[indexPath.row]
 
-        let sb = UIStoryboard(name: "Main", bundle: nil)
-        guard let detail = sb.instantiateViewController(withIdentifier: "SyllabusDetailViewController") as? SyllabusDetailViewController else {
-            print("❌ failed to instantiate SyllabusDetailViewController")
-            return
-        }
-
-        detail.docID = item.docID
-        detail.initialTitle = item.class_name
-        detail.initialTeacher = item.teacher_name
-        detail.initialCredit = item.credit
-        detail.initialURLString = item.url
-        detail.initialRegNumber = item.regNumber
-        detail.initialRoom = item.room
-
-        // ★ 一覧セルと同じ授業を再特定するための材料
-        detail.initialTimeString = item.time
-        detail.initialCampusString = item.campus
-        detail.initialGradeString = item.grade
-        detail.initialCategoryString = item.category
-        detail.initialTermString = item.term
+        let course = Course(
+            id: item.regNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? item.docID : item.regNumber,
+            title: item.class_name,
+            room: item.room,
+            teacher: item.teacher_name,
+            credits: Int(item.credit.trimmingCharacters(in: .whitespacesAndNewlines)),
+            campus: item.campus,
+            category: item.category,
+            syllabusURL: item.url,
+            term: item.term
+        )
+        let detail = CourseDetailViewController(
+            course: course,
+            location: syllabusLocation(from: item.time),
+            term: TermStore.loadSelected(),
+            showsAttendanceControls: false,
+            allowsCourseManagement: false,
+            showsEnrolledFriends: false,
+            showsMoodleAssignments: false,
+            showsSyllabusActions: true,
+            syllabusDocID: item.docID
+        )
 
         detail.modalPresentationStyle = .pageSheet
         if let sheet = detail.sheetPresentationController {
@@ -1020,6 +1022,20 @@ final class syllabus: UIViewController,
         }
 
         present(detail, animated: true)
+    }
+
+    private func syllabusLocation(from time: String) -> SlotLocation {
+        let dayMap = ["月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5]
+        let day = dayMap.first(where: { time.contains($0.key) })?.value ?? 0
+
+        let pattern = #"[1-7]"#
+        let period: Int
+        if let range = time.range(of: pattern, options: .regularExpression) {
+            period = Int(time[range]) ?? 1
+        } else {
+            period = 1
+        }
+        return SlotLocation(day: day, period: period)
     }
 
     @IBAction func didTapFavorites(_ sender: Any) {

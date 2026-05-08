@@ -9,6 +9,13 @@ private struct FavoriteItem {
     let regNumber: String?   // 登録番号（registration_number / code）
     let day: Int?            // 0=月…5=土（不明は nil）
     let period: Int?         // 1..7（不明は nil）
+    // シラバス詳細表示用
+    let syllabusURL: String?
+    let room: String?
+    let campus: String?
+    let category: String?
+    let term: String?
+    let credits: Int?
 }
 
 private struct SectionKey: Hashable {
@@ -105,12 +112,25 @@ final class FavoritesListViewController: UITableViewController {
                         else if let arr = t["periods"] as? [Int] { period = arr.first }
                     }
 
+                    let syllabusURL = (data["url"] as? String) ?? (data["syllabusURL"] as? String)
+                    let room     = data["room"]     as? String
+                    let campus   = data["campus"]   as? String
+                    let category = data["category"] as? String
+                    let term     = data["term"]     as? String
+                    let credits  = data["credit"]   as? Int
+
                     pool.append(FavoriteItem(docID: id,
                                              name: name,
                                              teacher: teacher,
                                              regNumber: reg,
                                              day: day,
-                                             period: period))
+                                             period: period,
+                                             syllabusURL: syllabusURL,
+                                             room: room,
+                                             campus: campus,
+                                             category: category,
+                                             term: term,
+                                             credits: credits))
                 }
             }
         }
@@ -203,48 +223,43 @@ final class FavoritesListViewController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
 
         let item = sections[indexPath.section].items[indexPath.row]
-        let sb = UIStoryboard(name: "Main", bundle: nil)
-        let anyVC = sb.instantiateViewController(withIdentifier: "SyllabusDetailViewController")
 
-        // ① 直接 Detail VC の場合
-        if let vc = anyVC as? SyllabusDetailViewController {
-            vc.docID = item.docID
-            vc.initialTitle = item.name
-            vc.initialTeacher = item.teacher
+        let courseID = (item.regNumber ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? item.docID
+            : item.regNumber!
 
-            let nav = UINavigationController(rootViewController: vc)
-            nav.setNavigationBarHidden(true, animated: false)          // ← ナビバーを隠す
-            nav.modalPresentationStyle = .pageSheet
-            if let sheet = nav.sheetPresentationController {
-                sheet.detents = [.large()]
-                sheet.selectedDetentIdentifier = .large
-                sheet.prefersGrabberVisible = true    // つまみも消したい場合は false
-                sheet.preferredCornerRadius = 16
-            }
-            present(nav, animated: true)
-            return
+        let course = Course(
+            id: courseID,
+            title: item.name,
+            room: item.room ?? "",
+            teacher: item.teacher ?? "",
+            credits: item.credits,
+            campus: item.campus,
+            category: item.category,
+            syllabusURL: item.syllabusURL,
+            term: item.term
+        )
+        let location = SlotLocation(day: item.day ?? 0, period: item.period ?? 1)
+
+        let detail = CourseDetailViewController(
+            course: course,
+            location: location,
+            term: TermStore.loadSelected(),
+            showsAttendanceControls: false,
+            allowsCourseManagement: false,
+            showsEnrolledFriends: false,
+            showsMoodleAssignments: false,
+            showsSyllabusActions: true,
+            syllabusDocID: item.docID
+        )
+        detail.modalPresentationStyle = .pageSheet
+        if let sheet = detail.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.selectedDetentIdentifier = .large
+            sheet.prefersGrabberVisible = true
+            sheet.preferredCornerRadius = 16
         }
-
-        // ② Storyboard 側で Nav に包まれている場合
-        if let nav = anyVC as? UINavigationController,
-           let vc = nav.viewControllers.first as? SyllabusDetailViewController {
-            vc.docID = item.docID
-            vc.initialTitle = item.name
-            vc.initialTeacher = item.teacher
-
-            nav.setNavigationBarHidden(true, animated: false)          // ← ナビバーを隠す
-            nav.modalPresentationStyle = .pageSheet
-            if let sheet = nav.sheetPresentationController {
-                sheet.detents = [.large()]
-                sheet.selectedDetentIdentifier = .large
-                sheet.prefersGrabberVisible = true
-                sheet.preferredCornerRadius = 16
-            }
-            present(nav, animated: true)
-            return
-        }
-
-        assertionFailure("Storyboard ID \"SyllabusDetailViewController\" の型を確認してください。")
+        present(detail, animated: true)
     }
 
     // 左スワイプでブックマーク解除

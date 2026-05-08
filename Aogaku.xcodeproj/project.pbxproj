@@ -20,6 +20,7 @@
 		A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F02E62D45500947976 /* FirebaseCore */; };
 		A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = A4EA88F22E62D45500947976 /* FirebaseFirestore */; };
 		A4EFF9A12E84E99000135008 /* FirebaseRemoteConfig in Frameworks */ = {isa = PBXBuildFile; productRef = A4EFF9A02E84E99000135008 /* FirebaseRemoteConfig */; };
+		A4FAAA012F00000100A0A0A0 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = A4FAAA002F00000100A0A0A0 /* FirebaseAnalytics */; };
 		B37651392E7E8D3400E77AF2 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = B37651382E7E8D3400E77AF2 /* FirebaseFunctions */; };
 		B3F9F0962E79546D00BFB330 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = B3F9F0952E79546D00BFB330 /* FirebaseAuth */; };
 		B3F9F09C2E79952E00BFB330 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = B3F9F09B2E79952E00BFB330 /* FirebaseStorage */; };
@@ -137,6 +138,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A49491AE2E7E7EB60027AA8F /* FirebaseMessaging in Frameworks */,
+				A4FAAA012F00000100A0A0A0 /* FirebaseAnalytics in Frameworks */,
 				A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */,
 				A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */,
 				A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */,
@@ -254,6 +256,7 @@
 			packageProductDependencies = (
 				A4EA88F02E62D45500947976 /* FirebaseCore */,
 				A4EA88F22E62D45500947976 /* FirebaseFirestore */,
+				A4FAAA002F00000100A0A0A0 /* FirebaseAnalytics */,
 				A40AACB82E7556BC009104D2 /* GoogleMobileAds */,
 				B3F9F0952E79546D00BFB330 /* FirebaseAuth */,
 				B3F9F09B2E79952E00BFB330 /* FirebaseStorage */,
@@ -855,6 +858,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseRemoteConfig;
+		};
+		A4FAAA002F00000100A0A0A0 /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
 		};
 		B37651382E7E8D3400E77AF2 /* FirebaseFunctions */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -33,6 +33,9 @@ final class ProfileEditViewController: UIViewController {
     private let db = Firestore.firestore()
     private var uid: String? { Auth.auth().currentUser?.uid }
 
+    /// アップロード中は loadUserProfile による画像上書きを防ぐ
+    private var isUploadingAvatar = false
+
     // MARK: - Local draft
     private enum Keys {
         static let localProfileDraft = "LocalProfileDraftV1"
@@ -532,7 +535,8 @@ final class ProfileEditViewController: UIViewController {
                 if let faculty, !faculty.isEmpty {
                     self.applyFacultyDeptToUI(faculty: faculty, department: dept ?? "")
                 }
-                if let u = usedPhotoURL, !u.isEmpty {
+                // アップロード中でなければFirestoreのURLで更新
+                if let u = usedPhotoURL, !u.isEmpty, !self.isUploadingAvatar {
                     self.loadImage(urlString: u)
                     self.updateLocalDraft(photoURL: u)
                 }
@@ -584,10 +588,15 @@ final class ProfileEditViewController: UIViewController {
     private func uploadAvatar(_ image: UIImage) {
         guard let uid else { return }
 
+        // 即座にUIに反映し、アップロード完了まで上書きをブロック
+        isUploadingAvatar = true
         avatarView.image = image
 
         let resized = image.resized(maxEdge: 512)
-        guard let data = resized.jpegData(compressionQuality: 0.75) else { return }
+        guard let data = resized.jpegData(compressionQuality: 0.75) else {
+            isUploadingAvatar = false
+            return
+        }
 
         let ref = Storage.storage().reference(withPath: "avatars/\(uid).jpg")
         let meta = StorageMetadata()
@@ -595,27 +604,41 @@ final class ProfileEditViewController: UIViewController {
 
         ref.putData(data, metadata: meta) { [weak self] _, error in
             guard let self else { return }
-            if let error { print("upload error:", error); return }
+            if let error {
+                print("upload error:", error)
+                DispatchQueue.main.async { self.isUploadingAvatar = false }
+                return
+            }
 
             ref.downloadURL { url, error in
-                if let error { print("url error:", error); return }
-                guard let url else { return }
+                if let error {
+                    print("url error:", error)
+                    DispatchQueue.main.async { self.isUploadingAvatar = false }
+                    return
+                }
+                guard let url else {
+                    DispatchQueue.main.async { self.isUploadingAvatar = false }
+                    return
+                }
 
-                // ✅ Firestoreに保存
+                // Firestoreに保存
                 self.db.collection("users").document(uid).setData([
                     "photoURL": url.absoluteString,
                     "photoUpdatedAt": FieldValue.serverTimestamp()
                 ], merge: true)
 
-                // ✅ LocalDraftにも保存（次回起動/再ログインでも即反映）
+                // LocalDraftにも保存
                 self.updateLocalDraft(photoURL: url.absoluteString)
 
-                // ✅ Authにも保存
+                // Authにも保存
                 if let user = Auth.auth().currentUser {
                     let req = user.createProfileChangeRequest()
                     req.photoURL = url
                     req.commitChanges(completion: nil)
                 }
+
+                // アップロード完了 → ブロック解除（画像はすでに正しく表示中）
+                DispatchQueue.main.async { self.isUploadingAvatar = false }
             }
         }
     }

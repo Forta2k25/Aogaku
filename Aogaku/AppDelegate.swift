@@ -17,6 +17,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         FirebaseApp.configure()
+        AppAnalytics.logAppLaunch()
         PushManager.shared.start()   // ← 追加
         setupGlobalAppearance()      // ← グローバルUI設定
         
@@ -120,7 +121,6 @@ private extension AppDelegate {
 extension Notification.Name {
     static let adMobReady = Notification.Name("AdMobReady")
 }
-
 
 
 

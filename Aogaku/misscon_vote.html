@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>青山ミスコン 投票</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  :root {
+    --green:     #007857;
+    --green-dark:#005a41;
+    --green-bg:  #E8F5F0;
+    --green-mid: #B2DECE;
+    --text:      #1a1a1a;
+    --text-sub:  #6b7280;
+    --text-hint: #9ca3af;
+    --border:    rgba(0,0,0,0.09);
+    --card-bg:   #ffffff;
+    --page-bg:   #f2f4f6;
+  }
+
+  html, body {
+    width: 100%;
+    min-height: 100%;
+    background: var(--page-bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    color: var(--text);
+    overscroll-behavior: none;
+  }
+
+  /* ── ステータスバー模擬 ── */
+  .status-bar {
+    background: var(--green);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px 6px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  /* ── ナビゲーションバー ── */
+  .nav-bar {
+    background: var(--green);
+    padding: 10px 16px 16px;
+    color: #fff;
+  }
+  .nav-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .nav-title { font-size: 17px; font-weight: 600; letter-spacing: .3px; }
+  .nav-collab {
+    font-size: 11px;
+    background: rgba(255,255,255,.2);
+    border-radius: 20px;
+    padding: 3px 10px;
+    letter-spacing: .3px;
+  }
+  .nav-period {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .period-label { font-size: 12px; opacity: .8; }
+  .period-badge {
+    background: rgba(255,255,255,.18);
+    border: 1px solid rgba(255,255,255,.3);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .period-remaining { font-size: 12px; opacity: .75; margin-left: auto; }
+
+  /* ── スクロール本体 ── */
+  .scroll-body {
+    padding: 14px 14px 40px;
+  }
+
+  /* ── お知らせバナー ── */
+  .notice {
+    background: var(--green-bg);
+    border: 1px solid var(--green-mid);
+    border-radius: 10px;
+    padding: 11px 14px;
+    margin-bottom: 14px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .notice-icon { font-size: 14px; margin-top: 1px; flex-shrink: 0; }
+  .notice-text { font-size: 12.5px; color: #085041; line-height: 1.6; }
+
+  /* ── 候補者カード ── */
+  .candidate-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    transition: border-color .2s, box-shadow .2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .candidate-card.selected {
+    border-color: var(--green);
+    border-width: 1.5px;
+    box-shadow: 0 0 0 3px rgba(0,120,87,.08);
+  }
+  .candidate-card.dimmed { opacity: .45; }
+
+  /* カード左：ナンバー帯 */
+  .card-number {
+    position: absolute;
+    top: 0; left: 0;
+    background: var(--green);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px 3px 10px;
+    border-radius: 0 0 8px 0;
+    letter-spacing: .5px;
+  }
+
+  /* アバター */
+  .avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    object-fit: cover;
+    background: var(--green-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--green-dark);
+    margin-top: 6px;
+  }
+  .avatar.c1 { background:#E1F5EE; color:#0F6E56; }
+  .avatar.c2 { background:#E6F1FB; color:#185FA5; }
+  .avatar.c3 { background:#FAECE7; color:#993C1D; }
+  .avatar.c4 { background:#EEEDFE; color:#534AB7; }
+  .avatar.c5 { background:#FAEEDA; color:#854F0B; }
+  .avatar.c6 { background:#FBEAF0; color:#993556; }
+
+  /* テキスト */
+  .card-info { flex: 1; min-width: 0; padding-top: 4px; }
+  .card-name  { font-size: 16px; font-weight: 600; color: var(--text); }
+  .card-dept  { font-size: 12px; color: var(--text-sub); margin-top: 3px; line-height: 1.4; }
+  .card-tag   {
+    display: inline-block;
+    background: var(--green-bg);
+    color: var(--green-dark);
+    font-size: 10.5px;
+    font-weight: 500;
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-top: 5px;
+  }
+  .voted-check {
+    font-size: 11px;
+    color: var(--green);
+    font-weight: 600;
+    margin-top: 5px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  /* 投票ボタン */
+  .vote-btn {
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 22px;
+    padding: 9px 18px;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background .15s, transform .1s;
+    font-family: inherit;
+  }
+  .vote-btn:active { transform: scale(.95); background: var(--green-dark); }
+  .vote-btn.voted-state {
+    background: var(--green-bg);
+    color: var(--green);
+    border: 1.5px solid var(--green);
+    cursor: default;
+  }
+  .vote-btn:disabled { background: #e5e7eb; color: #9ca3af; cursor: default; border: none; }
+
+  /* ── 確認オーバーレイ ── */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.48);
+    display: flex;
+    align-items: flex-end;
+    z-index: 100;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .22s;
+  }
+  .overlay.show { opacity: 1; pointer-events: all; }
+  .confirm-sheet {
+    width: 100%;
+    background: var(--card-bg);
+    border-radius: 20px 20px 0 0;
+    padding: 20px 20px 40px;
+    transform: translateY(100%);
+    transition: transform .25s cubic-bezier(.32,1.18,.45,1);
+  }
+  .overlay.show .confirm-sheet { transform: translateY(0); }
+  .sheet-handle {
+    width: 36px; height: 4px;
+    background: #d1d5db;
+    border-radius: 2px;
+    margin: 0 auto 20px;
+  }
+  .sheet-title { font-size: 18px; font-weight: 600; text-align: center; margin-bottom: 6px; }
+  .sheet-sub   { font-size: 13px; color: var(--text-sub); text-align: center; margin-bottom: 22px; }
+  .sheet-candidate {
+    background: var(--green-bg);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+  .sheet-avatar {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .sheet-name { font-size: 16px; font-weight: 600; }
+  .sheet-dept { font-size: 12px; color: var(--text-sub); margin-top: 3px; }
+  .sheet-warning {
+    font-size: 11.5px;
+    color: var(--text-sub);
+    text-align: center;
+    margin-bottom: 18px;
+    line-height: 1.5;
+  }
+  .btn-confirm {
+    width: 100%;
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 14px;
+    padding: 15px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    margin-bottom: 10px;
+    transition: background .15s;
+  }
+  .btn-confirm:active { background: var(--green-dark); }
+  .btn-cancel {
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text-sub);
+    font-size: 15px;
+    padding: 10px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  /* ── 完了画面 ── */
+  .done-screen {
+    display: none;
+    text-align: center;
+    padding: 60px 24px 40px;
+  }
+  .done-circle {
+    width: 80px; height: 80px;
+    background: var(--green-bg);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 20px;
+    font-size: 36px;
+  }
+  .done-title { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  .done-sub   { font-size: 14px; color: var(--text-sub); line-height: 1.6; }
+  .done-name  { color: var(--green); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ステータスバー -->
+<div class="status-bar">
+  <span>9:41</span>
+  <span style="display:flex;gap:5px;align-items:center">
+    <svg width="16" height="11" viewBox="0 0 16 11" fill="none"><rect x="0" y="3" width="3" height="8" rx="1" fill="white" opacity=".4"/><rect x="4.5" y="2" width="3" height="9" rx="1" fill="white" opacity=".6"/><rect x="9" y="0" width="3" height="11" rx="1" fill="white" opacity=".8"/><rect x="13.5" y="0" width="2.5" height="11" rx="1" fill="white"/></svg>
+    <svg width="15" height="11" viewBox="0 0 15 11" fill="white"><path d="M7.5 2.2A8.5 8.5 0 0 1 13.8 4.8l1.2-1.2A10.2 10.2 0 0 0 7.5 0a10.2 10.2 0 0 0-7.5 3.6l1.2 1.2A8.5 8.5 0 0 1 7.5 2.2z" opacity=".4"/><path d="M7.5 5A5.5 5.5 0 0 1 11.4 6.6l1.2-1.2A7.2 7.2 0 0 0 7.5 3.3a7.2 7.2 0 0 0-5.1 2.1l1.2 1.2A5.5 5.5 0 0 1 7.5 5z" opacity=".7"/><circle cx="7.5" cy="9" r="2"/></svg>
+    <svg width="25" height="12" viewBox="0 0 25 12"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="white" stroke-opacity=".35"/><rect x="1.5" y="1.5" width="17" height="9" rx="2.5" fill="white"/><path d="M23 4v4a2 2 0 0 0 0-4z" fill="white" opacity=".4"/></svg>
+  </span>
+</div>
+
+<!-- ナビゲーションバー -->
+<div class="nav-bar">
+  <div class="nav-top">
+    <div class="nav-title">青山ミスコン 2025</div>
+    <div class="nav-collab">× 青山ハック</div>
+  </div>
+  <div class="nav-period">
+    <div class="period-label">投票期間</div>
+    <div class="period-badge">11/18（月）〜 11/21（木）</div>
+    <div class="period-remaining">残り 3日</div>
+  </div>
+</div>
+
+<!-- スクロールエリア -->
+<div class="scroll-body" id="voteList">
+
+  <div class="notice">
+    <div class="notice-icon">ℹ</div>
+    <div class="notice-text">1人につき1票のみ投票できます。<br>一度投票すると変更・取り消しはできません。</div>
+  </div>
+
+  <div id="candidateList"></div>
+
+</div>
+
+<!-- 完了画面 -->
+<div class="done-screen" id="doneScreen">
+  <div class="done-circle">✓</div>
+  <div class="done-title">投票が完了しました</div>
+  <div class="done-sub" id="doneText"></div>
+</div>
+
+<!-- 確認シート -->
+<div class="overlay" id="overlay" onclick="closeSheet(event)">
+  <div class="confirm-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">この候補者に投票しますか？</div>
+    <div class="sheet-sub">投票後の変更・取り消しはできません</div>
+    <div class="sheet-candidate">
+      <div class="sheet-avatar" id="sheetAvatar"></div>
+      <div>
+        <div class="sheet-name" id="sheetName"></div>
+        <div class="sheet-dept" id="sheetDept"></div>
+      </div>
+    </div>
+    <div class="sheet-warning">投票は青山学院大学の在学生のみ対象です。<br>不正投票は無効となります。</div>
+    <button class="btn-confirm" onclick="confirmVote()">投票する</button>
+    <button class="btn-cancel"  onclick="closeSheet()">キャンセル</button>
+  </div>
+</div>
+
+<script>
+const candidates = [
+  {id:1, num:"No.1", name:"鈴木 さくら", kana:"すずき さくら", dept:"経営学部 経営学科 3年", tags:["経営"],    cls:"c1"},
+  {id:2, num:"No.2", name:"田中 みお",   kana:"たなか みお",   dept:"文学部 英米文学科 2年",  tags:["文学"],    cls:"c2"},
+  {id:3, num:"No.3", name:"山本 ゆい",   kana:"やまもと ゆい", dept:"国際政経学部 国際政治学科 3年", tags:["国際"], cls:"c3"},
+  {id:4, num:"No.4", name:"佐藤 なな",   kana:"さとう なな",   dept:"法学部 法学科 2年",       tags:["法学"],    cls:"c4"},
+  {id:5, num:"No.5", name:"伊藤 れな",   kana:"いとう れな",   dept:"総合文化政策学部 3年",    tags:["総文"],    cls:"c5"},
+  {id:6, num:"No.6", name:"小林 あおい", kana:"こばやし あおい",dept:"教育人間科学部 心理学科 2年",tags:["教育"],  cls:"c6"},
+];
+
+let votedId   = null;
+let pendingId = null;
+
+function firstChar(name){ return name.replace(/\s/g,'')[0]; }
+
+function render(){
+  const el = document.getElementById('candidateList');
+  el.innerHTML = candidates.map(c => {
+    const isVoted   = votedId === c.id;
+    const isDimmed  = votedId !== null && !isVoted;
+    return `
+    <div class="candidate-card${isVoted?' selected':''}${isDimmed?' dimmed':''}">
+      <div class="card-number">${c.num}</div>
+      <div class="avatar ${c.cls}">${firstChar(c.name)}</div>
+      <div class="card-info">
+        <div class="card-name">${c.name}</div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:1px">${c.kana}</div>
+        <div class="card-dept">${c.dept}</div>
+        ${isVoted
+          ? `<div class="voted-check"><span style="font-size:14px">✓</span> 投票済み</div>`
+          : `<div style="display:flex;gap:4px;margin-top:5px">${c.tags.map(t=>`<span class="card-tag">${t}</span>`).join('')}</div>`
+        }
+      </div>
+      ${votedId === null
+        ? `<button class="vote-btn" onclick="openSheet(${c.id})">投票する</button>`
+        : isVoted
+          ? `<button class="vote-btn voted-state">投票済み</button>`
+          : `<button class="vote-btn" disabled>投票する</button>`
+      }
+    </div>`;
+  }).join('');
+}
+
+function openSheet(id){
+  if(votedId !== null) return;
+  pendingId = id;
+  const c = candidates.find(x=>x.id===id);
+  document.getElementById('sheetName').textContent = c.name;
+  document.getElementById('sheetDept').textContent = c.dept;
+  const av = document.getElementById('sheetAvatar');
+  av.textContent   = firstChar(c.name);
+  av.className     = 'sheet-avatar ' + c.cls;
+  document.getElementById('overlay').classList.add('show');
+}
+
+function closeSheet(e){
+  if(e && e.target !== document.getElementById('overlay')) return;
+  document.getElementById('overlay').classList.remove('show');
+  pendingId = null;
+}
+
+function confirmVote(){
+  if(pendingId === null) return;
+  document.getElementById('overlay').classList.remove('show');
+  votedId = pendingId;
+  pendingId = null;
+
+  render();
+
+  const c = candidates.find(x=>x.id===votedId);
+  setTimeout(()=>{
+    document.getElementById('voteList').style.display = 'none';
+    const done = document.getElementById('doneScreen');
+    done.style.display = 'block';
+    document.getElementById('doneText').innerHTML =
+      `<span class="done-name">${c.name}</span> さんへの投票が<br>正常に受け付けられました。<br><br>投票してくれてありがとう！`;
+  }, 400);
+}
+
+render();
+</script>
+</body>
+</html>

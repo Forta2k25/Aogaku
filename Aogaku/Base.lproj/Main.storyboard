@@ -428,7 +428,7 @@
                     <connections>
                         <segue destination="grd-V5-3ap" kind="relationship" relationship="viewControllers" id="3nb-MB-67I"/>
                         <segue destination="C4X-cj-t5t" kind="relationship" relationship="viewControllers" id="lW0-0l-yaJ"/>
-                        <segue destination="L6K-4w-hUC" kind="relationship" relationship="viewControllers" id="Oxi-yP-R2H"/>
+                        <segue destination="KAD-ai-tab" kind="relationship" relationship="viewControllers" id="Oxi-yP-R2H"/>
                         <segue destination="if6-R1-6gd" kind="relationship" relationship="viewControllers" id="vVN-td-rlW"/>
                         <segue destination="gfZ-Fw-sJx" kind="relationship" relationship="viewControllers" id="FpO-6s-0Lf"/>
                     </connections>
@@ -698,10 +698,26 @@
             </objects>
             <point key="canvasLocation" x="-780" y="3067"/>
         </scene>
+        <!--課題-->
+        <scene sceneID="KAD-sc-ene">
+            <objects>
+                <navigationController customClass="AssignmentListNavController" customModule="Aogaku" customModuleProvider="target" id="KAD-ai-tab" sceneMemberID="viewController">
+                    <tabBarItem key="tabBarItem" title="課題" image="checklist" catalog="system" id="KAD-tb-bar"/>
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" id="KAD-nb-nav">
+                        <rect key="frame" x="0.0" y="0.0" width="440" height="54"/>
+                        <autoresizingMask key="autoresizingMask"/>
+                    </navigationBar>
+                    <nil name="viewControllers"/>
+                </navigationController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="KAD-ph-old" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="-709" y="1932"/>
+        </scene>
     </scenes>
     <resources>
         <image name="bookmark" catalog="system" width="110" height="128"/>
         <image name="calendar" catalog="system" width="128" height="107"/>
+        <image name="checklist" catalog="system" width="128" height="128"/>
         <image name="figure.archery" catalog="system" width="118" height="128"/>
         <image name="gear" catalog="system" width="128" height="122"/>
         <image name="gearshape" catalog="system" width="128" height="123"/>

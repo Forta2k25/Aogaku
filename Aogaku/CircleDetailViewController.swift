@@ -617,6 +617,12 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         updateBookmarkButtonUI()
+        ScreenTracker.shared.appear("サークル詳細")
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        ScreenTracker.shared.disappear("サークル詳細")
     }
 
     deinit {

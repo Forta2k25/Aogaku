@@ -8,7 +8,7 @@
 import UIKit
 import FirebaseAuth
 
-class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDelegate {
 
     var window: UIWindow?
 
@@ -21,11 +21,20 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: ws)
         let sb = UIStoryboard(name: "Main", bundle: nil)
         let root = sb.instantiateInitialViewController()
-        (root as? UITabBarController)?.selectedIndex = 0   // ← 初期は時間割タブ
+        if let tab = root as? UITabBarController {
+            tab.delegate = self
+            tab.selectedIndex = 0   // ← 初期は時間割タブ
+            AppAnalytics.logTabView(tabName(for: tab, index: 0), index: 0)
+        }
         window.rootViewController = root
         window.makeKeyAndVisible()
         self.window = window
         
+    }
+
+    func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
+        AppAnalytics.logTabView(tabName(for: tabBarController, viewController: viewController),
+                                index: tabBarController.selectedIndex)
     }
     
     func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
@@ -66,3 +75,43 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
 }
 
+private extension SceneDelegate {
+    func tabName(for tabBarController: UITabBarController, viewController: UIViewController) -> AppAnalytics.Tab {
+        guard let index = tabBarController.viewControllers?.firstIndex(of: viewController) else {
+            return .other
+        }
+        return tabName(for: tabBarController, index: index)
+    }
+
+    func tabName(for tabBarController: UITabBarController, index: Int) -> AppAnalytics.Tab {
+        guard let viewControllers = tabBarController.viewControllers,
+              viewControllers.indices.contains(index) else {
+            return .other
+        }
+
+        let root = (viewControllers[index] as? UINavigationController)?.viewControllers.first
+            ?? viewControllers[index]
+        let title = root.title ?? viewControllers[index].tabBarItem.title ?? ""
+        let typeName = String(describing: type(of: root))
+
+        if typeName.contains("timetable") || typeName.contains("Timetable") || title.contains("時間割") {
+            return .timetable
+        }
+        if typeName.contains("Syllabus") || title.contains("シラバス") {
+            return .syllabus
+        }
+        if typeName.contains("Assignment") || typeName.contains("Moodle") || title.contains("課題") || title.contains("Moodle") {
+            return .moodle
+        }
+        if typeName.contains("Circle") || title.contains("サークル") {
+            return .circles
+        }
+        if typeName.contains("Friend") || title.contains("友") {
+            return .friends
+        }
+        if typeName.contains("Settings") || title.contains("設定") {
+            return .settings
+        }
+        return .other
+    }
+}

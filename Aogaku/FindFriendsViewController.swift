@@ -133,7 +133,17 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
         searchBar.placeholder = "ユーザー名、IDから検索（@id 可）"
         searchBar.delegate = self
+        searchBar.returnKeyType = .done
         navigationItem.titleView = searchBar
+
+        // キーボードに「完了」ボタン
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+        let done = UIBarButtonItem(title: "完了", style: .done,
+                                   target: self, action: #selector(dismissKeyboard))
+        toolbar.items = [flex, done]
+        searchBar.searchTextField.inputAccessoryView = toolbar
 
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             image: UIImage(systemName: "line.3.horizontal.decrease"),
@@ -301,6 +311,8 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
 
     // 検索
 
+    @objc private func dismissKeyboard() { view.endEditing(true) }
+
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
         applySearch(text: searchBar.text)
         view.endEditing(true)
@@ -395,11 +407,13 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
             let hasActiveFilter = self.filterGrade != nil
                 || self.filterFaculty != nil
                 || ((self.filterDepartment ?? "").isEmpty == false)
-            let hasActiveSearch = !(self.normalizeQuery(self.searchBar.text).isEmpty)
+            let q = self.normalizeQuery(self.searchBar.text)
+            let hasActiveSearch = !q.isEmpty
 
             if hasActiveFilter || hasActiveSearch {
-                self.rawResults = self.allUsers
-                self.applyActiveFilter()   // 内部で resetPaging() が走り全件（＝取得済み分）を表示
+                // テキスト検索が有効な場合はここでも再フィルタを適用する
+                self.rawResults = self.textFiltered(from: self.allUsers, query: q)
+                self.applyActiveFilter()
             } else {
                 self.results = self.allUsers
                 let newCount = self.results.count
@@ -430,6 +444,21 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         return half.lowercased()
     }
 
+    /// テキスト検索をかけた rawResults を返す（allUsers ベース）
+    private func textFiltered(from source: [UserPublic], query q: String) -> [UserPublic] {
+        guard !q.isEmpty else { return source }
+        if q.hasPrefix("@") {
+            let key = String(q.dropFirst())
+            return source.filter { $0.idString.lowercased().contains(key) }
+        } else {
+            return source.filter { u in
+                let name = u.name.lowercased()
+                let id   = u.idString.lowercased()
+                return name.contains(q) || id.contains(q) || ("@"+id).contains(q)
+            }
+        }
+    }
+
     // 検索キーワードを results/rawResults に反映
     private func applySearch(text: String?) {
         let q = normalizeQuery(text)
@@ -437,24 +466,13 @@ final class FindFriendsViewController: UITableViewController, UISearchBarDelegat
         guard !q.isEmpty else {
             results = allUsers
             rawResults = allUsers
-            applyActiveFilter() // ページング初期化も含む
+            applyActiveFilter()
             return
         }
 
-        if q.hasPrefix("@") {
-            // @検索 → ID部分で部分一致（@は外す）
-            let key = String(q.dropFirst())
-            rawResults = allUsers.filter { $0.idString.lowercased().contains(key) }
-        } else {
-            // それ以外 → ユーザー名 or （@付き/無しの）IDで部分一致
-            rawResults = allUsers.filter { u in
-                let name = u.name.lowercased()
-                let id   = u.idString.lowercased()
-                return name.contains(q) || id.contains(q) || ("@"+id).contains(q)
-            }
-        }
-        applyActiveFilter() // profile補完→フィルタ→ページング初期化
-        if !q.isEmpty, hasMoreOnServer, !isFetchingPage, results.count < pageSize {
+        rawResults = textFiltered(from: allUsers, query: q)
+        applyActiveFilter()
+        if hasMoreOnServer, !isFetchingPage, results.count < pageSize {
             fetchNextPage()
         }
     }

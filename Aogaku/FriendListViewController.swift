@@ -302,11 +302,10 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
     private var friends: [Friend] = []
     private var profileCache: [String: Profile] = [:] // key: friendUid
 
-    // 空きコマグリッド用
-    /// 友だちUIDごとの占有スロット（day*10+period のエンコード）
+    // MARK: - Grid vars
     private var occupiedSlots: [String: Set<Int>] = [:]
-    /// 時間割を読み込み済みの UID セット（ドキュメントなし = 除外）
     private var loadedUids: Set<String> = []
+    private var isGridExpanded: Bool = FreeGridState.load()
 
     private var badgeListener: ListenerRegistration?
     private var listenerIsActive = false
@@ -363,8 +362,11 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
         title = "友だち"
         tableView.register(FriendListCell.self, forCellReuseIdentifier: FriendListCell.reuseID)
-        tableView.register(FreePeriodGridTableCell.self, forCellReuseIdentifier: FreePeriodGridTableCell.reuseID)
+        tableView.register(FreeGridCell.self, forCellReuseIdentifier: FreeGridCell.reuseID)
         tableView.rowHeight = 80
+        tableView.estimatedRowHeight = 0
+        tableView.estimatedSectionHeaderHeight = 0
+        tableView.estimatedSectionFooterHeight = 0
 
         // 右：ベル
         bellButton.addTarget(self, action: #selector(openRequests), for: .touchUpInside)
@@ -396,6 +398,10 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         NotificationCenter.default.addObserver(self,
             selector: #selector(onAdMobReady),
             name: .adMobReady, object: nil)
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(saveGridState),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil)
         applyBackgroundStyle()
     }
     @objc private func onAdMobReady() {
@@ -405,6 +411,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         AppGatekeeper.shared.checkAndPresentIfNeeded(on: self)
+        ScreenTracker.shared.appear("友だちリスト")
     }
 
     
@@ -435,12 +442,17 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        ScreenTracker.shared.disappear("友だちリスト")
+        FreeGridState.save(isGridExpanded)
         badgeListener?.remove()
         badgeListener = nil
         listenerIsActive = false
     }
 
-    deinit { badgeListener?.remove() }
+    deinit {
+        badgeListener?.remove()
+        NotificationCenter.default.removeObserver(self)
+    }
 
     // ===== Login Gate =====
     @discardableResult
@@ -571,7 +583,6 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
     // ===== Data =====
     private func reload() {
         guard ensureLoggedInOrRedirect() else { return }
-        // 友だちリストが更新されたら空きコマデータもリセット
         occupiedSlots.removeAll()
         loadedUids.removeAll()
         FriendService.shared.fetchFriends { [weak self] result in
@@ -580,7 +591,7 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
             case .success(let list):
                 self.allFriends = list
                 self.applyFilter(text: self.searchBar.text)
-                self.loadFriendTimetablesForFreeMap()
+                self.loadGridTimetables()
             case .failure:
                 self.allFriends = []
                 self.applyFilter(text: self.searchBar.text)
@@ -667,65 +678,20 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         }
 
         friends = filtered
-        tableView.reloadData()
+        UIView.performWithoutAnimation { tableView.reloadData() }
     }
 
     // ===== TableView =====
 
-    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
-
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        section == 0 ? 1 : friends.count
-    }
-
-    override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        indexPath.section == 0 ? FreePeriodGridView.preferredHeight : 80
-    }
-
-    override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-        guard section == 0 else { return nil }
-        return makeGridSectionHeader()
-    }
-
-    override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        section == 0 ? 36 : 0
-    }
-
-    private func makeGridSectionHeader() -> UIView {
-        let v = UIView()
-        v.backgroundColor = .clear
-
-        let lbl = UILabel()
-        lbl.text = "空きコマで会える友だち"
-        lbl.font = .systemFont(ofSize: 13, weight: .semibold)
-        lbl.textColor = .secondaryLabel
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-        v.addSubview(lbl)
-
-        let icon = UIImageView(image: UIImage(systemName: "person.2.fill"))
-        icon.tintColor = .secondaryLabel
-        icon.contentMode = .scaleAspectFit
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        v.addSubview(icon)
-
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 20),
-            icon.centerYAnchor.constraint(equalTo: v.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16),
-            icon.heightAnchor.constraint(equalToConstant: 14),
-            lbl.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-            lbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
-        ])
-        return v
-    }
-
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        // ── Section 0: 空きコマグリッド ──
+        // ── Section 0: グリッド ──
         if indexPath.section == 0 {
-            let cell = tableView.dequeueReusableCell(withIdentifier: FreePeriodGridTableCell.reuseID, for: indexPath) as! FreePeriodGridTableCell
+            let cell = tableView.dequeueReusableCell(withIdentifier: FreeGridCell.reuseID, for: indexPath) as! FreeGridCell
             cell.gridView.freeMap = buildFreeMap()
-            cell.gridView.onTapSlot = { [weak self] day, period, entries in
-                self?.showFreeSlotSheet(day: day, period: period, friends: entries)
+            cell.gridView.highlightDay = currentAcademicDay()
+            cell.gridView.highlightPeriod = currentAcademicPeriod()
+            cell.gridView.onTap = { [weak self] d, p, entries in
+                self?.showFreeSheet(day: d, period: p, entries: entries)
             }
             return cell
         }
@@ -884,8 +850,8 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        guard indexPath.section == 1 else { return }
         tableView.deselectRow(at: indexPath, animated: true)
+        guard indexPath.section == 1 else { return }
         let friend = friends[indexPath.row]
 
         // 開いた順更新
@@ -896,208 +862,289 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
         navigationController?.pushViewController(vc, animated: true)
     }
 
-    // ===== 空きコマグリッド =====
+    // MARK: - Grid section
 
-    /// 全友だちの今学期時間割を Firestore から並行読み込みし occupiedSlots を構築する
-    private func loadFriendTimetablesForFreeMap() {
+    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        section == 0 ? (isGridExpanded ? 1 : 0) : friends.count
+    }
+
+    override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        indexPath.section == 0 ? FreeGridView.preferredHeight : 80
+    }
+
+    override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        section == 0 ? makeGridHeader() : nil
+    }
+
+    override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        section == 0 ? 40 : 0
+    }
+
+    private func makeGridHeader() -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+
+        let icon = UIImageView(image: UIImage(systemName: "person.2"))
+        icon.tintColor = .secondaryLabel
+        icon.contentMode = .scaleAspectFit
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let lbl = UILabel()
+        lbl.text = "空きコマで会える友だち"
+        lbl.font = .systemFont(ofSize: 13, weight: .semibold)
+        lbl.textColor = .secondaryLabel
+        lbl.translatesAutoresizingMaskIntoConstraints = false
+
+        let chevron = UIImageView()
+        chevron.image = UIImage(systemName: isGridExpanded ? "chevron.up" : "chevron.down",
+                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        chevron.tintColor = .tertiaryLabel
+        chevron.contentMode = .scaleAspectFit
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+
+        v.addSubview(icon)
+        v.addSubview(lbl)
+        v.addSubview(chevron)
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 20),
+            icon.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            icon.heightAnchor.constraint(equalToConstant: 14),
+            lbl.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
+            lbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            chevron.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -20),
+            chevron.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            chevron.widthAnchor.constraint(equalToConstant: 12),
+            chevron.heightAnchor.constraint(equalToConstant: 12),
+        ])
+        v.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(toggleGrid)))
+        v.isUserInteractionEnabled = true
+        return v
+    }
+
+    @objc private func toggleGrid() {
+        isGridExpanded.toggle()
+        FreeGridState.save(isGridExpanded)
+        tableView.reloadSections(IndexSet(integer: 0), with: .automatic)
+    }
+
+    @objc private func saveGridState() {
+        FreeGridState.save(isGridExpanded)
+    }
+
+    // MARK: - Grid data
+
+    private func loadGridTimetables() {
         guard Auth.auth().currentUser != nil, !allFriends.isEmpty else { return }
-
-        let cal   = Calendar(identifier: .gregorian)
-        let now   = Date()
+        let cal = Calendar.current
+        let now = Date()
         let month = cal.component(.month, from: now)
-        let rawY  = cal.component(.year,  from: now)
-        let year  = month >= 3 ? rawY : rawY - 1
-        let semJP = (month >= 4 && month <= 9) ? "前期" : "後期"
-        let docID = "assignedCourses.\(year)_\(semJP)"
+        let yr = cal.component(.year, from: now)
+        let year = month >= 3 ? yr : yr - 1
+        let sem = month >= 10 ? "後期" : "前期"
+        let idA = "assignedCourses.\(year)_\(sem)"
+        let idB = "assignedCourses.\(year).\(sem)"
 
         for friend in allFriends {
             let uid = friend.friendUid
             guard !loadedUids.contains(uid) else { continue }
-
-            db.collection("users").document(uid)
-              .collection("timetable").document(docID)
-              .getDocument { [weak self] snap, _ in
-                  guard let self else { return }
-                  // ドキュメントが存在しない（時間割未登録）= グリッドには表示しない
-                  guard snap?.exists == true else { return }
-                  let slots = self.parseOccupiedSlots(from: snap?.data() ?? [:])
-                  DispatchQueue.main.async {
-                      self.occupiedSlots[uid] = slots
-                      self.loadedUids.insert(uid)
-                      // グリッドセルを更新
-                      if self.tableView.numberOfSections > 0 {
-                          self.tableView.reloadRows(
-                              at: [IndexPath(row: 0, section: 0)], with: .none)
-                      }
-                  }
-              }
-        }
-    }
-
-    /// Firestore のドキュメントデータから占有スロット（day*10+period）を抽出する
-    private func parseOccupiedSlots(from data: [String: Any]) -> Set<Int> {
-        var slots = Set<Int>()
-
-        func add(_ d: Int, _ p: Int) {
-            guard d >= 0, d <= 4, p >= 1, p <= 7 else { return }
-            slots.insert(d * 10 + p)
-        }
-
-        // フォーマット1: cells が辞書型
-        if let cells = data["cells"] as? [String: Any] {
-            for (key, val) in cells {
-                guard let dict = val as? [String: Any] else { continue }
-                if let (d, p) = freeMapDayPeriod(from: key) {
-                    add(d, p)
-                } else if let dayD = dict["day"] as? Int ?? dict["d"] as? Int,
-                          let perD = dict["period"] as? Int ?? dict["p"] as? Int {
-                    add(dayD, perD)
+            let ref = db.collection("users").document(uid).collection("timetable")
+            ref.document(idA).getDocument { [weak self] snapA, errA in
+                guard let self else { return }
+                if errA == nil, let data = snapA?.data(), !data.isEmpty {
+                    let slots = self.parseOccupiedSlots(from: data)
+                    DispatchQueue.main.async {
+                        self.occupiedSlots[uid] = slots
+                        self.loadedUids.insert(uid)
+                        self.reloadGridCellIfVisible()
+                    }
+                    return
                 }
-                // ネスト形式: key="d0", val={"p1":{title:...}, ...}
-                if let dayNum = freeMapLeadingInt(key, prefix: "d") {
-                    for (pk, pv) in dict {
-                        if let pNum = freeMapLeadingInt(pk, prefix: "p"),
-                           let inner = pv as? [String: Any],
-                           let title = inner["title"] as? String, !title.isEmpty {
-                            add(dayNum, pNum)
+                ref.document(idB).getDocument { [weak self] snapB, _ in
+                    guard let self else { return }
+                    DispatchQueue.main.async {
+                        if let data = snapB?.data(), !data.isEmpty {
+                            self.occupiedSlots[uid] = self.parseOccupiedSlots(from: data)
                         }
+                        self.loadedUids.insert(uid)
+                        self.reloadGridCellIfVisible()
                     }
                 }
             }
         }
+    }
 
-        // フォーマット2: フラット "cells.d0p1": {...}
-        for (rawKey, val) in data {
-            guard rawKey.hasPrefix("cells."), let dict = val as? [String: Any] else { continue }
-            let sub = String(rawKey.dropFirst("cells.".count))
-            if let (d, p) = freeMapDayPeriod(from: sub) {
-                add(d, p)
-            } else if let dayD = dict["day"] as? Int, let perD = dict["period"] as? Int {
-                add(dayD, perD)
+    private func reloadGridCellIfVisible() {
+        guard isGridExpanded,
+              tableView.numberOfSections > 0,
+              tableView.numberOfRows(inSection: 0) > 0 else { return }
+        tableView.reloadRows(at: [IndexPath(row: 0, section: 0)], with: .none)
+    }
+
+    private func parseOccupiedSlots(from data: [String: Any]) -> Set<Int> {
+        var slots = Set<Int>()
+        func tryAdd(key: String, value: Any) {
+            guard let (d, p) = dayPeriodKey(key) else { return }
+            let occupied: Bool
+            if let dict = value as? [String: Any] {
+                occupied = !(dict["title"] as? String ?? "").isEmpty || !dict.isEmpty
+            } else if let b = value as? Bool { occupied = b
+            } else { occupied = true }
+            if occupied { slots.insert(d * 10 + p) }
+        }
+        if let cells = data["cells"] as? [String: Any] {
+            for (k, v) in cells {
+                if let nested = v as? [String: Any], dayPeriodKey(k) == nil {
+                    for (pk, pv) in nested { tryAdd(key: "\(k)\(pk)", value: pv) }
+                } else { tryAdd(key: k, value: v) }
+            }
+        } else {
+            for (raw, val) in data {
+                let k = raw.hasPrefix("cells.") ? String(raw.dropFirst("cells.".count)) : raw
+                tryAdd(key: k, value: val)
             }
         }
-
         return slots
     }
 
-    /// "d2p3" / "d2.p3" などから (day, period) を取り出す
-    private func freeMapDayPeriod(from key: String) -> (Int, Int)? {
-        guard let r = try? NSRegularExpression(pattern: #"d(\d+)[^0-9]*p(\d+)"#),
-              let m = r.firstMatch(in: key, range: NSRange(key.startIndex..., in: key)),
-              m.numberOfRanges >= 3,
-              let dr = Range(m.range(at: 1), in: key),
-              let pr = Range(m.range(at: 2), in: key),
-              let d  = Int(key[dr]),
-              let p  = Int(key[pr]) else { return nil }
+    private func dayPeriodKey(_ key: String) -> (Int, Int)? {
+        guard let rx = try? NSRegularExpression(pattern: #"^d(\d+)p(\d+)$"#),
+              let m = rx.firstMatch(in: key, range: NSRange(key.startIndex..., in: key)),
+              let rD = Range(m.range(at: 1), in: key),
+              let rP = Range(m.range(at: 2), in: key),
+              let d = Int(key[rD]), let p = Int(key[rP]),
+              (0...4).contains(d), (1...5).contains(p) else { return nil }
         return (d, p)
     }
 
-    /// "d3" → 3, "p1" → 1 など先頭のプレフィックスを取り除いた整数
-    private func freeMapLeadingInt(_ s: String, prefix: String) -> Int? {
-        guard s.hasPrefix(prefix) else { return nil }
-        return Int(String(s.dropFirst(prefix.count).prefix(while: { $0.isNumber })))
-    }
-
-    /// occupiedSlots をもとに FreePeriodGridView 用の freeMap を構築する
-    private func buildFreeMap() -> FreePeriodGridView.FreeMap {
-        var map: FreePeriodGridView.FreeMap = [:]
-        let loadedFriends = allFriends.filter { loadedUids.contains($0.friendUid) }
-        guard !loadedFriends.isEmpty else { return map }
-
-        for day in 0..<5 {
-            for period in 1...5 {
-                let slot = day * 10 + period
-                var free: [FreeFriendEntry] = []
-                for f in loadedFriends {
-                    // 占有スロットに含まれていなければ「空き」
-                    guard !(occupiedSlots[f.friendUid]?.contains(slot) ?? false) else { continue }
-                    let profile = profileCache[f.friendUid]
-                    let name: String = {
-                        let n = profile?.name.trimmingCharacters(in: .whitespaces) ?? ""
-                        return n.isEmpty ? f.friendName : n
-                    }()
-                    let avatar = profile.flatMap {
-                        AvatarCache.shared.image(uid: f.friendUid, version: $0.avatarVersion)
-                    } ?? AvatarCache.shared.image(uid: f.friendUid, version: nil)
-                    free.append(FreeFriendEntry(uid: f.friendUid, name: name, avatar: avatar))
+    private func buildFreeMap() -> FreeGridView.FreeMap {
+        var map: FreeGridView.FreeMap = [:]
+        let loaded = allFriends.filter { loadedUids.contains($0.friendUid) }
+        guard !loaded.isEmpty else { return map }
+        for d in 0..<5 {
+            for p in 1...5 {
+                let slot = d * 10 + p
+                let entries: [FreeSlotEntry] = loaded.compactMap { f in
+                    guard !(occupiedSlots[f.friendUid]?.contains(slot) ?? false) else { return nil }
+                    let prof = profileCache[f.friendUid]
+                    let name = prof?.name.trimmingCharacters(in: .whitespaces) ?? ""
+                    let avatar = AvatarCache.shared.image(uid: f.friendUid, version: prof?.avatarVersion)
+                        ?? AvatarCache.shared.anyImage(uid: f.friendUid)
+                    return FreeSlotEntry(uid: f.friendUid, name: name.isEmpty ? f.friendName : name, avatar: avatar)
                 }
-                if !free.isEmpty {
-                    if map[day] == nil { map[day] = [:] }
-                    map[day]![period] = free
+                if !entries.isEmpty {
+                    if map[d] == nil { map[d] = [:] }
+                    map[d]![p] = entries
                 }
             }
         }
         return map
     }
 
-    /// コマをタップしたときの詳細シート（友だち名リスト → 時間割へ）
-    private func showFreeSlotSheet(day: Int, period: Int, friends entries: [FreeFriendEntry]) {
-        let dayNames = ["月", "火", "水", "木", "金"]
-        let dayName  = day < dayNames.count ? dayNames[day] : "?"
-        let title = "\(dayName)曜 \(period)限が空いている友だち"
-
+    private func showFreeSheet(day: Int, period: Int, entries: [FreeSlotEntry]) {
+        let days = ["月","火","水","木","金"]
+        let title = "\(days[safe: day] ?? "?")曜 \(period)限が空いている友だち"
         let ac = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
-        for entry in entries.prefix(10) {   // 多すぎる場合は10件まで
-            ac.addAction(UIAlertAction(title: entry.name, style: .default) { [weak self] _ in
-                guard let self else { return }
-                if let f = self.allFriends.first(where: { $0.friendUid == entry.uid }) {
-                    let vc = FriendTimetableViewController(
-                        friendUid: f.friendUid, friendName: f.friendName)
-                    self.navigationController?.pushViewController(vc, animated: true)
-                }
+        for e in entries.prefix(10) {
+            ac.addAction(UIAlertAction(title: e.name, style: .default) { [weak self] _ in
+                guard let self, let f = self.allFriends.first(where: { $0.friendUid == e.uid }) else { return }
+                let vc = FriendTimetableViewController(friendUid: f.friendUid, friendName: f.friendName)
+                self.navigationController?.pushViewController(vc, animated: true)
             })
         }
-        if entries.count > 10 {
-            ac.message = "他 \(entries.count - 10) 人"
-        }
+        if entries.count > 10 { ac.message = "他 \(entries.count - 10) 人" }
         ac.addAction(UIAlertAction(title: "閉じる", style: .cancel))
-
-        // iPad 対応
         if let pop = ac.popoverPresentationController {
             pop.sourceView = view
             pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
         }
         present(ac, animated: true)
     }
+
+    private func currentAcademicDay() -> Int? {
+        let wd = Calendar.current.component(.weekday, from: Date())
+        guard wd >= 2, wd <= 6 else { return nil }
+        return wd - 2
+    }
+
+    private func currentAcademicPeriod() -> Int? {
+        let cal = Calendar.current
+        let now = Date()
+        let wd = cal.component(.weekday, from: now)
+        guard wd >= 2, wd <= 6 else { return nil }
+        let h = cal.component(.hour, from: now)
+        let m = cal.component(.minute, from: now)
+        let t = h * 60 + m
+        let schedule = [(9*60, 10*60+30, 1),(11*60, 12*60+30, 2),
+                        (13*60+20, 14*60+50, 3),(15*60+5, 16*60+35, 4),(16*60+50, 18*60+20, 5)]
+        return schedule.first { t >= $0.0 && t <= $0.1 }?.2
+    }
+
 }
 
-// MARK: - FreePeriodGridView (空きコマグリッド)
+// MARK: - Shared: 空きコマグリッド
 
-struct FreeFriendEntry {
+// 開閉状態の永続化
+enum FreeGridState {
+    private static let key = "FreeGrid_expanded_v2"
+    static func load() -> Bool { UserDefaults.standard.bool(forKey: key) }
+    static func save(_ v: Bool) { UserDefaults.standard.set(v, forKey: key) }
+}
+
+// グリッド1コマのエントリ
+struct FreeSlotEntry {
     let uid: String
     let name: String
     let avatar: UIImage?
+
+    init(uid: String, name: String, avatar: UIImage? = nil) {
+        self.uid = uid
+        self.name = name
+        self.avatar = avatar
+    }
 }
 
-final class FreePeriodGridView: UIView {
+// MARK: - FreeGridView
 
-    typealias FreeMap = [Int: [Int: [FreeFriendEntry]]]
+/// 月〜金 × 1〜5限のシンプルグリッド。
+/// 各コマに空きの友だちを表示し、タップでシートを出す。
+final class FreeGridView: UIView {
 
-    var freeMap: FreeMap = [:] { didSet { reloadCells() } }
-    /// 現在の曜日（0=月〜4=金）。nil なら非ハイライト
-    var currentDay: Int? = nil    { didSet { reloadCells() } }
-    /// 現在の時限（1-5）。nil なら非ハイライト
-    var currentPeriod: Int? = nil { didSet { reloadCells() } }
-    var onTapSlot: ((Int, Int, [FreeFriendEntry]) -> Void)?
+    typealias FreeMap = [Int: [Int: [FreeSlotEntry]]]   // day(0-4) → period(1-5) → entries
 
-    static let preferredHeight: CGFloat = {
-        2 * K.vPad + K.headerH + CGFloat(K.periods) * (K.gap + K.cellH)
-    }()
+    var freeMap: FreeMap = [:] { didSet { refresh() } }
+    var highlightDay: Int?    { didSet { refresh() } }
+    var highlightPeriod: Int? { didSet { refresh() } }
+    var onTap: ((Int, Int, [FreeSlotEntry]) -> Void)?
 
+    // レイアウト定数
     private enum K {
-        static let days    = 5
-        static let periods = 5
-        static let dayTitles    = ["月", "火", "水", "木", "金"]
-        static let periodTitles = ["1",  "2",  "3",  "4",  "5"]
-        static let leftW:   CGFloat = 18
-        static let headerH: CGFloat = 20
-        static let cellH:   CGFloat = 64
-        static let gap:     CGFloat = 3
-        static let hPad:    CGFloat = 12
-        static let vPad:    CGFloat = 8
+        static let days = 5, periods = 5
+        static let dayTitles    = ["月","火","水","木","金"]
+        static let periodTitles = ["1","2","3","4","5"]
+        static let hPad:   CGFloat = 8
+        static let leftW:  CGFloat = 20   // 時限ラベル列幅
+        static let colGap: CGFloat = 3    // 列間隔
+        static let rowGap: CGFloat = 5    // 行間隔
+        static let headerH: CGFloat = 20  // 曜日ラベル行高
+        static let cellH:  CGFloat = 100  // コマ高さ
+        static let topPad: CGFloat = 10
+        static let botPad: CGFloat = 10
+        static let visibleFriendsPerSlot = 5
     }
 
-    private var slotViews: [[UIView]] = []
+    static let preferredHeight: CGFloat = {
+        K.topPad + K.headerH + K.rowGap
+            + CGFloat(K.periods) * K.cellH + CGFloat(K.periods - 1) * K.rowGap
+            + K.botPad
+    }()
+
+    // セルのビューと友だち表示スタックを保持 [period index][day index]
+    private var slotCells: [[UIView]] = []
+    private var slotStacks: [[UIStackView]] = []
+    private var dayLabels: [UILabel] = []
     private var periodLabels: [UILabel] = []
 
     override init(frame: CGRect) { super.init(frame: frame); build() }
@@ -1105,248 +1152,183 @@ final class FreePeriodGridView: UIView {
 
     private func build() {
         backgroundColor = .clear
+        isUserInteractionEnabled = true
 
-        let outer = UIStackView()
-        outer.axis = .vertical
-        outer.spacing = K.gap
-        outer.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(outer)
-        NSLayoutConstraint.activate([
-            outer.topAnchor.constraint(equalTo: topAnchor, constant: K.vPad),
-            outer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: K.hPad),
-            outer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -K.hPad),
-            outer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -K.vPad),
-        ])
-
-        outer.addArrangedSubview(makeHeaderRow())
-
-        slotViews = []
-        periodLabels = []
-        for p in 0..<K.periods {
-            let (row, cells) = makePeriodRow(periodIndex: p)
-            outer.addArrangedSubview(row)
-            row.heightAnchor.constraint(equalToConstant: K.cellH).isActive = true
-            slotViews.append(cells)
-        }
-    }
-
-    private func makeHeaderRow() -> UIView {
-        let spacer = UIView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.widthAnchor.constraint(equalToConstant: K.leftW).isActive = true
-
-        let cols = UIStackView()
-        cols.axis = .horizontal
-        cols.distribution = .fillEqually
-        cols.spacing = K.gap
-        for title in K.dayTitles {
-            let l = UILabel()
-            l.text = title
-            l.font = .systemFont(ofSize: 11, weight: .semibold)
-            l.textColor = .secondaryLabel
+        // 曜日ラベル
+        for t in K.dayTitles {
+            let l = label(t, size: 11, weight: .medium, color: .secondaryLabel)
             l.textAlignment = .center
-            cols.addArrangedSubview(l)
+            addSubview(l)
+            dayLabels.append(l)
         }
 
-        let row = UIStackView(arrangedSubviews: [spacer, cols])
-        row.axis = .horizontal
-        row.spacing = K.gap
-        row.heightAnchor.constraint(equalToConstant: K.headerH).isActive = true
-        return row
-    }
+        // 時限ラベル + コマ
+        slotCells = Array(repeating: [], count: K.periods)
+        slotStacks = Array(repeating: [], count: K.periods)
+        for pi in 0..<K.periods {
+            let pl = label(K.periodTitles[pi], size: 11, weight: .medium, color: .tertiaryLabel)
+            pl.textAlignment = .center
+            addSubview(pl)
+            periodLabels.append(pl)
 
-    private func makePeriodRow(periodIndex: Int) -> (UIView, [UIView]) {
-        let lbl = UILabel()
-        lbl.text = K.periodTitles[periodIndex]
-        lbl.font = .systemFont(ofSize: 10, weight: .bold)
-        lbl.textColor = .tertiaryLabel
-        lbl.textAlignment = .center
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-        lbl.widthAnchor.constraint(equalToConstant: K.leftW).isActive = true
-        periodLabels.append(lbl)
+            for di in 0..<K.days {
+                let cell = UIView()
+                cell.layer.cornerRadius = 8
+                cell.clipsToBounds = true
+                cell.backgroundColor = UIColor.systemGray6
+                cell.isUserInteractionEnabled = true
+                cell.tag = di * 10 + (pi + 1)
+                cell.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(cell)
 
-        let cols = UIStackView()
-        cols.axis = .horizontal
-        cols.distribution = .fillEqually
-        cols.spacing = K.gap
-        cols.alignment = .fill
+                let stack = UIStackView()
+                stack.axis = .vertical
+                stack.alignment = .fill
+                stack.distribution = .equalCentering
+                stack.spacing = 3
+                stack.isUserInteractionEnabled = false
+                stack.translatesAutoresizingMaskIntoConstraints = false
+                cell.addSubview(stack)
+                NSLayoutConstraint.activate([
+                    stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                    stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+                    stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                    stack.topAnchor.constraint(greaterThanOrEqualTo: cell.topAnchor, constant: 6),
+                    stack.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -6),
+                ])
 
-        var cells: [UIView] = []
-        let period = periodIndex + 1
-        for day in 0..<K.days {
-            let cell = makeSlotCell(day: day, period: period)
-            cols.addArrangedSubview(cell)
-            cells.append(cell)
-        }
+                cell.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(slotTapped(_:))))
 
-        let row = UIStackView(arrangedSubviews: [lbl, cols])
-        row.axis = .horizontal
-        row.spacing = K.gap
-        row.alignment = .fill
-        return (row, cells)
-    }
-
-    private func makeSlotCell(day: Int, period: Int) -> UIView {
-        let v = UIView()
-        v.layer.cornerRadius = 6
-        v.clipsToBounds = true
-        v.tag = day * 10 + period
-        applyEmptyStyle(to: v)
-        let tap = UITapGestureRecognizer(target: self, action: #selector(slotTapped(_:)))
-        v.addGestureRecognizer(tap)
-        v.isUserInteractionEnabled = true
-        return v
-    }
-
-    @objc private func slotTapped(_ gr: UITapGestureRecognizer) {
-        guard let v = gr.view else { return }
-        let day    = v.tag / 10
-        let period = v.tag % 10
-        let entries = freeMap[day]?[period] ?? []
-        guard !entries.isEmpty else { return }
-        onTapSlot?(day, period, entries)
-    }
-
-    private func reloadCells() {
-        // 時限ラベルのハイライト
-        for (i, lbl) in periodLabels.enumerated() {
-            let p = i + 1
-            let on = (currentPeriod == p)
-            lbl.textColor = on ? .systemOrange : .tertiaryLabel
-            lbl.font = .systemFont(ofSize: 10, weight: on ? .black : .bold)
-        }
-        for p in 0..<min(slotViews.count, K.periods) {
-            for d in 0..<min(slotViews[p].count, K.days) {
-                let cell    = slotViews[p][d]
-                let entries = freeMap[d]?[p + 1] ?? []
-                populateCell(cell, with: entries)
+                slotCells[pi].append(cell)
+                slotStacks[pi].append(stack)
             }
         }
     }
 
-    private func populateCell(_ cell: UIView, with entries: [FreeFriendEntry]) {
-        let day    = cell.tag / 10
-        let period = cell.tag % 10
-        let isCurrent = currentPeriod != nil && currentDay != nil
-                     && period == currentPeriod && day == currentDay
+    // 手動レイアウト（AutoLayout より確実）
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let availW = bounds.width - K.hPad * 2 - K.leftW - K.colGap
+        let cellW  = (availW - CGFloat(K.days - 1) * K.colGap) / CGFloat(K.days)
+        let originX = K.hPad + K.leftW + K.colGap
 
-        cell.subviews.forEach { $0.removeFromSuperview() }
-
-        // 現在時限: オレンジ枠
-        cell.layer.borderWidth = isCurrent ? 1.5 : 0
-        cell.layer.borderColor = UIColor.systemOrange.cgColor
-
-        if entries.isEmpty {
-            applyEmptyStyle(to: cell)
-            return
+        // 曜日ラベル
+        for di in 0..<K.days {
+            let x = originX + CGFloat(di) * (cellW + K.colGap)
+            dayLabels[di].frame = CGRect(x: x, y: K.topPad, width: cellW, height: K.headerH)
         }
-        applyFilledStyle(to: cell)
 
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 2
-        stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(stack)
+        // 行（時限ラベル + コマ）
+        for pi in 0..<K.periods {
+            let y = K.topPad + K.headerH + K.rowGap + CGFloat(pi) * (K.cellH + K.rowGap)
+            periodLabels[pi].frame = CGRect(x: K.hPad, y: y, width: K.leftW, height: K.cellH)
+            for di in 0..<K.days {
+                let x = originX + CGFloat(di) * (cellW + K.colGap)
+                slotCells[pi][di].frame = CGRect(x: x, y: y, width: cellW, height: K.cellH)
+            }
+        }
+    }
+
+    // セルの見た目を更新
+    private func refresh() {
+        for pi in 0..<K.periods {
+            let period = pi + 1
+            let isCurPeriod = period == highlightPeriod
+            periodLabels[pi].textColor = isCurPeriod ? .systemGreen : .tertiaryLabel
+            periodLabels[pi].font = .systemFont(ofSize: 11, weight: isCurPeriod ? .bold : .medium)
+
+            for di in 0..<K.days {
+                let isCurDay = di == highlightDay
+                dayLabels[di].textColor = isCurDay ? .systemGreen : .secondaryLabel
+                dayLabels[di].font = .systemFont(ofSize: 11, weight: isCurDay ? .bold : .medium)
+
+                let entries = freeMap[di]?[period] ?? []
+                let cell    = slotCells[pi][di]
+                let stack   = slotStacks[pi][di]
+                let isCur   = isCurDay && isCurPeriod
+
+                stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+                if entries.isEmpty {
+                    cell.backgroundColor = UIColor.systemGray6
+                    cell.layer.borderWidth = isCur ? 1.5 : 0
+                    cell.layer.borderColor = UIColor.systemGreen.cgColor
+                } else {
+                    cell.backgroundColor = UIColor.systemGreen.withAlphaComponent(isCur ? 0.18 : 0.10)
+                    cell.layer.borderWidth = isCur ? 1.5 : 0
+                    cell.layer.borderColor = UIColor.systemGreen.cgColor
+                    for entry in entries.prefix(K.visibleFriendsPerSlot) {
+                        stack.addArrangedSubview(friendRow(for: entry))
+                    }
+                }
+            }
+        }
+    }
+
+    @objc private func slotTapped(_ gr: UITapGestureRecognizer) {
+        guard let v = gr.view else { return }
+        let d = v.tag / 10
+        let p = v.tag % 10
+        let entries = freeMap[d]?[p] ?? []
+        guard !entries.isEmpty else { return }
+        onTap?(d, p, entries)
+    }
+
+    // ヘルパー
+    private func label(_ text: String, size: CGFloat, weight: UIFont.Weight, color: UIColor) -> UILabel {
+        let l = UILabel()
+        l.text = text
+        l.font = .systemFont(ofSize: size, weight: weight)
+        l.textColor = color
+        l.translatesAutoresizingMaskIntoConstraints = false
+        return l
+    }
+
+    private func friendRow(for entry: FreeSlotEntry) -> UIView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.alignment = .center
+        row.distribution = .fill
+        row.spacing = 3
+
+        let avatar = UIImageView()
+        avatar.contentMode = .scaleAspectFill
+        avatar.clipsToBounds = true
+        avatar.layer.cornerRadius = 9
+        avatar.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.18)
+        avatar.tintColor = .systemGreen
+        avatar.image = entry.avatar ?? UIImage(systemName: "person.crop.circle.fill")
+        avatar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: cell.topAnchor, constant: 5),
-            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -2),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -5),
+            avatar.widthAnchor.constraint(equalToConstant: 18),
+            avatar.heightAnchor.constraint(equalToConstant: 18)
         ])
 
-        let maxShow = 3
-        for entry in entries.prefix(maxShow) {
-            stack.addArrangedSubview(makeChip(for: entry))
-        }
-        if entries.count > maxShow {
-            let more = UILabel()
-            more.text = "+\(entries.count - maxShow)"
-            more.font = .systemFont(ofSize: 8, weight: .semibold)
-            more.textColor = .secondaryLabel
-            stack.addArrangedSubview(more)
-        }
-    }
+        let name = UILabel()
+        name.text = entry.name
+        name.font = .systemFont(ofSize: 10, weight: .semibold)
+        name.textColor = .label
+        name.numberOfLines = 1
+        name.adjustsFontSizeToFitWidth = true
+        name.minimumScaleFactor = 0.75
+        name.lineBreakMode = .byTruncatingTail
 
-    private func makeChip(for entry: FreeFriendEntry) -> UIView {
-        let chip = UIView()
-        chip.translatesAutoresizingMaskIntoConstraints = false
-
-        let av = UIImageView()
-        av.translatesAutoresizingMaskIntoConstraints = false
-        av.clipsToBounds = true
-        av.layer.cornerRadius = 7
-
-        if let img = entry.avatar {
-            // 実際のプロフィール写真: scaleAspectFill で円にクリップ
-            av.image = img
-            av.contentMode = .scaleAspectFill
-            av.backgroundColor = .systemGray5
-        } else {
-            // デフォルトアイコン: person.crop.circle.fill は元から円形のシンボルなので
-            // scaleAspectFit で収める（scaleAspectFill だと SF Symbol のパディングがクリップされて潰れる）
-            av.image = UIImage(systemName: "person.crop.circle.fill")
-            av.contentMode = .scaleAspectFit
-            av.backgroundColor = .clear
-            av.tintColor = .systemGray3
-        }
-
-        let lbl = UILabel()
-        lbl.translatesAutoresizingMaskIntoConstraints = false
-        lbl.font = .systemFont(ofSize: 9, weight: .medium)
-        lbl.textColor = .label
-        lbl.text = shortName(entry.name)
-        lbl.lineBreakMode = .byTruncatingTail
-        lbl.numberOfLines = 1
-
-        chip.addSubview(av)
-        chip.addSubview(lbl)
-        NSLayoutConstraint.activate([
-            chip.heightAnchor.constraint(equalToConstant: 14),
-            av.leadingAnchor.constraint(equalTo: chip.leadingAnchor),
-            av.centerYAnchor.constraint(equalTo: chip.centerYAnchor),
-            av.widthAnchor.constraint(equalToConstant: 14),
-            av.heightAnchor.constraint(equalToConstant: 14),
-            lbl.leadingAnchor.constraint(equalTo: av.trailingAnchor, constant: 2),
-            lbl.trailingAnchor.constraint(equalTo: chip.trailingAnchor),
-            lbl.centerYAnchor.constraint(equalTo: chip.centerYAnchor),
-        ])
-        return chip
-    }
-
-    private func applyEmptyStyle(to v: UIView) {
-        v.backgroundColor = UIColor { t in
-            t.userInterfaceStyle == .dark
-                ? UIColor(white: 0.18, alpha: 1)
-                : UIColor(white: 0.94, alpha: 1)
-        }
-    }
-
-    private func applyFilledStyle(to v: UIView) {
-        v.backgroundColor = UIColor { t in
-            t.userInterfaceStyle == .dark
-                ? UIColor(red: 0.08, green: 0.32, blue: 0.52, alpha: 1)
-                : UIColor(red: 0.88, green: 0.95, blue: 1.00, alpha: 1)
-        }
-    }
-
-    private func shortName(_ name: String) -> String {
-        let s = name.trimmingCharacters(in: .whitespaces)
-        return s.count <= 5 ? s : String(s.prefix(5))
+        row.addArrangedSubview(avatar)
+        row.addArrangedSubview(name)
+        return row
     }
 }
 
-final class FreePeriodGridTableCell: UITableViewCell {
-    static let reuseID = "FreePeriodGridTableCell"
+// MARK: - FreeGridCell（テーブルセルラッパー）
 
-    let gridView = FreePeriodGridView()
+final class FreeGridCell: UITableViewCell {
+    static let reuseID = "FreeGridCell"
+    let gridView = FreeGridView()
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         selectionStyle = .none
         backgroundColor = .clear
         contentView.backgroundColor = .clear
-
         gridView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(gridView)
         NSLayoutConstraint.activate([
@@ -1354,8 +1336,15 @@ final class FreePeriodGridTableCell: UITableViewCell {
             gridView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             gridView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             gridView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            gridView.heightAnchor.constraint(equalToConstant: FreePeriodGridView.preferredHeight),
+            gridView.heightAnchor.constraint(equalToConstant: FreeGridView.preferredHeight),
         ])
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+// MARK: - Array safe subscript
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
 }

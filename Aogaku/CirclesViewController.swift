@@ -165,6 +165,15 @@ final class CirclesViewController: UIViewController,
     private var filters = CircleFilters()
 
     // MARK: - Lifecycle
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        ScreenTracker.shared.appear("サークル")
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        ScreenTracker.shared.disappear("サークル")
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = pageBackgroundColor()

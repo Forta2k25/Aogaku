@@ -13,6 +13,15 @@ final class LMSViewController: UIViewController {
 
     @IBOutlet weak var webView: WKWebView!
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        ScreenTracker.shared.appear("LMS")
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        ScreenTracker.shared.disappear("LMS")
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 

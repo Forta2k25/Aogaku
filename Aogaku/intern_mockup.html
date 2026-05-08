@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>青山ハック — インターンモックアップ</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1c1c1e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 100vh;
+    font-family: -apple-system, 'Hiragino Sans', sans-serif;
+    padding: 40px 20px;
+    gap: 32px;
+  }
+  h1 {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    opacity: 0.6;
+    text-align: center;
+  }
+
+  /* ─── iPhone Frame ─── */
+  .phone {
+    width: 390px;
+    height: 844px;
+    background: #000;
+    border-radius: 54px;
+    border: 10px solid #2a2a2e;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.8), inset 0 0 0 1px #3a3a3e;
+    position: relative;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  /* Notch */
+  .phone::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 126px; height: 34px;
+    background: #000;
+    border-radius: 0 0 20px 20px;
+    z-index: 100;
+  }
+
+  /* Screen */
+  .screen {
+    width: 100%; height: 100%;
+    background: #f2f2f7;
+    border-radius: 44px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Status bar */
+  .status-bar {
+    height: 50px;
+    background: #f2f2f7;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 0 24px 6px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 10;
+  }
+  .status-time { font-size: 15px; font-weight: 600; color: #000; }
+  .status-icons { display: flex; gap: 6px; align-items: center; }
+  .status-icons span { font-size: 13px; }
+
+  /* Navigation bar */
+  .nav-bar {
+    height: 44px;
+    background: rgba(242,242,247,0.95);
+    backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 16px;
+    border-bottom: 0.5px solid rgba(0,0,0,0.12);
+    position: relative;
+    flex-shrink: 0;
+  }
+  .nav-title { font-size: 17px; font-weight: 600; color: #000; }
+  .nav-back {
+    position: absolute;
+    left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: #007aff;
+    font-size: 17px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 8px;
+    transition: opacity 0.15s;
+  }
+  .nav-back:active { opacity: 0.5; }
+  .nav-back svg { width: 11px; height: 18px; }
+  .detail-back {
+    position: absolute;
+    top: 50px;
+    left: 12px;
+    z-index: 60;
+    width: 34px;
+    height: 34px;
+    border-radius: 17px;
+    background: rgba(255,255,255,0.18);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(12px);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .detail-back svg { width: 10px; height: 17px; }
+  .detail-back:active { opacity: 0.7; }
+
+  /* Scrollable content */
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    outline: none;
+  }
+  .content::-webkit-scrollbar { display: none; }
+
+  /* ─── Circle Tab ─── */
+  .top-context {
+    padding: 12px 16px 10px;
+    background: #f2f2f7;
+    flex-shrink: 0;
+  }
+  .campus-pill {
+    height: 34px;
+    border-radius: 17px;
+    background: #fff;
+    color: #1c1c1e;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 13px;
+    font-size: 13px;
+    font-weight: 650;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  }
+  .campus-pill span {
+    color: #007a5a;
+    font-size: 12px;
+  }
+  .circle-hero {
+    margin: 4px 16px 14px;
+    background: linear-gradient(135deg, #007a5a 0%, #04a174 100%);
+    color: #fff;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 10px 24px rgba(0,122,90,0.22);
+  }
+  .circle-hero-kicker {
+    font-size: 11px;
+    font-weight: 700;
+    opacity: 0.82;
+    letter-spacing: 0.4px;
+  }
+  .circle-hero-title {
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1.25;
+    margin-top: 5px;
+  }
+  .circle-hero-sub {
+    font-size: 12px;
+    line-height: 1.55;
+    opacity: 0.9;
+    margin-top: 8px;
+  }
+  .section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px 8px;
+  }
+  .section-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: #3a3a3c;
+    letter-spacing: 0.2px;
+  }
+  .section-action {
+    font-size: 12px;
+    font-weight: 650;
+    color: #007aff;
+  }
+  .circle-card {
+    margin: 0 16px 10px;
+    background: #fff;
+    border-radius: 13px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.06);
+  }
+  .circle-icon {
+    width: 44px; height: 44px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+  .circle-info { flex: 1; min-width: 0; }
+  .circle-name { font-size: 15px; font-weight: 600; color: #000; }
+  .circle-meta { font-size: 12px; color: #8e8e93; margin-top: 2px; }
+  .campus-label {
+    display: inline-flex;
+    margin-top: 7px;
+    border-radius: 6px;
+    padding: 2px 6px;
+    background: #f2f2f7;
+    color: #636366;
+    font-size: 10px;
+    font-weight: 650;
+  }
+  .circle-chevron { color: #c7c7cc; font-size: 16px; }
+
+  /* ─── Intern Tab (List) ─── */
+  .intern-list { padding: 4px 0 86px; }
+  .intern-section {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 8px solid #e9e9ef;
+  }
+  .listing-note {
+    margin: 0 16px 12px;
+    background: #fff;
+    border-radius: 14px;
+    padding: 12px 14px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.06);
+  }
+  .listing-note-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    background: #e8f5ef;
+    color: #007a5a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .listing-note-title {
+    font-size: 13px;
+    font-weight: 750;
+    color: #1c1c1e;
+  }
+  .listing-note-text {
+    font-size: 11px;
+    line-height: 1.45;
+    color: #6e6e73;
+    margin-top: 3px;
+  }
+  .intern-card {
+    margin: 0 16px 12px;
+    background: #fff;
+    border-radius: 15px;
+    overflow: hidden;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.08);
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .intern-card:active { transform: scale(0.98); box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+
+  .intern-card-header {
+    background: linear-gradient(135deg, #006c5b 0%, #0a8f76 100%);
+    min-height: 84px;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 12px;
+  }
+  .intern-card-header.green  { background: linear-gradient(135deg, #25805d 0%, #3a9a78 100%); }
+  .intern-card-header.purple { background: linear-gradient(135deg, #3f6f98 0%, #6057a8 100%); }
+  .intern-card-header.orange { background: linear-gradient(135deg, #9a6233 0%, #c27532 100%); }
+
+  .intern-logo {
+    width: 48px; height: 48px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .intern-header-info { color: #fff; }
+  .intern-company { font-size: 12px; opacity: 0.88; }
+  .intern-title { font-size: 16px; font-weight: 800; line-height: 1.22; margin-top: 3px; }
+
+  .intern-card-body { padding: 12px 16px 14px; }
+  .intern-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .intern-tag {
+    background: #e8f5ef;
+    color: #007a5a;
+    font-size: 11px;
+    font-weight: 650;
+    padding: 3px 8px;
+    border-radius: 20px;
+  }
+  .intern-tag.green  { background: #f0faf4; color: #1e7e34; }
+  .intern-tag.gray   { background: #f2f2f7; color: #636366; }
+  .intern-tag.orange { background: #fff3e0; color: #e65100; }
+
+  .intern-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .intern-grid-item {
+    background: #f9f9fb;
+    border-radius: 8px;
+    padding: 7px 10px;
+  }
+  .igrid-label { font-size: 10px; color: #8e8e93; }
+  .igrid-value { font-size: 13px; font-weight: 600; color: #000; margin-top: 1px; }
+
+  /* ─── Detail Screen ─── */
+  .detail-screen {
+    position: absolute;
+    inset: 0;
+    background: #f2f2f7;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    z-index: 50;
+    border-radius: 44px;
+    overflow: hidden;
+  }
+  .detail-screen.visible { transform: translateX(0); }
+
+  .detail-scroll {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 100px;
+  }
+  .detail-scroll::-webkit-scrollbar { display: none; }
+
+  /* Detail hero */
+  .detail-hero {
+    background: linear-gradient(160deg, #006c5b 0%, #0a8f76 100%);
+    padding: 20px 16px 24px;
+    color: #fff;
+  }
+  .detail-hero .d-company { font-size: 13px; opacity: 0.8; margin-bottom: 4px; }
+  .detail-hero .d-title { font-size: 20px; font-weight: 700; line-height: 1.3; }
+  .detail-hero-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .detail-hero-tag {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 20px;
+  }
+
+  /* Detail sections */
+  .d-section {
+    margin: 12px 16px 0;
+    background: #fff;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .d-section-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #000;
+    padding: 14px 16px 10px;
+    border-bottom: 0.5px solid #e5e5ea;
+  }
+  .d-section-body { padding: 12px 16px 14px; }
+
+  /* Highlight box — 内定先企業 */
+  .highlight-box {
+    background: #e8f5ef;
+    border-left: 3px solid #007a5a;
+    border-radius: 0 8px 8px 0;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  .highlight-box-label { font-size: 11px; color: #007a5a; font-weight: 600; margin-bottom: 4px; }
+  .highlight-box-companies { font-size: 13px; font-weight: 600; color: #005342; line-height: 1.6; }
+
+  /* Description paragraphs */
+  .d-para { font-size: 13px; color: #1c1c1e; line-height: 1.7; margin-bottom: 10px; }
+  .d-para:last-child { margin-bottom: 0; }
+
+  /* Numbered list */
+  .d-num-list { list-style: none; }
+  .d-num-list li {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: #1c1c1e;
+    line-height: 1.6;
+  }
+  .d-num {
+    background: #007a5a;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* Skill bullets */
+  .skill-list { list-style: none; }
+  .skill-list li {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 13px; color: #1c1c1e; line-height: 1.5;
+    margin-bottom: 6px;
+  }
+  .skill-list li::before {
+    content: '✓';
+    color: #007a5a;
+    font-weight: 700;
+    margin-top: 0px;
+    flex-shrink: 0;
+  }
+
+  /* Feature tags */
+  .feature-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+  .feature-tag {
+    background: #e8f5ef;
+    color: #007a5a;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 11px;
+    border-radius: 20px;
+    border: 1px solid #b8dccf;
+  }
+
+  /* 募集要項 dl table */
+  .boshuu-table { width: 100%; }
+  .boshuu-row {
+    display: flex;
+    border-bottom: 0.5px solid #f0f0f5;
+    padding: 9px 0;
+  }
+  .boshuu-row:last-child { border-bottom: none; }
+  .boshuu-dt {
+    width: 90px;
+    font-size: 12px;
+    color: #8e8e93;
+    font-weight: 500;
+    flex-shrink: 0;
+    padding-right: 8px;
+    line-height: 1.5;
+  }
+  .boshuu-dd {
+    flex: 1;
+    font-size: 13px;
+    color: #1c1c1e;
+    line-height: 1.5;
+  }
+
+  /* Gray info box — 出身大学 */
+  .gray-box {
+    background: #f9f9fb;
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .gray-box-label { font-size: 11px; color: #8e8e93; font-weight: 600; margin-bottom: 6px; }
+  .gray-box-content { font-size: 13px; color: #1c1c1e; line-height: 1.7; }
+
+  /* 会社概要 */
+  .company-table { width: 100%; }
+  .company-row {
+    display: flex;
+    border-bottom: 0.5px solid #f0f0f5;
+    padding: 8px 0;
+  }
+  .company-row:last-child { border-bottom: none; }
+  .company-dt {
+    width: 80px;
+    font-size: 12px;
+    color: #8e8e93;
+    flex-shrink: 0;
+  }
+  .company-dd { font-size: 13px; color: #1c1c1e; line-height: 1.5; }
+
+  /* Apply button */
+  .apply-btn-wrap {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 12px 16px 24px;
+    background: linear-gradient(to top, rgba(242,242,247,1) 60%, rgba(242,242,247,0));
+  }
+  .apply-btn {
+    width: 100%;
+    height: 50px;
+    background: #007a5a;
+    color: #fff;
+    border: none;
+    border-radius: 14px;
+    font-size: 17px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    transition: opacity 0.15s;
+  }
+  .apply-btn:active { opacity: 0.8; }
+
+  /* Bottom tab bar */
+  .tab-bar {
+    height: 83px;
+    background: rgba(242,242,247,0.92);
+    backdrop-filter: blur(30px);
+    border-top: 0.5px solid rgba(0,0,0,0.12);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-around;
+    padding-top: 10px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 20;
+  }
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+    flex: 1;
+    padding: 4px 0;
+    border-radius: 8px;
+    transition: opacity 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tab-item:active { opacity: 0.6; }
+  .tab-icon { font-size: 24px; }
+  .tab-label { font-size: 10px; font-weight: 500; color: #8e8e93; }
+  .tab-item.tab-active .tab-label { color: #007aff; }
+
+  /* Info grid in detail */
+  .d-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 0;
+  }
+  .d-info-cell {
+    background: #f9f9fb;
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .d-info-label { font-size: 11px; color: #8e8e93; margin-bottom: 3px; }
+  .d-info-value { font-size: 14px; font-weight: 600; color: #000; }
+
+  /* Similar jobs */
+  .similar-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 0.5px solid #f0f0f5;
+    cursor: pointer;
+  }
+  .similar-card:last-child { border-bottom: none; }
+  .similar-logo {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    background: #e8f0fe;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .similar-info { flex: 1; min-width: 0; }
+  .similar-title { font-size: 13px; font-weight: 600; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .similar-sub { font-size: 11px; color: #8e8e93; margin-top: 2px; }
+  .similar-pay { font-size: 12px; font-weight: 600; color: #007a5a; margin-top: 2px; }
+
+  /* ─── Label for screenshots ─── */
+  .phone-label {
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
+    opacity: 0.5;
+    text-align: center;
+    margin-top: 8px;
+  }
+
+  .phones-row {
+    display: flex;
+    gap: 48px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .phone-col { display: flex; flex-direction: column; align-items: center; }
+</style>
+</head>
+<body>
+
+<h1>青山ハック — インターン掲載 モックアップ</h1>
+
+<div class="phones-row">
+
+  <!-- ═══ PHONE 1: List screen ═══ -->
+  <div class="phone-col">
+    <div class="phone" id="phone1">
+      <div class="screen">
+        <div class="status-bar">
+          <span class="status-time">9:41</span>
+          <div class="status-icons">
+            <span>●●●</span>
+            <span>WiFi</span>
+            <span>🔋</span>
+          </div>
+        </div>
+
+        <div class="nav-bar">
+          <div class="nav-title">サークル</div>
+        </div>
+
+        <div class="top-context">
+          <div class="campus-pill"><span>●</span> 青山・相模原キャンパス</div>
+        </div>
+
+        <div class="content" id="main-content">
+          <div class="circle-hero">
+            <div class="circle-hero-kicker">CIRCLE &amp; STUDENT OPPORTUNITY</div>
+            <div class="circle-hero-title">サークル探しと企業募集を<br>同じタブで見つける</div>
+            <div class="circle-hero-sub">青山・相模原のサークル一覧を統合し、学生が自然に見る場所へインターン・バイト募集を掲載できます。</div>
+          </div>
+
+          <div class="section-heading">
+            <div class="section-title">サークル一覧</div>
+            <div class="section-action">すべて見る</div>
+          </div>
+
+          <div class="circle-list">
+            <div class="circle-card">
+              <div class="circle-icon" style="background:#fff0f0;">⚽</div>
+              <div class="circle-info">
+                <div class="circle-name">サッカー部</div>
+                <div class="circle-meta">体育会 · 月・水・金</div>
+                <div class="campus-label">青山</div>
+              </div>
+              <div class="circle-chevron">›</div>
+            </div>
+            <div class="circle-card">
+              <div class="circle-icon" style="background:#f0f8ff;">🎸</div>
+              <div class="circle-info">
+                <div class="circle-name">軽音楽部</div>
+                <div class="circle-meta">文化系 · 週2〜3回</div>
+                <div class="campus-label">青山</div>
+              </div>
+              <div class="circle-chevron">›</div>
+            </div>
+            <div class="circle-card">
+              <div class="circle-icon" style="background:#f0fff4;">📸</div>
+              <div class="circle-info">
+                <div class="circle-name">写真部</div>
+                <div class="circle-meta">文化系 · 週1回</div>
+                <div class="campus-label">青山</div>
+              </div>
+              <div class="circle-chevron">›</div>
+            </div>
+            <div class="circle-card">
+              <div class="circle-icon" style="background:#fff9f0;">🏀</div>
+              <div class="circle-info">
+                <div class="circle-name">バスケットボール部</div>
+                <div class="circle-meta">体育会 · 月〜土</div>
+                <div class="campus-label">青山</div>
+              </div>
+              <div class="circle-chevron">›</div>
+            </div>
+            <div class="circle-card">
+              <div class="circle-icon" style="background:#f5f0ff;">🤖</div>
+              <div class="circle-info">
+                <div class="circle-name">ロボット研究会</div>
+                <div class="circle-meta">技術系 · 週2回</div>
+                <div class="campus-label">相模原</div>
+              </div>
+              <div class="circle-chevron">›</div>
+            </div>
+            <div class="circle-card">
+              <div class="circle-icon" style="background:#fff0fa;">🎭</div>
+              <div class="circle-info">
+                <div class="circle-name">演劇部</div>
+                <div class="circle-meta">文化系 · 週3回</div>
+                <div class="campus-label">相模原</div>
+              </div>
+              <div class="circle-chevron">›</div>
+            </div>
+          </div>
+
+          <div class="intern-section">
+            <div class="section-heading">
+              <div class="section-title">企業からの募集</div>
+              <div class="section-action">掲載例</div>
+            </div>
+            <div class="listing-note">
+              <div class="listing-note-icon">◎</div>
+              <div>
+                <div class="listing-note-title">学生がサークルを探す流れで、そのまま募集に出会える掲載枠</div>
+                <div class="listing-note-text">長期インターン、短期バイト、説明会告知などをカード形式で掲載できます。</div>
+              </div>
+            </div>
+            <div class="intern-list">
+
+              <!-- Card 1 -->
+              <div class="intern-card" onclick="openDetail()">
+                <div class="intern-card-header">
+                  <div class="intern-logo">💼</div>
+                  <div class="intern-header-info">
+                    <div class="intern-company">C Career株式会社</div>
+                    <div class="intern-title">Webマーケティング・<br>営業の長期インターン</div>
+                  </div>
+                </div>
+                <div class="intern-card-body">
+                  <div class="intern-tags">
+                    <span class="intern-tag">ES不要</span>
+                    <span class="intern-tag">時給1,200円〜</span>
+                    <span class="intern-tag gray">渋谷</span>
+                    <span class="intern-tag gray">週2日〜</span>
+                  </div>
+                  <div class="intern-grid">
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">時給</div>
+                      <div class="igrid-value">1,200円〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務日数</div>
+                      <div class="igrid-value">週2日〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">対象学年</div>
+                      <div class="igrid-value">大学1〜4年</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務地</div>
+                      <div class="igrid-value">渋谷区</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Card 2 -->
+              <div class="intern-card" onclick="openDetail()">
+                <div class="intern-card-header green">
+                  <div class="intern-logo">🌿</div>
+                  <div class="intern-header-info">
+                    <div class="intern-company">グリーンテック株式会社</div>
+                    <div class="intern-title">SNS運用・コンテンツ<br>マーケティング</div>
+                  </div>
+                </div>
+                <div class="intern-card-body">
+                  <div class="intern-tags">
+                    <span class="intern-tag green">メンター制度あり</span>
+                    <span class="intern-tag gray">表参道</span>
+                    <span class="intern-tag gray">週3日〜</span>
+                  </div>
+                  <div class="intern-grid">
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">時給</div>
+                      <div class="igrid-value">1,350円〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務日数</div>
+                      <div class="igrid-value">週3日〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">対象学年</div>
+                      <div class="igrid-value">大学2〜4年</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務地</div>
+                      <div class="igrid-value">港区</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Card 3 -->
+              <div class="intern-card" onclick="openDetail()">
+                <div class="intern-card-header purple">
+                  <div class="intern-logo">⚡</div>
+                  <div class="intern-header-info">
+                    <div class="intern-company">Nexus株式会社</div>
+                    <div class="intern-title">プロダクト開発・<br>UI/UXデザイン</div>
+                  </div>
+                </div>
+                <div class="intern-card-body">
+                  <div class="intern-tags">
+                    <span class="intern-tag">リモートOK</span>
+                    <span class="intern-tag gray">六本木</span>
+                    <span class="intern-tag gray">週2日〜</span>
+                  </div>
+                  <div class="intern-grid">
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">時給</div>
+                      <div class="igrid-value">1,500円〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務日数</div>
+                      <div class="igrid-value">週2日〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">対象学年</div>
+                      <div class="igrid-value">大学1〜4年</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務地</div>
+                      <div class="igrid-value">港区</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Card 4 -->
+              <div class="intern-card" onclick="openDetail()">
+                <div class="intern-card-header orange">
+                  <div class="intern-logo">🎯</div>
+                  <div class="intern-header-info">
+                    <div class="intern-company">オレンジスタジオ</div>
+                    <div class="intern-title">広告運用・<br>データ分析</div>
+                  </div>
+                </div>
+                <div class="intern-card-body">
+                  <div class="intern-tags">
+                    <span class="intern-tag orange">交通費全額支給</span>
+                    <span class="intern-tag gray">新宿</span>
+                    <span class="intern-tag gray">週2日〜</span>
+                  </div>
+                  <div class="intern-grid">
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">時給</div>
+                      <div class="igrid-value">1,300円〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務日数</div>
+                      <div class="igrid-value">週2日〜</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">対象学年</div>
+                      <div class="igrid-value">大学2〜4年</div>
+                    </div>
+                    <div class="intern-grid-item">
+                      <div class="igrid-label">勤務地</div>
+                      <div class="igrid-value">新宿区</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab bar -->
+        <div class="tab-bar">
+          <div class="tab-item">
+            <div class="tab-icon">📅</div>
+            <div class="tab-label">時間割</div>
+          </div>
+          <div class="tab-item">
+            <div class="tab-icon">📚</div>
+            <div class="tab-label">授業</div>
+          </div>
+          <div class="tab-item tab-active">
+            <div class="tab-icon">👥</div>
+            <div class="tab-label">サークル</div>
+          </div>
+          <div class="tab-item">
+            <div class="tab-icon">⚙️</div>
+            <div class="tab-label">設定</div>
+          </div>
+        </div>
+
+        <!-- ═══ DETAIL SCREEN (overlay) ═══ -->
+        <div class="detail-screen" id="detail-screen">
+          <div class="status-bar" style="background:transparent; position:absolute; top:0; left:0; right:0; z-index:60;">
+            <span class="status-time" style="color:#fff;">9:41</span>
+            <div class="status-icons" style="color:#fff;">
+              <span>●●●</span><span>WiFi</span><span>🔋</span>
+            </div>
+          </div>
+
+          <div class="detail-scroll" id="detail-scroll">
+
+            <!-- Hero -->
+            <div class="detail-hero" style="padding-top:54px;">
+              <div class="d-company">C Career株式会社</div>
+              <div class="d-title">Webマーケティング・営業の長期インターン</div>
+              <div class="detail-hero-tags">
+                <span class="detail-hero-tag">ES不要</span>
+                <span class="detail-hero-tag">時給1,200円〜</span>
+                <span class="detail-hero-tag">週2日〜</span>
+                <span class="detail-hero-tag">渋谷</span>
+              </div>
+            </div>
+
+            <!-- Nav back (on top of hero) -->
+            <div class="detail-back" onclick="closeDetail()">
+                <svg viewBox="0 0 11 18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9,1 1,9 9,17"/>
+                </svg>
+            </div>
+
+            <!-- Quick info grid -->
+            <div style="margin: 12px 16px 0;">
+              <div class="d-info-grid">
+                <div class="d-info-cell">
+                  <div class="d-info-label">💰 時給</div>
+                  <div class="d-info-value">1,200円〜</div>
+                </div>
+                <div class="d-info-cell">
+                  <div class="d-info-label">📅 勤務日数</div>
+                  <div class="d-info-value">週2日〜</div>
+                </div>
+                <div class="d-info-cell">
+                  <div class="d-info-label">🎓 対象学年</div>
+                  <div class="d-info-value">大学1〜4年</div>
+                </div>
+                <div class="d-info-cell">
+                  <div class="d-info-label">📍 勤務地</div>
+                  <div class="d-info-value">渋谷区</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 長期インターンの特徴 -->
+            <div class="d-section">
+              <div class="d-section-title">✨ 長期インターンの特徴</div>
+              <div class="d-section-body">
+                <div class="feature-tags">
+                  <span class="feature-tag">ES不要</span>
+                  <span class="feature-tag">時給1,200円以上</span>
+                  <span class="feature-tag">メンター制度あり</span>
+                  <span class="feature-tag">交通費支給</span>
+                  <span class="feature-tag">リモート相談可</span>
+                  <span class="feature-tag">服装自由</span>
+                  <span class="feature-tag">週2日〜OK</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 仕事内容 -->
+            <div class="d-section">
+              <div class="d-section-title">💼 仕事内容</div>
+              <div class="d-section-body">
+                <p class="d-para">キャリア支援事業を展開する当社で、Webマーケティングや法人営業の実務を担当していただきます。実際のビジネス現場で即戦力として活躍できるスキルを身につけられます。</p>
+                <ul class="d-num-list">
+                  <li>
+                    <span class="d-num">1</span>
+                    <span>SNS・Web広告の運用・分析（Instagram、Twitter、Google広告など）</span>
+                  </li>
+                  <li>
+                    <span class="d-num">2</span>
+                    <span>新規法人顧客へのアプローチ・提案資料作成・商談同席</span>
+                  </li>
+                  <li>
+                    <span class="d-num">3</span>
+                    <span>コンテンツ制作（ブログ記事・LP・メルマガ）</span>
+                  </li>
+                  <li>
+                    <span class="d-num">4</span>
+                    <span>データ集計・レポーティング・KPI管理</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- 内定先企業 -->
+            <div class="d-section">
+              <div class="d-section-title">🏆 インターン卒業生の内定先企業</div>
+              <div class="d-section-body">
+                <div class="highlight-box">
+                  <div class="highlight-box-label">過去の卒業生が内定を獲得した主な企業</div>
+                  <div class="highlight-box-companies">
+                    Google Japan、サイバーエージェント、電通デジタル、博報堂、リクルート、DeNA、楽天グループ、LINE、三菱商事
+                  </div>
+                </div>
+                <p class="d-para" style="font-size:12px;color:#8e8e93;">※ インターン参加後の就職活動実績（一部抜粋）</p>
+              </div>
+            </div>
+
+            <!-- 身につくスキル -->
+            <div class="d-section">
+              <div class="d-section-title">📈 身につくスキル・経験</div>
+              <div class="d-section-body">
+                <ul class="skill-list">
+                  <li>Webマーケティングの基礎〜実践（SEO・SEM・SNS広告）</li>
+                  <li>データ分析・レポート作成（Google Analytics、スプレッドシート）</li>
+                  <li>法人向け営業スキル・提案力・コミュニケーション能力</li>
+                  <li>プロジェクトマネジメントの基礎</li>
+                  <li>ビジネスライティング・コンテンツマーケティング</li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- 募集要項 -->
+            <div class="d-section">
+              <div class="d-section-title">📋 募集要項</div>
+              <div class="d-section-body" style="padding: 0 16px;">
+                <div class="boshuu-table">
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">職種</div>
+                    <div class="boshuu-dd">Webマーケター / 営業</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">給与</div>
+                    <div class="boshuu-dd">時給 1,200円〜1,500円<br><span style="font-size:11px;color:#8e8e93;">（スキル・経験により応相談）</span></div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">交通費</div>
+                    <div class="boshuu-dd">月上限15,000円まで支給</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">手当・待遇</div>
+                    <div class="boshuu-dd">成果報酬あり・社員割引・書籍購入補助</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">応募資格</div>
+                    <div class="boshuu-dd">大学生・大学院生（学年不問）<br>マーケや営業に興味がある方</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">勤務曜日</div>
+                    <div class="boshuu-dd">月〜土（シフト制）</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">勤務日数</div>
+                    <div class="boshuu-dd">週2日〜（応相談）</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">勤務時間</div>
+                    <div class="boshuu-dd">10:00〜19:00の間で1日4h〜</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">対象学年</div>
+                    <div class="boshuu-dd">大学1年生〜大学院2年生</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">選考フロー</div>
+                    <div class="boshuu-dd">書類選考 → 面談（オンライン）→ 内定</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">募集人数</div>
+                    <div class="boshuu-dd">若干名</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">雇用形態</div>
+                    <div class="boshuu-dd">アルバイト（長期インターン）</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">勤務地</div>
+                    <div class="boshuu-dd">東京都渋谷区道玄坂1-2-3</div>
+                  </div>
+                  <div class="boshuu-row">
+                    <div class="boshuu-dt">最寄り駅</div>
+                    <div class="boshuu-dd">渋谷駅 徒歩5分</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 出身大学 -->
+            <div class="d-section">
+              <div class="d-section-title">🎓 インターン参加者の出身大学</div>
+              <div class="d-section-body">
+                <div class="gray-box">
+                  <div class="gray-box-label">参加実績のある大学（一部）</div>
+                  <div class="gray-box-content">青山学院大学 · 明治大学 · 立教大学 · 法政大学 · 早稲田大学 · 慶應義塾大学 · 東京大学 · 一橋大学 など</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 会社概要 -->
+            <div class="d-section">
+              <div class="d-section-title">🏢 会社概要</div>
+              <div class="d-section-body" style="padding: 0 16px;">
+                <div class="company-table">
+                  <div class="company-row">
+                    <div class="company-dt">社名</div>
+                    <div class="company-dd">C Career株式会社</div>
+                  </div>
+                  <div class="company-row">
+                    <div class="company-dt">業種</div>
+                    <div class="company-dd">人材・キャリア支援</div>
+                  </div>
+                  <div class="company-row">
+                    <div class="company-dt">代表者</div>
+                    <div class="company-dd">田中 健太</div>
+                  </div>
+                  <div class="company-row">
+                    <div class="company-dt">設立</div>
+                    <div class="company-dd">2018年4月</div>
+                  </div>
+                  <div class="company-row">
+                    <div class="company-dt">従業員数</div>
+                    <div class="company-dd">45名（インターン含む）</div>
+                  </div>
+                  <div class="company-row">
+                    <div class="company-dt">所在地</div>
+                    <div class="company-dd">東京都渋谷区道玄坂1-2-3 〒150-0043</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 関連求人 -->
+            <div class="d-section" style="margin-bottom:0;">
+              <div class="d-section-title">💡 関連する求人</div>
+              <div class="similar-card">
+                <div class="similar-logo">🌿</div>
+                <div class="similar-info">
+                  <div class="similar-title">SNS運用・コンテンツマーケティング</div>
+                  <div class="similar-sub">グリーンテック株式会社 · 表参道</div>
+                  <div class="similar-pay">時給 1,350円〜</div>
+                </div>
+                <div style="color:#c7c7cc; font-size:16px;">›</div>
+              </div>
+              <div class="similar-card">
+                <div class="similar-logo" style="background:#f5f0ff;">⚡</div>
+                <div class="similar-info">
+                  <div class="similar-title">プロダクト開発・UI/UXデザイン</div>
+                  <div class="similar-sub">Nexus株式会社 · 六本木</div>
+                  <div class="similar-pay">時給 1,500円〜</div>
+                </div>
+                <div style="color:#c7c7cc; font-size:16px;">›</div>
+              </div>
+            </div>
+
+            <div style="height: 20px;"></div>
+
+          </div><!-- /detail-scroll -->
+
+          <!-- Apply button -->
+          <div class="apply-btn-wrap">
+            <button class="apply-btn">この求人に応募する</button>
+          </div>
+        </div><!-- /detail-screen -->
+
+      </div><!-- /screen -->
+    </div><!-- /phone -->
+    <div class="phone-label">一覧 → 詳細</div>
+  </div><!-- /phone-col -->
+
+</div><!-- /phones-row -->
+
+<script>
+  function openDetail() {
+    const d = document.getElementById('detail-screen');
+    d.classList.add('visible');
+    document.getElementById('detail-scroll').scrollTop = 0;
+  }
+
+  function closeDetail() {
+    document.getElementById('detail-screen').classList.remove('visible');
+  }
+</script>
+</body>
+</html>

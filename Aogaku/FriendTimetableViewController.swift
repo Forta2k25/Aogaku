@@ -35,9 +35,6 @@ final class FriendTimetableViewController: UIViewController {
     // スリムなピル型トグル
     private let termSegment = UISegmentedControl(items: [FriendSemester.first.jp, FriendSemester.second.jp])
 
-    // Storyboard のシラバス詳細を起動するための ID
-    private let detailSceneID = "SyllabusDetailViewController"
-
     // MARK: - Layout
     private enum Layout {
         static let afterWeekHeaderSpacing: CGFloat = 18
@@ -53,6 +50,15 @@ final class FriendTimetableViewController: UIViewController {
     }
 
     // MARK: - Lifecycle
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        ScreenTracker.shared.appear("友だちの時間割")
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        ScreenTracker.shared.disappear("友だちの時間割")
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = HackColors.background
@@ -278,6 +284,17 @@ final class FriendTimetableViewController: UIViewController {
             let cellView: UIView
             if dayCourses.isEmpty {
                 cellView = makeCourseCell()
+            } else if dayCourses.count == 1 {
+                // 1件のみ: 通常セルと同じレイアウトでタイトルをフル表示
+                let cell = makeCourseCell()
+                apply(course: dayCourses[0], to: cell, truncateTitle: false)
+                let tag = nextTag; nextTag += 1
+                cellMap[tag] = dayCourses[0]
+                cell.tag = tag
+                let tap = UITapGestureRecognizer(target: self, action: #selector(didTapCell(_:)))
+                cell.isUserInteractionEnabled = true
+                cell.addGestureRecognizer(tap)
+                cellView = cell
             } else {
                 cellView = makeMultiCourseCell(courses: dayCourses)
             }
@@ -482,12 +499,12 @@ final class FriendTimetableViewController: UIViewController {
         return map[p]
     }
 
-    private func apply(course: GridCell, to view: UIView) {
+    private func apply(course: GridCell, to view: UIView, truncateTitle: Bool = true) {
         guard let content = view.viewWithTag(99) as? TimetableCellContentView else { return }
 
-        // タイトル（最大16文字）
+        // タイトル（通常は最大16文字、truncateTitle=false のときはフル表示）
         let titleText = course.title
-        content.titleLabel.text = titleText.count > 16 ? String(titleText.prefix(16)) : titleText
+        content.titleLabel.text = (truncateTitle && titleText.count > 16) ? String(titleText.prefix(16)) : titleText
         content.titleLabel.textColor = .white
 
         // 教室（最初の5文字）
@@ -523,31 +540,37 @@ final class FriendTimetableViewController: UIViewController {
     @objc private func didTapCell(_ gr: UITapGestureRecognizer) {
         guard let v = gr.view, let cell = cellMap[v.tag] else { return }
 
-        let sb = UIStoryboard(name: "Main", bundle: nil)
-        guard let vc = sb.instantiateViewController(withIdentifier: detailSceneID) as? SyllabusDetailViewController else { return }
+        let course = Course(
+            id: (cell.regNumber ?? cell.docID ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            title: cell.title,
+            room: cell.room ?? "",
+            teacher: cell.teacher ?? "",
+            credits: nil,
+            campus: nil,
+            category: nil,
+            syllabusURL: cell.syllabusURL,
+            term: semester.jp
+        )
+        let vc = CourseDetailViewController(
+            course: course,
+            location: SlotLocation(day: cell.day, period: max(1, cell.period)),
+            term: termKeyForCurrentSelection(),
+            showsAttendanceControls: false,
+            allowsCourseManagement: false,
+            showsEnrolledFriends: false,
+            showsMoodleAssignments: false
+        )
+        vc.modalPresentationStyle = .pageSheet
 
-        vc.initialTitle = cell.title
-        vc.initialTeacher = cell.teacher
-        vc.targetDay = cell.day
-        vc.targetPeriod = cell.period
-        vc.initialURLString = cell.syllabusURL           // Firestore の URL
-        vc.docID = cell.docID
-        vc.initialRegNumber = cell.regNumber             // Firestore の id
-        vc.initialRoom = cell.room
-
-        let nav = UINavigationController(rootViewController: vc)
-        nav.modalPresentationStyle = .pageSheet
-
-        // ← これを追加：ナビゲーションバーを隠して「白いバー」と「×」を消す
-        nav.setNavigationBarHidden(true, animated: false)
-
-        if let sheet = nav.sheetPresentationController {
+        if let sheet = vc.sheetPresentationController {
             sheet.detents = [.large()]
             sheet.prefersGrabberVisible = true
-            // ※ 上の小さな"つまみ"も消したい場合は ↓ を true→false に
-            // sheet.prefersGrabberVisible = false
         }
-        present(nav, animated: true)
+        present(vc, animated: true)
+    }
+
+    private func termKeyForCurrentSelection() -> TermKey {
+        TermKey(year: year, semester: semester == .first ? .spring : .fall)
     }
 
     // MARK: - Firestore 読み込み

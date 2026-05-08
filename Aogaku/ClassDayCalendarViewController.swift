@@ -62,6 +62,13 @@ final class ClassDayCalendarViewController: UIViewController,
         
         title = "学事暦"
 
+        // 左上の × ボタン（push/present どちらでも正しく閉じる）
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .close,
+            target: self,
+            action: #selector(closeTapped)
+        )
+
         setupTopArea()
         setupCollection()
         setupBottomArea()
@@ -83,6 +90,14 @@ final class ClassDayCalendarViewController: UIViewController,
         setMonth(clampedToAllowed(firstDay(of: Date())))
         reload()
     }
+    @objc private func closeTapped() {
+        if let nav = navigationController, nav.viewControllers.first !== self {
+            nav.popViewController(animated: true)
+        } else {
+            dismiss(animated: true)
+        }
+    }
+
     @objc private func onAdMobReady() {
         loadBannerIfNeeded()
     }

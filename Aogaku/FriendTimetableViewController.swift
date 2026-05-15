@@ -46,7 +46,9 @@ final class FriendTimetableViewController: UIViewController {
         static let periodTimeGap: CGFloat = 2
         static let sectionSpacing: CGFloat = 12
         /// 自分の時間割の periodRowMinHeight (timetable.swift) と揃える
-        static let courseMinHeight: CGFloat = 105
+        static let courseMinHeight: CGFloat = 88
+        /// OD スロット行の高さ（timetable.swift の onlineRowHeight と揃える）
+        static let onlineSlotHeight: CGFloat = 68
     }
 
     // MARK: - Lifecycle
@@ -185,11 +187,17 @@ final class FriendTimetableViewController: UIViewController {
             content.addArrangedSubview(makeRow(period: p, columns: columns))
         }
 
-        // オンデマンド（period == 0）行
-        let hasOnline = courses.contains(where: { $0.period == 0 })
-        if hasOnline {
+        // オンデマンド（period == 0）行 — 曜日ごとに複数スロット対応
+        let onlineCourses = courses.filter { $0.period == 0 }
+        if !onlineCourses.isEmpty {
             content.setCustomSpacing(Layout.sectionSpacing, after: content.arrangedSubviews.last!)
-            content.addArrangedSubview(makeOnlineRow(columns: columns))
+            let maxSlots = (0..<columns)
+                .map { day in onlineCourses.filter { $0.day == day }.count }
+                .max() ?? 1
+            for s in 0..<maxSlots {
+                let row = makeOnlineSlotRow(slotIndex: s, columns: columns)
+                content.addArrangedSubview(row)
+            }
         }
     }
 
@@ -261,14 +269,22 @@ final class FriendTimetableViewController: UIViewController {
         return row
     }
 
-    /// オンデマンド（period == 0）を曜日ごとにまとめて表示
-    private func makeOnlineRow(columns: Int) -> UIView {
+    /// OD スロット 1行分（slotIndex 番目のコース）を生成
+    private func makeOnlineSlotRow(slotIndex: Int, columns: Int) -> UIView {
         let row = UIStackView()
         row.axis = .horizontal
         row.alignment = .fill
         row.spacing = Layout.interItemSpacing
 
-        row.addArrangedSubview(makeOnlineBadge())
+        // バッジは最初の行だけ表示
+        if slotIndex == 0 {
+            row.addArrangedSubview(makeOnlineBadge())
+        } else {
+            let spacer = UIView()
+            spacer.translatesAutoresizingMaskIntoConstraints = false
+            spacer.widthAnchor.constraint(equalToConstant: Layout.leftColumnWidth).isActive = true
+            row.addArrangedSubview(spacer)
+        }
 
         let cols = UIStackView()
         cols.axis = .horizontal
@@ -282,27 +298,72 @@ final class FriendTimetableViewController: UIViewController {
                 .sorted { $0.title < $1.title }
 
             let cellView: UIView
-            if dayCourses.isEmpty {
-                cellView = makeCourseCell()
-            } else if dayCourses.count == 1 {
-                // 1件のみ: 通常セルと同じレイアウトでタイトルをフル表示
-                let cell = makeCourseCell()
-                apply(course: dayCourses[0], to: cell, truncateTitle: false)
+            if slotIndex < dayCourses.count {
+                let course = dayCourses[slotIndex]
+                let cell = makeOnlineCell()
+                applyOnline(course: course, to: cell)
                 let tag = nextTag; nextTag += 1
-                cellMap[tag] = dayCourses[0]
+                cellMap[tag] = course
                 cell.tag = tag
                 let tap = UITapGestureRecognizer(target: self, action: #selector(didTapCell(_:)))
                 cell.isUserInteractionEnabled = true
                 cell.addGestureRecognizer(tap)
                 cellView = cell
             } else {
-                cellView = makeMultiCourseCell(courses: dayCourses)
+                // このスロットに授業なし → 透明な空白セル
+                let empty = UIView()
+                empty.translatesAutoresizingMaskIntoConstraints = false
+                empty.heightAnchor.constraint(equalToConstant: Layout.onlineSlotHeight).isActive = true
+                cellView = empty
             }
             cols.addArrangedSubview(cellView)
         }
 
         row.addArrangedSubview(cols)
         return row
+    }
+
+    /// OD スロット用のセル（高さ onlineSlotHeight・TimetableCellContentView 流用）
+    private func makeOnlineCell() -> UIView {
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.layer.cornerRadius = 8
+        container.layer.masksToBounds = true
+
+        let content = TimetableCellContentView()
+        content.tag = 99
+        content.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(content)
+        NSLayoutConstraint.activate([
+            container.heightAnchor.constraint(equalToConstant: Layout.onlineSlotHeight),
+            content.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6)
+        ])
+        return container
+    }
+
+    /// OD セルに授業データを適用（「[オンライン]」を除去・教室列は非表示）
+    private func applyOnline(course: GridCell, to view: UIView) {
+        guard let content = view.viewWithTag(99) as? TimetableCellContentView else { return }
+
+        let stripped = course.title
+            .replacingOccurrences(of: #"\s*[\[［]オンライン[\]］]\s*$"#, with: "",
+                                  options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        content.titleLabel.text = stripped
+        content.titleLabel.textColor = .white
+        content.setRoom("")   // 教室ピルは不要
+
+        let colorKey = course.colorKey.flatMap { SlotColorKey(rawValue: $0) } ?? .teal
+        view.backgroundColor = UIColor { trait in
+            let base = colorKey.uiColor.resolvedColor(with: trait)
+            return trait.userInterfaceStyle == .dark
+                ? base.mixed(with: UIColor(white: 0.18, alpha: 1), ratio: 0.15)
+                : base.mixed(with: .white, ratio: 0.50)
+        }
+        view.layer.borderWidth = 0
     }
 
     private func makeOnlineBadge() -> UIView {
@@ -385,6 +446,9 @@ final class FriendTimetableViewController: UIViewController {
 
         let lbl = UILabel()
         lbl.text = course.title
+            .replacingOccurrences(of: #"\s*[\[［]オンライン[\]］]\s*$"#, with: "",
+                                  options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
         lbl.font = .systemFont(ofSize: 12, weight: .semibold)
         lbl.textColor = .white
         lbl.numberOfLines = 2
@@ -502,8 +566,11 @@ final class FriendTimetableViewController: UIViewController {
     private func apply(course: GridCell, to view: UIView, truncateTitle: Bool = true) {
         guard let content = view.viewWithTag(99) as? TimetableCellContentView else { return }
 
-        // タイトル（通常は最大16文字、truncateTitle=false のときはフル表示）
+        // タイトル（「[オンライン]」除去後、通常は最大16文字、truncateTitle=false のときはフル表示）
         let titleText = course.title
+            .replacingOccurrences(of: #"\s*[\[［]オンライン[\]］]\s*$"#, with: "",
+                                  options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
         content.titleLabel.text = (truncateTitle && titleText.count > 16) ? String(titleText.prefix(16)) : titleText
         content.titleLabel.textColor = .white
 

@@ -1,5 +1,99 @@
 import UIKit
 
+// MARK: - New programmatic cell
+
+final class SyllabusCell: UITableViewCell {
+    static let reuseID = "SyllabusCellV2"
+
+    private let nameLabel  = UILabel()
+    private let creditLabel = UILabel()
+    private let subLabel   = UILabel()
+    private let evalLabel  = UILabel()
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setup() {
+        nameLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        nameLabel.numberOfLines = 0
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        creditLabel.font = .systemFont(ofSize: 13)
+        creditLabel.textColor = .secondaryLabel
+        creditLabel.textAlignment = .right
+        creditLabel.setContentHuggingPriority(.required, for: .horizontal)
+        creditLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        subLabel.font = .systemFont(ofSize: 13)
+        subLabel.textColor = .secondaryLabel
+        subLabel.numberOfLines = 1
+
+        evalLabel.font = .systemFont(ofSize: 12)
+        evalLabel.textColor = .tertiaryLabel
+        evalLabel.numberOfLines = 1
+
+        let topRow = UIStackView(arrangedSubviews: [nameLabel, creditLabel])
+        topRow.axis = .horizontal
+        topRow.alignment = .top
+        topRow.spacing = 8
+
+        let mainStack = UIStackView(arrangedSubviews: [topRow, subLabel, evalLabel])
+        mainStack.axis = .vertical
+        mainStack.spacing = 4
+        mainStack.translatesAutoresizingMaskIntoConstraints = false
+
+        contentView.addSubview(mainStack)
+        NSLayoutConstraint.activate([
+            mainStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            mainStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            mainStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            mainStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+        ])
+    }
+
+    func configure(name: String, credit: String, teacher: String, time: String,
+                   campus: String, term: String, eval: String, isDark: Bool) {
+        nameLabel.text = name
+        creditLabel.text = credit.isEmpty ? nil : "\(credit)単位"
+        creditLabel.isHidden = credit.isEmpty
+
+        var parts: [String] = []
+        if !teacher.isEmpty { parts.append(teacher) }
+        if !time.isEmpty    { parts.append(time) }
+        if !campus.isEmpty  { parts.append(campus) }
+        if !term.isEmpty    { parts.append(term) }
+        subLabel.text = parts.joined(separator: "  ·  ")
+
+        let hasEval = !eval.isEmpty && eval != "-"
+        evalLabel.text = hasEval ? eval : nil
+        evalLabel.isHidden = !hasEval
+
+        let bg: UIColor = isDark ? UIColor(white: 0.16, alpha: 1) : .secondarySystemBackground
+        backgroundColor = bg
+        contentView.backgroundColor = bg
+
+        let sel = UIView()
+        sel.backgroundColor = isDark ? UIColor(white: 0.22, alpha: 1) : .systemFill
+        selectedBackgroundView = sel
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        nameLabel.text   = nil
+        creditLabel.text = nil
+        subLabel.text    = nil
+        evalLabel.text   = nil
+        evalLabel.isHidden = false
+        creditLabel.isHidden = false
+    }
+}
+
+// MARK: - Legacy storyboard cell (kept for storyboard compatibility)
+
 final class syllabusTableViewCell: UITableViewCell {
     @IBOutlet weak var class_name: UILabel!
     @IBOutlet weak var teacher_name: UILabel!

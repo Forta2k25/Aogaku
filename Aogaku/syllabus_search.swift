@@ -6,7 +6,7 @@ private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
 }
 
-final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDelegate {
+final class syllabus_search: UIViewController, BannerViewDelegate {
 
     // ===== 入出力 =====
     var initialCategory: String?
@@ -33,16 +33,6 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
     // ===== UI =====
     private let scrollView = UIScrollView()
     private let contentStack = UIStackView()
-    private let grabber = UIView()
-    private let titleLabel = UILabel()
-    private let headerButtonStack = UIStackView()
-    private let resetButton = UIButton(type: .system)
-    private let favoritesButton = UIButton(type: .system)
-
-    private let searchRow = UIStackView()
-    private let searchFieldContainer = UIView()
-    private let searchIconView = UIImageView(image: UIImage(systemName: "magnifyingglass"))
-    private let keywordTextField = UITextField()
     private let applyButton = UIButton(type: .system)
 
     private let buttonRow = UIStackView()
@@ -105,6 +95,13 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
         selectedTerm = initialTerm
         selectedRegistrationType = initialRegistrationType
 
+        // ナビバー
+        title = "絞り込み"
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .close, target: self, action: #selector(didTapClose))
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "リセット", style: .plain, target: self, action: #selector(didTapReset))
+
         buildUI()
         setupFacultyMenu()
         setupDepartmentMenu(initial: selectedCategory ?? "指定なし")
@@ -117,6 +114,8 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
                                                name: .adMobReady,
                                                object: nil)
     }
+
+    @objc private func didTapClose() { dismiss(animated: true) }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -137,139 +136,125 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
     private func buildUI() {
         view.backgroundColor = searchBGColor(for: traitCollection)
 
+        // MARK: スクロールエリア
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.alwaysBounceVertical = true
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.axis = .vertical
-        contentStack.spacing = 8
+        contentStack.spacing = 12
 
+        // MARK: 下部の「この条件で検索」ボタン
+        var applyCfg = UIButton.Configuration.filled()
+        applyCfg.title = "この条件で検索"
+        applyCfg.cornerStyle = .large
+        applyCfg.contentInsets = NSDirectionalEdgeInsets(top: 16, leading: 0, bottom: 16, trailing: 0)
+        applyCfg.baseBackgroundColor = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+        applyCfg.baseForegroundColor = .white
+        applyCfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
+            var b = a; b.font = .systemFont(ofSize: 16, weight: .bold); return b
+        }
+        applyButton.configuration = applyCfg
+        applyButton.translatesAutoresizingMaskIntoConstraints = false
+        applyButton.addTarget(self, action: #selector(didTapApply), for: .touchUpInside)
+
+        let bottomBar = UIView()
+        bottomBar.backgroundColor = searchBGColor(for: traitCollection)
+        bottomBar.translatesAutoresizingMaskIntoConstraints = false
+        bottomBar.addSubview(applyButton)
+
+        view.addSubview(bottomBar)
         view.addSubview(scrollView)
         scrollView.addSubview(contentStack)
 
         NSLayoutConstraint.activate([
+            bottomBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            applyButton.topAnchor.constraint(equalTo: bottomBar.topAnchor, constant: 12),
+            applyButton.leadingAnchor.constraint(equalTo: bottomBar.leadingAnchor, constant: 16),
+            applyButton.trailingAnchor.constraint(equalTo: bottomBar.trailingAnchor, constant: -16),
+            applyButton.bottomAnchor.constraint(equalTo: bottomBar.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+
             scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomBar.topAnchor),
 
-            contentStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 4),
+            contentStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 16),
             contentStack.leadingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.leadingAnchor, constant: 16),
             contentStack.trailingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.trailingAnchor, constant: -16),
-            contentStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -12),
+            contentStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -16),
             contentStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -32)
         ])
 
-        let headerRow = UIStackView()
-        headerRow.axis = .horizontal
-        headerRow.alignment = .center
-        headerRow.spacing = 8
+        // MARK: 学期
+        contentStack.addArrangedSubview(makeSectionCard(
+            label: "学期",
+            content: makeSegmentRow(termSegmentedControl, items: ["指定なし", "前期", "後期"])
+        ))
+        termSegmentedControl.addTarget(self, action: #selector(termChanged(_:)), for: .valueChanged)
 
-        titleLabel.text = "シラバス検索"
-        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
-        titleLabel.textColor = .label
+        // MARK: キャンパス
+        contentStack.addArrangedSubview(makeSectionCard(
+            label: "キャンパス",
+            content: makeSegmentRow(campusSegmentedControl, items: ["指定なし", "青山", "相模原"])
+        ))
+        campusSegmentedControl.addTarget(self, action: #selector(campusChanged(_:)), for: .valueChanged)
 
-        headerButtonStack.axis = .horizontal
-        headerButtonStack.spacing = 8
-        headerButtonStack.alignment = .center
+        // MARK: 形式
+        contentStack.addArrangedSubview(makeSectionCard(
+            label: "形式",
+            content: makeSegmentRow(placeSegmentedControl, items: ["指定なし", "対面", "オンライン"])
+        ))
+        placeSegmentedControl.addTarget(self, action: #selector(placeChanged(_:)), for: .valueChanged)
 
-        configureTopIconButton(resetButton, systemName: "arrow.counterclockwise")
-        configureTopIconButton(favoritesButton, systemName: "bookmark")
-        resetButton.addTarget(self, action: #selector(didTapReset), for: .touchUpInside)
-        favoritesButton.addTarget(self, action: #selector(didTapFavorites), for: .touchUpInside)
-        headerButtonStack.addArrangedSubview(resetButton)
-        headerButtonStack.addArrangedSubview(favoritesButton)
+        // MARK: 曜日・時限グリッド
+        gridContainerView.translatesAutoresizingMaskIntoConstraints = false
+        gridContainerView.heightAnchor.constraint(equalTo: gridContainerView.widthAnchor, multiplier: 0.78).isActive = true
+        contentStack.addArrangedSubview(makeSectionCard(label: "曜日・時限", content: gridContainerView))
+        buildSlotGrid()
 
-        headerRow.addArrangedSubview(titleLabel)
-        headerRow.addArrangedSubview(UIView())
-        headerRow.addArrangedSubview(headerButtonStack)
-        contentStack.addArrangedSubview(headerRow)
-
-        searchRow.axis = .horizontal
-        searchRow.spacing = 8
-        searchRow.alignment = .fill
-
-        searchFieldContainer.translatesAutoresizingMaskIntoConstraints = false
-        searchFieldContainer.layer.cornerRadius = 14
-        searchFieldContainer.layer.masksToBounds = true
-        searchFieldContainer.heightAnchor.constraint(equalToConstant: 52).isActive = true
-
-        searchIconView.translatesAutoresizingMaskIntoConstraints = false
-        searchIconView.tintColor = .secondaryLabel
-
-        keywordTextField.translatesAutoresizingMaskIntoConstraints = false
-        keywordTextField.borderStyle = .none
-        keywordTextField.backgroundColor = .clear
-        keywordTextField.placeholder = "授業名・教員名で検索"
-        keywordTextField.font = .systemFont(ofSize: 15)
-        keywordTextField.delegate = self
-        keywordTextField.returnKeyType = .search
-
-        searchFieldContainer.addSubview(searchIconView)
-        searchFieldContainer.addSubview(keywordTextField)
-        NSLayoutConstraint.activate([
-            searchIconView.leadingAnchor.constraint(equalTo: searchFieldContainer.leadingAnchor, constant: 14),
-            searchIconView.centerYAnchor.constraint(equalTo: searchFieldContainer.centerYAnchor),
-            searchIconView.widthAnchor.constraint(equalToConstant: 20),
-            searchIconView.heightAnchor.constraint(equalToConstant: 20),
-
-            keywordTextField.leadingAnchor.constraint(equalTo: searchIconView.trailingAnchor, constant: 10),
-            keywordTextField.trailingAnchor.constraint(equalTo: searchFieldContainer.trailingAnchor, constant: -12),
-            keywordTextField.centerYAnchor.constraint(equalTo: searchFieldContainer.centerYAnchor),
-            keywordTextField.heightAnchor.constraint(equalToConstant: 22)
-        ])
-
-        var applyConfig = UIButton.Configuration.filled()
-        applyConfig.title = "検索"
-        applyConfig.cornerStyle = .large
-        applyConfig.baseBackgroundColor = .systemGreen
-        applyConfig.baseForegroundColor = .white
-        applyButton.configuration = applyConfig
-        applyButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
-        applyButton.widthAnchor.constraint(equalToConstant: 96).isActive = true
-        applyButton.heightAnchor.constraint(equalToConstant: 52).isActive = true
-        applyButton.addTarget(self, action: #selector(didTapApply), for: .touchUpInside)
-
-        searchRow.addArrangedSubview(searchFieldContainer)
-        searchRow.addArrangedSubview(applyButton)
-        contentStack.addArrangedSubview(searchRow)
-
+        // MARK: 学部・学科
         buttonRow.axis = .horizontal
         buttonRow.spacing = 8
         buttonRow.distribution = .fillEqually
-
         configureMenuButton(facultyButton, title: "学部")
         configureMenuButton(departmentButton, title: "学科")
         buttonRow.addArrangedSubview(facultyButton)
         buttonRow.addArrangedSubview(departmentButton)
-        contentStack.addArrangedSubview(buttonRow)
+        contentStack.addArrangedSubview(makeSectionCard(label: "学部・学科", content: buttonRow))
 
-        contentStack.addArrangedSubview(makeSegmentRow(campusSegmentedControl, items: ["指定なし","青山","相模原"]))
-        contentStack.addArrangedSubview(makeSegmentRow(termSegmentedControl, items: ["指定なし","前期","後期"]))
-        contentStack.addArrangedSubview(makeSegmentRow(placeSegmentedControl, items: ["指定なし","対面","オンライン"]))
-
-        campusSegmentedControl.addTarget(self, action: #selector(campusChanged(_:)), for: .valueChanged)
-        termSegmentedControl.addTarget(self, action: #selector(termChanged(_:)), for: .valueChanged)
-        placeSegmentedControl.addTarget(self, action: #selector(placeChanged(_:)), for: .valueChanged)
-
-        gridContainerView.translatesAutoresizingMaskIntoConstraints = false
-        gridContainerView.heightAnchor.constraint(equalTo: gridContainerView.widthAnchor, multiplier: 0.82).isActive = true
-        contentStack.addArrangedSubview(gridContainerView)
-
-        buildSlotGrid()
         applyTheme()
     }
 
-    private func configureTopIconButton(_ button: UIButton, systemName: String) {
-        button.translatesAutoresizingMaskIntoConstraints = false
-        var config = UIButton.Configuration.plain()
-        config.image = UIImage(systemName: systemName)
-        config.baseForegroundColor = .label
-        config.background.backgroundColor = .systemBackground
-        config.cornerStyle = .medium
-        config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
-        button.configuration = config
-        button.widthAnchor.constraint(equalToConstant: 48).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 48).isActive = true
+    // カード形式のセクションを生成
+    private func makeSectionCard(label: String, content: UIView) -> UIView {
+        let lbl = UILabel()
+        lbl.text = label
+        lbl.font = .systemFont(ofSize: 13, weight: .semibold)
+        lbl.textColor = .secondaryLabel
+
+        let inner = UIStackView(arrangedSubviews: [lbl, content])
+        inner.axis = .vertical
+        inner.spacing = 8
+        inner.translatesAutoresizingMaskIntoConstraints = false
+
+        let card = UIView()
+        card.backgroundColor = .systemBackground
+        card.layer.cornerRadius = 14
+        card.layer.shadowColor = UIColor.black.cgColor
+        card.layer.shadowOpacity = 0.04
+        card.layer.shadowOffset = CGSize(width: 0, height: 1)
+        card.layer.shadowRadius = 4
+        card.addSubview(inner)
+        NSLayoutConstraint.activate([
+            inner.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
+            inner.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
+            inner.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
+            inner.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14)
+        ])
+        return card
     }
 
     private func configureMenuButton(_ button: UIButton, title: String) {
@@ -308,6 +293,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
 
     private func buildSlotGrid() {
         slotButtons = []
+        let gap: CGFloat = 5
         for row in 0..<5 {
             for col in 0..<5 {
                 let button = UIButton(type: .system)
@@ -316,19 +302,17 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
                 let title = "\(days[col])\(periods[row])"
                 var config = UIButton.Configuration.plain()
                 config.title = title
-                config.baseForegroundColor = .lightGray
+                config.baseForegroundColor = .secondaryLabel
                 config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
                     var outgoing = incoming
-                    outgoing.font = .systemFont(ofSize: 15, weight: .regular)
+                    outgoing.font = .systemFont(ofSize: 14, weight: .medium)
                     return outgoing
                 }
                 var bg = UIBackgroundConfiguration.clear()
                 bg.backgroundColor = slotNormalBGColor(for: traitCollection)
-                bg.cornerRadius = 0
+                bg.cornerRadius = 10
                 config.background = bg
                 button.configuration = config
-                button.layer.borderWidth = 1.0
-                button.layer.borderColor = UIColor.black.cgColor
                 button.addTarget(self, action: #selector(slotTapped(_:)), for: .touchUpInside)
                 slotButtons.append(button)
                 gridContainerView.addSubview(button)
@@ -343,7 +327,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
                 btn.leadingAnchor.constraint(equalTo: gridContainerView.leadingAnchor).isActive = true
             } else {
                 let left = slotButtons[idx - 1]
-                btn.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: spacing).isActive = true
+                btn.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: gap).isActive = true
                 btn.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
             }
             if col == 4 {
@@ -353,7 +337,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
                 btn.topAnchor.constraint(equalTo: gridContainerView.topAnchor).isActive = true
             } else {
                 let above = slotButtons[(row - 1) * 5 + col]
-                btn.topAnchor.constraint(equalTo: above.bottomAnchor, constant: spacing).isActive = true
+                btn.topAnchor.constraint(equalTo: above.bottomAnchor, constant: gap).isActive = true
                 btn.heightAnchor.constraint(equalTo: above.heightAnchor).isActive = true
             }
             if row == 4 {
@@ -445,29 +429,20 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
         scrollView.backgroundColor = bg
         contentStack.backgroundColor = .clear
         adContainer.backgroundColor = bg
-        searchFieldContainer.backgroundColor = searchFieldBG(for: traitCollection)
-        keywordTextField.textColor = (traitCollection.userInterfaceStyle == .dark) ? .black : .label
-        keywordTextField.tintColor = keywordTextField.textColor
-        let phColor: UIColor = (traitCollection.userInterfaceStyle == .dark) ? .systemGray2 : .placeholderText
-        keywordTextField.attributedPlaceholder = NSAttributedString(string: "授業名・教員名で検索", attributes: [.foregroundColor: phColor])
-        searchIconView.tintColor = (traitCollection.userInterfaceStyle == .dark) ? .black : .secondaryLabel
-        [campusSegmentedControl, termSegmentedControl, placeSegmentedControl, registrationSegmentedControl].forEach(restyleSegmented)
+        [campusSegmentedControl, termSegmentedControl, placeSegmentedControl].forEach(restyleSegmented)
         configureSlotButtons()
     }
 
-    private func searchFieldBG(for trait: UITraitCollection) -> UIColor {
-        (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemGray6
-    }
-
     private func configureSlotButtons() {
+        let green = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
         for button in slotButtons {
             button.configurationUpdateHandler = { [weak self] btn in
                 guard let self = self else { return }
                 var config = btn.configuration ?? .plain()
-                config.baseForegroundColor = btn.isSelected ? .white : .lightGray
+                config.baseForegroundColor = btn.isSelected ? .white : .secondaryLabel
                 var bg = config.background ?? UIBackgroundConfiguration.clear()
-                bg.cornerRadius = 0
-                bg.backgroundColor = btn.isSelected ? .systemGreen : self.slotNormalBGColor(for: self.traitCollection)
+                bg.cornerRadius = 10
+                bg.backgroundColor = btn.isSelected ? green : self.slotNormalBGColor(for: self.traitCollection)
                 config.background = bg
                 btn.configuration = config
             }
@@ -601,7 +576,7 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
         let (day, ps) = deriveSingleDayAndPeriods()
 
         let criteria = SyllabusSearchCriteria(
-            keyword: keywordTextField.text,
+            keyword: nil,
             category: selectedCategory,
             department: selectedDepartment,
             campus: campusValue,
@@ -629,7 +604,6 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
         selectedRegistrationType = nil
         selectedStates = Array(repeating: false, count: selectedStates.count)
 
-        keywordTextField.text = nil
         setButtonTitleAndColor(facultyButton, title: "学部", color: .lightGray)
         setButtonTitleAndColor(departmentButton, title: "学科", color: .lightGray)
         campusSegmentedControl.selectedSegmentIndex = 0
@@ -654,12 +628,6 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
         onApply?(criteria)
     }
 
-    @objc private func didTapFavorites() {
-        let vc = FavoritesListViewController()
-        let nav = UINavigationController(rootViewController: vc)
-        present(nav, animated: true)
-    }
-
     private func deriveTimeSlots() -> [(String, Int)]? {
         var result: [(String, Int)] = []
         for idx in 0..<selectedStates.count where selectedStates[idx] {
@@ -681,12 +649,6 @@ final class syllabus_search: UIViewController, BannerViewDelegate, UITextFieldDe
         let first = pairs[0].dayIndex
         guard pairs.allSatisfy({ $0.dayIndex == first }) else { return (nil, nil) }
         return (days[first], pairs.map { $0.period }.sorted())
-    }
-
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        textField.resignFirstResponder()
-        didTapApply()
-        return true
     }
 
     // ===== Ad =====

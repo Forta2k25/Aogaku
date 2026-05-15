@@ -111,6 +111,9 @@ final class CourseDetailViewController: UIViewController {
     // MARK: - Syllabus Actions (シラバスTabから開いたとき)
     private let showsSyllabusActions: Bool
     private let syllabusDocID: String?        // Firestore docID（ブックマーク用）
+    private let showsReview: Bool
+    private weak var reviewWriteButton: UIButton?
+    private var resolvedReviewDocID: String?
     private var isAddFlowBusy = false
     private weak var syllabusAddButton: UIButton?
     private weak var syllabusBookmarkButton: UIButton?
@@ -121,6 +124,12 @@ final class CourseDetailViewController: UIViewController {
     private var courseAssignments: [MoodleEvent] = []
     private var moodlePastContainer: UIStackView?  // 期限切れ行の親スタック
     private var moodlePastExpanded = false          // 折りたたみ状態
+    private var moodleContentContainer: UIView?     // セクション全体の折りたたみコンテナ
+    private var moodleSectionChevron: UIImageView?  // ヘッダーのシェブロン
+    private var moodleSectionExpanded: Bool {       // 授業ごとに UserDefaults で永続化
+        get { UserDefaults.standard.object(forKey: "moodle.expanded.\(course.id)") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "moodle.expanded.\(course.id)") }
+    }
 
     // MARK: - Attendance
     private var counts = AttendanceCounts(attended: 0, late: 0, absent: 0)
@@ -138,7 +147,8 @@ final class CourseDetailViewController: UIViewController {
          showsEnrolledFriends: Bool = true,
          showsMoodleAssignments: Bool = true,
          showsSyllabusActions: Bool = false,
-         syllabusDocID: String? = nil) {
+         syllabusDocID: String? = nil,
+         showsReview: Bool = false) {
         self.course = course
         self.location = location
         self.term = term
@@ -148,6 +158,7 @@ final class CourseDetailViewController: UIViewController {
         self.showsMoodleAssignments = showsMoodleAssignments
         self.showsSyllabusActions = showsSyllabusActions
         self.syllabusDocID = syllabusDocID
+        self.showsReview = showsReview
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .pageSheet
     }
@@ -187,8 +198,12 @@ final class CourseDetailViewController: UIViewController {
         setupAdBanner()
         NotificationCenter.default.addObserver(self, selector: #selector(onAdMobReady),
                                                name: .adMobReady, object: nil)
-        
-        
+        if showsReview {
+            resolveReviewDocIDThenBuild()   // 常に先頭に表示（firestoreDocID未設定時はクエリで解決）
+            if showsSyllabusActions {
+                loadAndBuildReviewSummary() // 公開後にサマリー追加
+            }
+        }
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -616,57 +631,20 @@ final class CourseDetailViewController: UIViewController {
 
     // MARK: - Color Picker Row（「コマの色を変更」ボタン → 折りたたみ展開）
     private func buildColorPickerRow() {
-        // === トグルボタン（小さめ） ===
-        var cfg = UIButton.Configuration.plain()
-        cfg.title = "コマの色を変更"
-        cfg.image = UIImage(systemName: "chevron.down")
-        cfg.imagePlacement = .trailing
-        cfg.imagePadding = 4
-        cfg.contentInsets = .init(top: 4, leading: 10, bottom: 4, trailing: 10)
-        colorToggle.configuration = cfg
-        colorToggle.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
-        colorToggle.backgroundColor = .secondarySystemBackground
-        colorToggle.layer.cornerRadius = 12
-        colorToggle.layer.masksToBounds = true
-        colorToggle.setContentHuggingPriority(.required, for: .horizontal)
-        colorToggle.setContentCompressionResistancePriority(.required, for: .horizontal)
-        colorToggle.addTarget(self, action: #selector(toggleColorPicker), for: .touchUpInside)
-
-        // === 右上に寄せる行（[spacer][button]） ===
-        actionsRow.axis = .horizontal
-        actionsRow.alignment = .center
-        actionsRow.distribution = .fill
-        actionsRow.isLayoutMarginsRelativeArrangement = true
-        actionsRow.layoutMargins = .init(top: 0, left: 0, bottom: 0, right: 0)
-
-        let spacer = UIView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        // 「教室番号を編集」ボタン
-        var editRoomCfg = UIButton.Configuration.plain()
-        editRoomCfg.title = "教室番号を編集"
-        editRoomCfg.image = UIImage(systemName: "pencil")
-        editRoomCfg.imagePlacement = .leading
-        editRoomCfg.imagePadding = 6
-        editRoomCfg.contentInsets = .init(top: 4, leading: 10, bottom: 4, trailing: 10)
-        memoButton.configuration = editRoomCfg
-        memoButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
-        memoButton.backgroundColor = .secondarySystemBackground
-        memoButton.layer.cornerRadius = 12
-        memoButton.layer.masksToBounds = true
-        memoButton.setContentHuggingPriority(.required, for: .horizontal)
-        memoButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        memoButton.addTarget(self, action: #selector(editRoomTapped), for: .touchUpInside)
-
-        actionsRow.spacing = 8
-        actionsRow.addArrangedSubview(spacer)
-        actionsRow.addArrangedSubview(memoButton)
-        actionsRow.addArrangedSubview(colorToggle)
-
-
-        // stack のいちばん上に差し込む（緑ヘッダーの直下）
-        stack.insertArrangedSubview(actionsRow, at: 0)
+        // === 歯車ボタンを緑ヘッダー右上に追加 ===
+        let sym = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        let gear = UIButton(type: .system)
+        gear.setImage(UIImage(systemName: "gearshape.fill", withConfiguration: sym), for: .normal)
+        gear.tintColor = UIColor.white.withAlphaComponent(0.75)
+        gear.translatesAutoresizingMaskIntoConstraints = false
+        gear.addTarget(self, action: #selector(gearTapped), for: .touchUpInside)
+        titleHeader.addSubview(gear)
+        NSLayoutConstraint.activate([
+            gear.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -12),
+            gear.bottomAnchor.constraint(equalTo: titleHeader.bottomAnchor, constant: -10),
+            gear.widthAnchor.constraint(equalToConstant: 32),
+            gear.heightAnchor.constraint(equalToConstant: 32)
+        ])
 
         // === 色ボタンの行（最初は閉じておく） ===
         colorRow.axis = .horizontal
@@ -677,7 +655,7 @@ final class CourseDetailViewController: UIViewController {
         colorRow.layoutMargins = .init(top: 4, left: 8, bottom: 8, right: 8)
         colorRow.isHidden = true
         colorRow.alpha  = 0
-        stack.insertArrangedSubview(colorRow, at: 1)
+        stack.insertArrangedSubview(colorRow, at: 0)
 
         // 色ボタンを並べる
         colorButtons = colorKeys.enumerated().map { (i, key) in
@@ -702,23 +680,25 @@ final class CourseDetailViewController: UIViewController {
     }
 
 
+    @objc private func gearTapped() {
+        let ac = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        ac.addAction(UIAlertAction(title: "教室番号を編集", style: .default) { [weak self] _ in
+            self?.editRoomTapped()
+        })
+        ac.addAction(UIAlertAction(title: "コマの色を変更", style: .default) { [weak self] _ in
+            self?.toggleColorPicker()
+        })
+        ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        present(ac, animated: true)
+    }
+
     @objc private func toggleColorPicker() {
         isColorRowOpen.toggle()
-
-        // 閉じている→開く ときは先に表示してからフェード
         if isColorRowOpen { colorRow.isHidden = false }
-
-        // タイトルと矢印を差し替え
-        var cfg = colorToggle.configuration ?? .plain()
-        cfg.title = isColorRowOpen ? "閉じる" : "コマの色を変更"
-        cfg.image = UIImage(systemName: isColorRowOpen ? "chevron.up" : "chevron.down")
-        colorToggle.configuration = cfg
-
         UIView.animate(withDuration: 0.25, animations: {
             self.colorRow.alpha = self.isColorRowOpen ? 1 : 0
             self.view.layoutIfNeeded()
         }, completion: { _ in
-            // 開いていた→閉じる ときはアニメ後に非表示
             if !self.isColorRowOpen { self.colorRow.isHidden = true }
         })
     }
@@ -1187,7 +1167,7 @@ final class CourseDetailViewController: UIViewController {
             weekBadge.text = "\(w)週目"
             weekBadge.font = .systemFont(ofSize: 10, weight: .bold)
             weekBadge.textColor = .white
-            weekBadge.backgroundColor = HackColors.accent
+            weekBadge.backgroundColor = HackColors.weekBadge
             weekBadge.layer.cornerRadius = 7
             weekBadge.layer.masksToBounds = true
             weekBadge.textAlignment = .center
@@ -1223,7 +1203,7 @@ final class CourseDetailViewController: UIViewController {
             rowContainer.translatesAutoresizingMaskIntoConstraints = false
 
             if isThisWeek {
-                rowContainer.backgroundColor = HackColors.accent.withAlphaComponent(0.10)
+                rowContainer.backgroundColor = HackColors.weekBadge.withAlphaComponent(0.12)
                 rowContainer.layer.cornerRadius = 7
                 rowContainer.layer.masksToBounds = true
             }
@@ -1239,7 +1219,7 @@ final class CourseDetailViewController: UIViewController {
                     string: numStr,
                     attributes: [
                         .font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
-                        .foregroundColor: isThisWeek ? HackColors.accent : UIColor.secondaryLabel
+                        .foregroundColor: isThisWeek ? HackColors.weekBadge : UIColor.secondaryLabel
                     ]
                 )
                 astr.append(NSAttributedString(
@@ -1270,7 +1250,7 @@ final class CourseDetailViewController: UIViewController {
                 badge.text = "今週"
                 badge.font = .systemFont(ofSize: 10, weight: .bold)
                 badge.textColor = .white
-                badge.backgroundColor = HackColors.accent
+                badge.backgroundColor = HackColors.weekBadge
                 badge.layer.cornerRadius = 6
                 badge.layer.masksToBounds = true
                 badge.textAlignment = .center
@@ -2078,6 +2058,8 @@ final class CourseDetailViewController: UIViewController {
 
         moodleSection.subviews.forEach { $0.removeFromSuperview() }
         moodlePastContainer = nil
+        moodleContentContainer = nil
+        moodleSectionChevron = nil
         guard !sorted.isEmpty else {
             moodleSection.isHidden = true
             return
@@ -2095,9 +2077,10 @@ final class CourseDetailViewController: UIViewController {
             outerStack.bottomAnchor.constraint(equalTo: moodleSection.bottomAnchor)
         ])
 
-        // ヘッダー行
+        // ─── ヘッダー行（タップで折りたたみ） ───
         let headerRow = UIView()
         headerRow.translatesAutoresizingMaskIntoConstraints = false
+        headerRow.isUserInteractionEnabled = true
 
         let iconCfg = UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
         let iconView = UIImageView(image: UIImage(systemName: "checkmark.circle.fill",
@@ -2112,22 +2095,55 @@ final class CourseDetailViewController: UIViewController {
         headerLabel.textColor = .secondaryLabel
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        let chevronCfg = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        let chevronName = moodleSectionExpanded ? "chevron.up" : "chevron.down"
+        let chevronView = UIImageView(image: UIImage(systemName: chevronName, withConfiguration: chevronCfg))
+        chevronView.tintColor = .tertiaryLabel
+        chevronView.translatesAutoresizingMaskIntoConstraints = false
+        chevronView.setContentHuggingPriority(.required, for: .horizontal)
+        moodleSectionChevron = chevronView
+
         headerRow.addSubview(iconView)
         headerRow.addSubview(headerLabel)
+        headerRow.addSubview(chevronView)
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor, constant: 14),
             iconView.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
             headerLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 6),
             headerLabel.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
+            chevronView.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor, constant: -14),
+            chevronView.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
             headerRow.heightAnchor.constraint(equalToConstant: 36)
         ])
+
+        let headerTap = UITapGestureRecognizer(target: self, action: #selector(toggleMoodleSection))
+        headerRow.addGestureRecognizer(headerTap)
         outerStack.addArrangedSubview(headerRow)
+
+        // ─── コンテンツコンテナ（折りたたみ対象） ───
+        let contentContainer = UIView()
+        contentContainer.translatesAutoresizingMaskIntoConstraints = false
+        contentContainer.clipsToBounds = true
+        contentContainer.isHidden = !moodleSectionExpanded
+        moodleContentContainer = contentContainer
+
+        let contentStack = UIStackView()
+        contentStack.axis = .vertical
+        contentStack.spacing = 0
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentContainer.addSubview(contentStack)
+        NSLayoutConstraint.activate([
+            contentStack.topAnchor.constraint(equalTo: contentContainer.topAnchor),
+            contentStack.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor)
+        ])
 
         let topDiv = UIView()
         topDiv.backgroundColor = UIColor.label.withAlphaComponent(0.08)
         topDiv.translatesAutoresizingMaskIntoConstraints = false
         topDiv.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
-        outerStack.addArrangedSubview(topDiv)
+        contentStack.addArrangedSubview(topDiv)
 
         let df = DateFormatter()
         df.locale = Locale(identifier: "ja_JP")
@@ -2138,22 +2154,22 @@ final class CourseDetailViewController: UIViewController {
 
         // ─── 期限未来の課題 ───
         for (pos, (i, event)) in upcomingItems.enumerated() {
-            if pos > 0 { outerStack.addArrangedSubview(makeDivider()) }
-            outerStack.addArrangedSubview(makeMoodleRow(event: event, tag: i, df: df))
+            if pos > 0 { contentStack.addArrangedSubview(makeDivider()) }
+            contentStack.addArrangedSubview(makeMoodleRow(event: event, tag: i, df: df))
         }
 
         // ─── 期限切れの折りたたみ ───
         if !pastItems.isEmpty {
             // 区切り線
-            if !upcomingItems.isEmpty { outerStack.addArrangedSubview(makeDivider()) }
+            if !upcomingItems.isEmpty { contentStack.addArrangedSubview(makeDivider()) }
 
             // 「期限切れ X 件 ▼」トグルボタン
             let toggleBtn = UIButton(type: .system)
-            let chevronName = moodlePastExpanded ? "chevron.up" : "chevron.down"
+            let pastChevronName = moodlePastExpanded ? "chevron.up" : "chevron.down"
             let btnTitle = "期限切れ \(pastItems.count) 件"
             var cfg = UIButton.Configuration.plain()
             cfg.title = btnTitle
-            cfg.image = UIImage(systemName: chevronName,
+            cfg.image = UIImage(systemName: pastChevronName,
                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
             cfg.imagePlacement = .trailing
             cfg.imagePadding = 6
@@ -2166,7 +2182,7 @@ final class CourseDetailViewController: UIViewController {
             toggleBtn.contentHorizontalAlignment = .left
             toggleBtn.addTarget(self, action: #selector(toggleMoodlePastSection(_:)), for: .touchUpInside)
             toggleBtn.translatesAutoresizingMaskIntoConstraints = false
-            outerStack.addArrangedSubview(toggleBtn)
+            contentStack.addArrangedSubview(toggleBtn)
 
             // 期限切れ行のコンテナ（初期は非表示）
             let pastStack = UIStackView()
@@ -2177,11 +2193,25 @@ final class CourseDetailViewController: UIViewController {
                 if pos > 0 { pastStack.addArrangedSubview(makeDivider()) }
                 pastStack.addArrangedSubview(makeMoodleRow(event: event, tag: i, df: df))
             }
-            outerStack.addArrangedSubview(pastStack)
+            contentStack.addArrangedSubview(pastStack)
             moodlePastContainer = pastStack
         }
 
+        outerStack.addArrangedSubview(contentContainer)
         moodleSection.isHidden = false
+    }
+
+    @objc private func toggleMoodleSection() {
+        moodleSectionExpanded.toggle()
+
+        let chevronName = moodleSectionExpanded ? "chevron.up" : "chevron.down"
+        let chevronCfg = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        moodleSectionChevron?.image = UIImage(systemName: chevronName, withConfiguration: chevronCfg)
+
+        UIView.animate(withDuration: 0.25) {
+            self.moodleContentContainer?.isHidden = !self.moodleSectionExpanded
+            self.moodleContentContainer?.superview?.layoutIfNeeded()
+        }
     }
 
     private func makeDivider() -> UIView {
@@ -2682,6 +2712,232 @@ extension CourseDetailViewController: WKNavigationDelegate {
         let day    = location.day
         let period = location.period > 0 ? location.period : 1
         presentSyllabusAddConfirm(day: day, period: period)
+    }
+
+    // MARK: - Review
+
+    // classes コレクションの Firestore document ID を優先使用。
+    // 時間割登録時に Course.firestoreDocID として保持される。
+    // syllabusDocID はシラバスタブから渡される同じ値。
+    // どちらも nil の場合のみコード+教員名の複合キーにフォールバック。
+    private var reviewCourseCode: String {
+        if let docID = resolvedReviewDocID ?? syllabusDocID ?? course.firestoreDocID, !docID.isEmpty {
+            return docID
+        }
+        let raw = "\(course.id)_\(course.teacher)"
+        return raw
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "　", with: "_")
+    }
+
+    // firestoreDocID が nil のとき classes コレクションをクエリして解決してからボタンを構築する
+    private func resolveReviewDocIDThenBuild() {
+        if syllabusDocID != nil || course.firestoreDocID != nil {
+            buildReviewWriteButton()
+            return
+        }
+        let db = Firestore.firestore()
+        db.collection("classes")
+            .whereField("code", isEqualTo: course.id)
+            .whereField("teacher_name", isEqualTo: course.teacher)
+            .limit(to: 1)
+            .getDocuments { [weak self] snap, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.resolvedReviewDocID = snap?.documents.first?.documentID
+                    self.buildReviewWriteButton()
+                }
+            }
+    }
+
+    private func buildReviewWriteButton() {
+        let submitted = WriteReviewViewController.hasSubmitted(courseCode: reviewCourseCode)
+
+        // 既存の「教室番号を編集」「コマ色を変更」と同じスタイル
+        var cfg = UIButton.Configuration.plain()
+        cfg.title = submitted ? "レビューを編集" : "授業レビューを書く"
+        cfg.image = UIImage(systemName: submitted ? "pencil.circle.fill" : "square.and.pencil")
+        cfg.imagePlacement = .leading
+        cfg.imagePadding = 6
+        cfg.contentInsets = .init(top: 4, leading: 10, bottom: 4, trailing: 10)
+
+        let btn = UIButton(configuration: cfg)
+        btn.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        btn.backgroundColor = .secondarySystemBackground
+        btn.layer.cornerRadius = 12
+        btn.layer.masksToBounds = true
+        btn.tintColor = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+        btn.isEnabled = true
+        btn.setContentHuggingPriority(.required, for: .horizontal)
+        btn.setContentCompressionResistancePriority(.required, for: .horizontal)
+        btn.addAction(UIAction { [weak self] _ in self?.openWriteReview() }, for: .touchUpInside)
+        reviewWriteButton = btn
+
+        // 右寄せレイアウト
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [spacer, btn])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 8
+        stack.insertArrangedSubview(row, at: 0)
+
+        // 初回のみレビュー促進アラートを表示
+        showReviewPromptIfNeeded()
+    }
+
+    private static let reviewPromptShownKey = "reviewPromptShown"
+
+    private func showReviewPromptIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.reviewPromptShownKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.reviewPromptShownKey)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+            let ac = UIAlertController(
+                title: "📝 授業レビュー機能が追加されました",
+                message: "3秒でできるので、後輩のためにぜひレビューをお願いします！",
+                preferredStyle: .alert
+            )
+            ac.addAction(UIAlertAction(title: "あとで", style: .cancel))
+            ac.addAction(UIAlertAction(title: "書いてみる", style: .default) { [weak self] _ in
+                self?.openWriteReview()
+            })
+            self.present(ac, animated: true)
+        }
+    }
+
+    private func openWriteReview() {
+        let code = reviewCourseCode
+        if WriteReviewViewController.hasSubmitted(courseCode: code) {
+            ReviewService.shared.fetchMyReview(courseCode: code) { [weak self] existing in
+                DispatchQueue.main.async {
+                    self?.presentWriteReview(existing: existing)
+                }
+            }
+        } else {
+            presentWriteReview(existing: nil)
+        }
+    }
+
+    private func presentWriteReview(existing: CourseReview?) {
+        let vc = WriteReviewViewController(
+            classDocID: reviewCourseCode,
+            courseName: course.title,
+            prefillTerm: term.displayTitle,
+            existing: existing
+        )
+        vc.onSubmitted = { [weak self] in
+            self?.refreshReviewWriteButton()
+        }
+        let nav = UINavigationController(rootViewController: vc)
+        present(nav, animated: true)
+    }
+
+    private func refreshReviewWriteButton() {
+        guard let btn = reviewWriteButton else { return }
+        var cfg = btn.configuration
+        cfg?.image = UIImage(systemName: "pencil.circle.fill")
+        cfg?.title = "レビューを編集"
+        btn.configuration = cfg
+        btn.tintColor = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+        btn.isEnabled = true
+    }
+
+    private func loadAndBuildReviewSummary() {
+        ReviewService.shared.fetchPublicReviews(courseCode: reviewCourseCode) { [weak self] reviews in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !reviews.isEmpty {
+                    self.buildReviewSummaryUI(reviews: reviews)
+                }
+            }
+        }
+    }
+
+    private func buildReviewSummaryUI(reviews: [CourseReview]) {
+        guard !reviews.isEmpty else { return }
+
+        let card = UIView()
+        card.backgroundColor = .secondarySystemBackground
+        card.layer.cornerRadius = 12
+
+        let cardStack = UIStackView()
+        cardStack.axis = .vertical
+        cardStack.spacing = 12
+        cardStack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(cardStack)
+        NSLayoutConstraint.activate([
+            cardStack.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
+            cardStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            cardStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+            cardStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -16)
+        ])
+
+        let heading = UILabel()
+        heading.text = "授業レビュー（\(reviews.count)件）"
+        heading.font = .systemFont(ofSize: 15, weight: .semibold)
+        cardStack.addArrangedSubview(heading)
+
+        let avg: (KeyPath<CourseReview, Int>) -> Double = { kp in
+            Double(reviews.map { $0[keyPath: kp] }.reduce(0, +)) / Double(reviews.count)
+        }
+        addRatingSummaryRow(to: cardStack, label: "先生の優しさ", value: avg(\.teacherKindness))
+        addRatingSummaryRow(to: cardStack, label: "単位取得難易度", value: avg(\.creditDifficulty))
+
+        let comments = reviews.filter { !$0.comment.isEmpty }.prefix(3)
+        if !comments.isEmpty {
+            let sep = UIView()
+            sep.backgroundColor = .separator
+            sep.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+            cardStack.addArrangedSubview(sep)
+
+            for review in comments {
+                let lbl = UILabel()
+                lbl.text = "「\(review.comment)」"
+                lbl.font = .systemFont(ofSize: 13)
+                lbl.textColor = .secondaryLabel
+                lbl.numberOfLines = 3
+                cardStack.addArrangedSubview(lbl)
+            }
+        }
+
+        stack.addArrangedSubview(card)
+    }
+
+    private func addRatingSummaryRow(to parent: UIStackView, label: String, value: Double) {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 8
+        row.alignment = .center
+
+        let name = UILabel()
+        name.text = label
+        name.font = .systemFont(ofSize: 13)
+        name.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        let stars = UILabel()
+        stars.text = starString(for: value)
+        stars.font = .systemFont(ofSize: 14)
+
+        let score = UILabel()
+        score.text = String(format: "%.1f", value)
+        score.font = .systemFont(ofSize: 13)
+        score.textColor = .secondaryLabel
+        score.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        row.addArrangedSubview(name)
+        row.addArrangedSubview(stars)
+        row.addArrangedSubview(score)
+        parent.addArrangedSubview(row)
+    }
+
+    private func starString(for value: Double) -> String {
+        let full = Int(value)
+        let half = (value - Double(full)) >= 0.5
+        var s = String(repeating: "★", count: full)
+        if half { s += "☆" }
+        return s
     }
 
     private func presentSyllabusAddConfirm(day: Int, period: Int) {

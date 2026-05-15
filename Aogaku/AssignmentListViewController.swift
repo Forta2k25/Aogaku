@@ -89,6 +89,7 @@ private final class MoodleEventCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(with event: MoodleEvent, courseTitle: String?, isSubmitted: Bool) {
+        let isCustom = event.uid.hasPrefix("custom:")
         if isSubmitted {
             timeLbl.text = ""
             let cfg2 = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
@@ -106,13 +107,17 @@ private final class MoodleEventCell: UITableViewCell {
                 tf.locale = Locale(identifier: "ja_JP"); tf.dateFormat = "HH:mm"
                 timeLbl.text = tf.string(from: date)
             } else { timeLbl.text = "" }
-            let cfg2 = UIImage.SymbolConfiguration(pointSize: 15, weight: .light)
-            iconView.image     = UIImage(systemName: "square.and.arrow.up", withConfiguration: cfg2)
-            iconView.tintColor = .tertiaryLabel
+            let cfg2 = UIImage.SymbolConfiguration(pointSize: 15, weight: isCustom ? .regular : .light)
+            let iconName = isCustom ? "pencil.circle" : "square.and.arrow.up"
+            iconView.image     = UIImage(systemName: iconName, withConfiguration: cfg2)
+            iconView.tintColor = isCustom ? .systemOrange : .tertiaryLabel
             titleLbl.text      = event.cleanTitle
-            titleLbl.textColor = event.isPast ? .systemGray3 : moodleGreen
-            if let title = courseTitle {
+            let activeColor: UIColor = isCustom ? .systemOrange : moodleGreen
+            titleLbl.textColor = event.isPast ? .systemGray3 : activeColor
+            if let title = courseTitle, !title.isEmpty {
                 subLbl.text = title; subLbl.textColor = .secondaryLabel
+            } else if isCustom {
+                subLbl.text = "手動追加"; subLbl.textColor = .tertiaryLabel
             } else {
                 subLbl.text = "授業を選択 ›"; subLbl.textColor = .systemOrange
             }
@@ -351,7 +356,13 @@ final class AssignmentListViewController: UITableViewController, BannerViewDeleg
         }
     }
 
-    private func applyEvents(_ events: [MoodleEvent]) {
+    private func applyEvents(_ moodleEvents: [MoodleEvent]) {
+        // カスタム課題を Moodle イベントにマージ
+        let customEvents = MoodleService.shared.customAssignments().map { $0.toMoodleEvent() }
+        let events = (moodleEvents + customEvents).sorted {
+            ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture)
+        }
+
         let now = Date()
         let cal = Calendar.current
 
@@ -533,6 +544,13 @@ final class AssignmentListViewController: UITableViewController, BannerViewDeleg
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let event = eventAt(indexPath)
+
+        // カスタム課題はアクションシートで操作
+        if event.uid.hasPrefix("custom:") {
+            presentCustomAssignmentActions(for: event, at: indexPath)
+            return
+        }
+
         let detail = MoodleEventDetailViewController(
             event: event,
             courseTitle: resolvedTitle(for: event),
@@ -548,6 +566,31 @@ final class AssignmentListViewController: UITableViewController, BannerViewDeleg
         navigationController?.pushViewController(detail, animated: true)
     }
 
+    private func presentCustomAssignmentActions(for event: MoodleEvent, at indexPath: IndexPath) {
+        let isSubmitted = MoodleService.shared.isSubmitted(uid: event.uid)
+        let sheet = UIAlertController(title: event.cleanTitle, message: nil,
+                                      preferredStyle: .actionSheet)
+        let toggleTitle = isSubmitted ? "提出済みを取り消す" : "提出済みにする"
+        let toggleIcon  = isSubmitted ? "xmark.circle" : "checkmark.circle"
+        sheet.addAction(UIAlertAction(title: toggleTitle, style: .default) { [weak self] _ in
+            MoodleService.shared.toggleSubmitted(uid: event.uid)
+            self?.tableView.reloadData()
+            self?.rescheduleGlobalNotifications()
+        })
+        sheet.addAction(UIAlertAction(title: "削除", style: .destructive) { [weak self] _ in
+            let id = String(event.uid.dropFirst("custom:".count))
+            MoodleService.shared.deleteCustomAssignment(id: id)
+            self?.reloadWithCustom()
+        })
+        sheet.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        // iPad popover
+        if let ppc = sheet.popoverPresentationController,
+           let cell = tableView.cellForRow(at: indexPath) {
+            ppc.sourceView = cell; ppc.sourceRect = cell.bounds
+        }
+        present(sheet, animated: true)
+    }
+
     // MARK: - 授業名解決
 
     private func eventAt(_ indexPath: IndexPath) -> MoodleEvent {
@@ -560,6 +603,10 @@ final class AssignmentListViewController: UITableViewController, BannerViewDeleg
 
     /// 自動変換 → 手動マッピングの順で授業名を解決する
     private func resolvedTitle(for event: MoodleEvent) -> String? {
+        // カスタム課題: eventDescription に科目名を格納している
+        if event.uid.hasPrefix("custom:") {
+            return event.eventDescription.isEmpty ? nil : event.eventDescription
+        }
         // ① 登録番号の計算式で自動マッチ
         if let regNum = MoodleService.shared.registrationNumber(from: event.courseCode),
            let title = courseTitleById[regNum] {
@@ -588,10 +635,55 @@ final class AssignmentListViewController: UITableViewController, BannerViewDeleg
 
     private func buildCalendarToggleButton() {
         let imgName = isCalendarMode ? "list.bullet" : "calendar"
-        let btn = UIBarButtonItem(image: UIImage(systemName: imgName),
-                                  style: .plain, target: self,
-                                  action: #selector(calendarToggleTapped))
-        navigationItem.leftBarButtonItem = btn
+        let calBtn = UIBarButtonItem(image: UIImage(systemName: imgName),
+                                    style: .plain, target: self,
+                                    action: #selector(calendarToggleTapped))
+        let addBtn = UIBarButtonItem(image: UIImage(systemName: "plus"),
+                                    style: .plain, target: self,
+                                    action: #selector(addCustomAssignmentTapped))
+        navigationItem.leftBarButtonItems = [calBtn, addBtn]
+    }
+
+    // MARK: - カスタム課題追加
+
+    @objc private func addCustomAssignmentTapped() {
+        let vc = AddCustomAssignmentViewController()
+        vc.onSave = { [weak self] item in
+            MoodleService.shared.addCustomAssignment(item)
+            self?.reloadWithCustom()
+        }
+        let nav = UINavigationController(rootViewController: vc)
+        nav.modalPresentationStyle = .pageSheet
+        if let sp = nav.sheetPresentationController {
+            sp.detents = [.medium(), .large()]
+            sp.prefersGrabberVisible = true
+            sp.preferredCornerRadius = 16
+        }
+        present(nav, animated: true)
+    }
+
+    /// キャッシュ済み Moodle イベント＋カスタム課題を再適用する
+    private func reloadWithCustom() {
+        let cached = MoodleService.shared.cachedEvents()
+        applyEvents(cached)
+    }
+
+    // MARK: - スワイプ削除（カスタム課題のみ）
+
+    override func tableView(_ tableView: UITableView,
+                            canEditRowAt indexPath: IndexPath) -> Bool {
+        return eventAt(indexPath).uid.hasPrefix("custom:")
+    }
+
+    override func tableView(_ tableView: UITableView,
+                            commit editingStyle: UITableViewCell.EditingStyle,
+                            forRowAt indexPath: IndexPath) {
+        guard editingStyle == .delete else { return }
+        let event = eventAt(indexPath)
+        guard event.uid.hasPrefix("custom:") else { return }
+        let id = String(event.uid.dropFirst("custom:".count))
+        MoodleService.shared.deleteCustomAssignment(id: id)
+        reloadWithCustom()
     }
 
     @objc private func calendarToggleTapped() {
@@ -937,6 +1029,216 @@ extension AssignmentListViewController: UICalendarSelectionSingleDateDelegate {
         guard let dc = dateComponents else { return }
         selectedCalendarComponents = dc
         tableView.reloadData()
+    }
+}
+
+// MARK: - AddCustomAssignmentViewController
+// UITableViewController ベースで Auto Layout ループを回避する
+
+private final class AddCustomAssignmentViewController: UITableViewController {
+
+    var onSave: ((CustomAssignment) -> Void)?
+
+    // Section 0: 課題名 / 科目名テキストフィールド
+    private let titleField  = UITextField()
+    private let courseField = UITextField()
+    // Section 1: 日時ピッカー（.compact = ボタン表示でレイアウト安全）
+    private let datePicker  = UIDatePicker()
+
+    // Section 1 のピッカー行をインラインで展開するための状態
+    private var isPickerExpanded = false
+
+    init() { super.init(style: .insetGrouped) }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "課題を追加"
+
+        navigationItem.leftBarButtonItem  = UIBarButtonItem(
+            title: "キャンセル", style: .plain, target: self, action: #selector(cancelTapped))
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "追加", style: .done, target: self, action: #selector(saveTapped))
+        navigationItem.rightBarButtonItem?.isEnabled = false
+
+        setupFields()
+        setupDatePicker()
+
+        tableView.keyboardDismissMode = .onDrag
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        titleField.becomeFirstResponder()
+    }
+
+    // MARK: - Setup
+
+    private func setupFields() {
+        titleField.placeholder         = "課題名（必須）"
+        titleField.font                = .systemFont(ofSize: 16)
+        titleField.clearButtonMode     = .whileEditing
+        titleField.returnKeyType       = .next
+        titleField.autocorrectionType  = .no
+        titleField.autocapitalizationType = .none
+        titleField.addTarget(self, action: #selector(titleChanged), for: .editingChanged)
+        titleField.delegate = self
+
+        courseField.placeholder           = "科目名（任意）"
+        courseField.font                  = .systemFont(ofSize: 16)
+        courseField.clearButtonMode       = .whileEditing
+        courseField.returnKeyType         = .done
+        courseField.autocorrectionType    = .no
+        courseField.autocapitalizationType = .none
+        courseField.delegate = self
+    }
+
+    private func setupDatePicker() {
+        // .wheels はセルの中で高さが確定していてレイアウトループが起きない
+        datePicker.datePickerMode = .dateAndTime
+        datePicker.preferredDatePickerStyle = .wheels
+        datePicker.locale     = Locale(identifier: "ja_JP")
+        datePicker.tintColor  = moodleGreen
+        // デフォルト: 翌日 23:59
+        let cal = Calendar.current
+        if let tomorrow = cal.date(byAdding: .day, value: 1, to: Date()) {
+            var c = cal.dateComponents([.year, .month, .day], from: tomorrow)
+            c.hour = 23; c.minute = 59
+            datePicker.date = cal.date(from: c) ?? tomorrow
+        }
+        datePicker.minimumDate = Date()
+    }
+
+    // MARK: - TableView
+
+    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        section == 0 ? 2 : (isPickerExpanded ? 2 : 1)
+    }
+
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        section == 0 ? nil : nil
+    }
+
+    override func tableView(_ tableView: UITableView,
+                            cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        switch (indexPath.section, indexPath.row) {
+
+        case (0, 0):   // 課題名
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            cell.selectionStyle = .none
+            titleField.translatesAutoresizingMaskIntoConstraints = false
+            cell.contentView.addSubview(titleField)
+            NSLayoutConstraint.activate([
+                titleField.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: 16),
+                titleField.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -16),
+                titleField.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 11),
+                titleField.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -11)
+            ])
+            return cell
+
+        case (0, 1):   // 科目名
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            cell.selectionStyle = .none
+            courseField.translatesAutoresizingMaskIntoConstraints = false
+            cell.contentView.addSubview(courseField)
+            NSLayoutConstraint.activate([
+                courseField.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: 16),
+                courseField.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -16),
+                courseField.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 11),
+                courseField.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -11)
+            ])
+            return cell
+
+        case (1, 0):   // 日付ラベル行（タップで展開）
+            let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+            cell.textLabel?.text = "期日"
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "ja_JP")
+            df.dateFormat = "M月d日(E) HH:mm"
+            cell.detailTextLabel?.text = df.string(from: datePicker.date)
+            cell.detailTextLabel?.textColor = isPickerExpanded ? moodleGreen : .secondaryLabel
+            cell.accessoryType = .none
+            return cell
+
+        default:       // (1, 1) ピッカー本体
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            cell.selectionStyle = .none
+            datePicker.translatesAutoresizingMaskIntoConstraints = false
+            cell.contentView.addSubview(datePicker)
+            NSLayoutConstraint.activate([
+                datePicker.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor),
+                datePicker.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor),
+                datePicker.topAnchor.constraint(equalTo: cell.contentView.topAnchor),
+                datePicker.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor)
+            ])
+            // 日付変更 → ラベル行を更新
+            datePicker.addTarget(self, action: #selector(dateChanged), for: .valueChanged)
+            return cell
+        }
+    }
+
+    override func tableView(_ tableView: UITableView,
+                            didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard indexPath.section == 1, indexPath.row == 0 else { return }
+        titleField.resignFirstResponder()
+        courseField.resignFirstResponder()
+        isPickerExpanded.toggle()
+        tableView.performBatchUpdates({
+            tableView.reloadRows(at: [IndexPath(row: 0, section: 1)], with: .none)
+            if isPickerExpanded {
+                tableView.insertRows(at: [IndexPath(row: 1, section: 1)], with: .fade)
+            } else {
+                tableView.deleteRows(at: [IndexPath(row: 1, section: 1)], with: .fade)
+            }
+        })
+    }
+
+    override func tableView(_ tableView: UITableView,
+                            heightForRowAt indexPath: IndexPath) -> CGFloat {
+        if indexPath.section == 1, indexPath.row == 1 {
+            return 216   // UIDatePicker wheels の標準高さ
+        }
+        return 44
+    }
+
+    // MARK: - Actions
+
+    @objc private func cancelTapped() { dismiss(animated: true) }
+
+    @objc private func saveTapped() {
+        guard let title = titleField.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else { return }
+        let course = courseField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let item = CustomAssignment(id: UUID().uuidString,
+                                    title: title,
+                                    courseName: course,
+                                    dueDate: datePicker.date)
+        onSave?(item)
+        dismiss(animated: true)
+    }
+
+    @objc private func titleChanged() {
+        let filled = !(titleField.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        navigationItem.rightBarButtonItem?.isEnabled = filled
+    }
+
+    @objc private func dateChanged() {
+        // ラベル行の日付表示を更新
+        tableView.reloadRows(at: [IndexPath(row: 0, section: 1)], with: .none)
+    }
+}
+
+extension AddCustomAssignmentViewController: UITextFieldDelegate {
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        if textField == titleField {
+            courseField.becomeFirstResponder()
+        } else {
+            textField.resignFirstResponder()
+        }
+        return true
     }
 }
 

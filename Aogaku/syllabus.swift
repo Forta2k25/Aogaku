@@ -30,6 +30,12 @@ final class syllabus: UIViewController,
     @IBOutlet weak var syllabus_table: UITableView!
     @IBOutlet weak var search_button: UIButton!
 
+    // MARK: - Filter header
+    private let filterHeaderView  = UIView()
+    private let filterScrollView  = UIScrollView()
+    private let filterChipStack   = UIStackView()
+    private weak var bookmarkBBI: UIBarButtonItem?
+
     // Firestore
     private let db = Firestore.firestore()
 
@@ -191,6 +197,8 @@ final class syllabus: UIViewController,
         let bg = appBackgroundColor(for: traitCollection)
         view.backgroundColor = bg
         syllabus_table.backgroundColor = bg
+        filterHeaderView.backgroundColor = bg
+        filterScrollView.backgroundColor = .clear
         adContainer.backgroundColor = bg  // バナーの土台も揃える
 
         syllabus_table.separatorColor = separatorColor(for: traitCollection)
@@ -219,7 +227,8 @@ final class syllabus: UIViewController,
         super.viewDidLoad()
 
         syllabus_table.rowHeight = UITableView.automaticDimension
-        syllabus_table.estimatedRowHeight = 110
+        syllabus_table.estimatedRowHeight = 80
+        syllabus_table.register(SyllabusCell.self, forCellReuseIdentifier: SyllabusCell.reuseID)
 
         if FirebaseApp.app() == nil { FirebaseApp.configure() }
 
@@ -237,6 +246,9 @@ final class syllabus: UIViewController,
         navigationItem.largeTitleDisplayMode = .always
         navigationItem.hidesSearchBarWhenScrolling = false
         navigationItem.title = "シラバス"
+
+        buildNavBarItems()
+        buildFilterHeader()
 
         // Loading indicator
         loadingIndicator.hidesWhenStopped = true
@@ -271,6 +283,13 @@ final class syllabus: UIViewController,
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         loadBannerIfNeeded()
+        // tableHeaderView は自動でリサイズされないため幅を手動更新
+        let w = syllabus_table.bounds.width
+        if w > 0 && filterHeaderView.frame.width != w {
+            filterHeaderView.frame.size.width = w
+            filterScrollView.frame.size.width = w
+            syllabus_table.tableHeaderView = filterHeaderView
+        }
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -632,6 +651,8 @@ final class syllabus: UIViewController,
 
         DispatchQueue.main.async { [weak self] in
             self?.resetAndReload(keyword: criteria.keyword)
+            self?.updateFilterChips()
+            self?.refreshBookmarkButton()
         }
     }
 
@@ -862,6 +883,12 @@ final class syllabus: UIViewController,
                         self.setSearching(false)
                         self.showStatusMessage("条件に一致する授業はありません")
                     } else {
+                        // 全ページ取得完了 → ここでシャッフル（直前ページが pageSize ちょうどだった場合）
+                        if !hasTimeFilter {
+                            self.data.shuffle()
+                            self.filteredData = self.data
+                            self.syllabus_table.reloadData()
+                        }
                         self.clearStatusMessageIfNeeded()
                     }
                     self.hideLoadingOverlay()
@@ -885,6 +912,9 @@ final class syllabus: UIViewController,
 
             if hasTimeFilter {
                 self.data.sort { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
+            } else if self.reachedEnd {
+                // 最終ページ取得完了 → 全件シャッフル
+                self.data.shuffle()
             }
 
             self.filteredData = self.data
@@ -892,16 +922,14 @@ final class syllabus: UIViewController,
             DispatchQueue.main.async {
                 guard self.listSessionId == session else { return }
 
-                if self.data.isEmpty && !self.reachedEnd {
-                    self.showSearchingMessage()
-                    self.syllabus_table.reloadData()
-                    self.loadNextPage()
-                    return
-                }
-
                 self.clearStatusMessageIfNeeded()
                 self.syllabus_table.reloadData()
                 self.hideLoadingOverlay()
+
+                // フィルタで通過件数が少なく画面を埋めない場合は自動で追加ロード
+                if !self.reachedEnd && self.data.count < 15 {
+                    self.loadNextPage()
+                }
             }
         }
     }
@@ -912,75 +940,39 @@ final class syllabus: UIViewController,
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let subject = filteredData[indexPath.row]
-        let cell = syllabus_table.dequeueReusableCell(withIdentifier: "class", for: indexPath) as! syllabusTableViewCell
-
-        // 左側
-        cell.class_name.text   = subject.class_name
-        cell.teacher_name.text = subject.teacher_name
-        cell.time.text         = subject.time
-        cell.campus.text       = subject.campus
-        cell.grade.text        = subject.grade
-        cell.category.text     = subject.category
-
-        // 右上：単位/学期（従来どおり）
-        cell.credit.text    = subject.credit.isEmpty ? "-" : "\(subject.credit)単位"
-        cell.termLabel.text = subject.term.isEmpty   ? "-" : subject.term
+        let cell = tableView.dequeueReusableCell(withIdentifier: SyllabusCell.reuseID, for: indexPath) as! SyllabusCell
 
         let ekey = makeEvalKey(className: subject.class_name, teacher: subject.teacher_name)
-
         let evalText = subject.eval_method.isEmpty
             ? (evalMethodCacheByEvalKey[ekey]
                 ?? evalMethodCacheByStableKey[subject.stableKey]
                 ?? evalMethodCache[subject.docID]
-                ?? "-")
+                ?? "")
             : subject.eval_method
 
-        cell.eval_method.text = evalText
-        
-        // === 追加：表示できた評価方法をキャッシュ＆モデルへ書き戻す ===
-        if evalText != "-" {
-            // 安定キー/DocID 両方でキャッシュ
+        // eval が取れたらキャッシュ＆モデルに書き戻す
+        if !evalText.isEmpty && evalText != "-" && subject.eval_method.isEmpty {
             evalMethodCacheByEvalKey[ekey] = evalText
             evalMethodCacheByStableKey[subject.stableKey] = evalText
             evalMethodCache[subject.docID] = evalText
-
-            // もしモデル側が空なら、その場で書き戻して今後のリロードでも消えないようにする
-            if subject.eval_method.isEmpty {
-                let updated = SyllabusData(
-                    docID: subject.docID,
-                    stableKey: subject.stableKey,
-                    class_name: subject.class_name,
-                    teacher_name: subject.teacher_name,
-                    time: subject.time,
-                    campus: subject.campus,
-                    grade: subject.grade,
-                    category: subject.category,
-                    credit: subject.credit,
-                    term: subject.term,
-                    eval_method: evalText,
-                    url: subject.url,
-                    regNumber: subject.regNumber,
-                    room: subject.room
-                )
-                // filteredData を更新
-                filteredData[indexPath.row] = updated
-                // data も該当行を更新（stableKey優先で一致）
-                if let i = data.firstIndex(where: { $0.stableKey == subject.stableKey || $0.docID == subject.docID }) {
-                    data[i] = updated
-                }
+            let updated = SyllabusData(
+                docID: subject.docID, stableKey: subject.stableKey,
+                class_name: subject.class_name, teacher_name: subject.teacher_name,
+                time: subject.time, campus: subject.campus, grade: subject.grade,
+                category: subject.category, credit: subject.credit, term: subject.term,
+                eval_method: evalText, url: subject.url,
+                regNumber: subject.regNumber, room: subject.room)
+            filteredData[indexPath.row] = updated
+            if let i = data.firstIndex(where: { $0.stableKey == subject.stableKey || $0.docID == subject.docID }) {
+                data[i] = updated
             }
         }
 
-        // 見た目
-        let cbg = cellBackgroundColor(for: traitCollection)
-        cell.backgroundColor = cbg
-        cell.contentView.backgroundColor = cbg
-        let selected = UIView()
-        selected.backgroundColor = (traitCollection.userInterfaceStyle == .dark)
-            ? UIColor(white: 0.22, alpha: 1.0)
-            : UIColor.systemFill
-        cell.selectedBackgroundView = selected
-
+        let isDark = traitCollection.userInterfaceStyle == .dark
+        cell.configure(name: subject.class_name, credit: subject.credit,
+                       teacher: subject.teacher_name, time: subject.time,
+                       campus: subject.campus, term: subject.term,
+                       eval: evalText, isDark: isDark)
         return cell
     }
 
@@ -1036,6 +1028,191 @@ final class syllabus: UIViewController,
             period = 1
         }
         return SlotLocation(day: day, period: period)
+    }
+
+    // MARK: - Nav bar
+
+    private func buildNavBarItems() {
+        let bookmarkBtn = makeBookmarkBarButton()
+        navigationItem.rightBarButtonItems = [bookmarkBtn]
+    }
+
+    private func makeBookmarkBarButton() -> UIBarButtonItem {
+        let ids = (UserDefaults.standard.array(forKey: "favoriteClassIDs") as? [String]) ?? []
+        let count = ids.count
+
+        let btn = UIButton(type: .system)
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: count > 0 ? "bookmark.fill" : "bookmark")
+        cfg.imagePadding = 4
+        if count > 0 {
+            cfg.title = "\(count)"
+            cfg.imagePlacement = .leading
+            cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
+                var b = a; b.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold); return b
+            }
+        }
+        cfg.baseForegroundColor = .label
+        btn.configuration = cfg
+        btn.addTarget(self, action: #selector(didTapFavorites(_:)), for: .touchUpInside)
+
+        let bbi = UIBarButtonItem(customView: btn)
+        bookmarkBBI = bbi
+        return bbi
+    }
+
+    private func refreshBookmarkButton() {
+        guard let btn = bookmarkBBI?.customView as? UIButton else {
+            buildNavBarItems(); return
+        }
+        let ids = (UserDefaults.standard.array(forKey: "favoriteClassIDs") as? [String]) ?? []
+        let count = ids.count
+        var cfg = btn.configuration ?? .plain()
+        cfg.image = UIImage(systemName: count > 0 ? "bookmark.fill" : "bookmark")
+        cfg.title = count > 0 ? "\(count)" : nil
+        btn.configuration = cfg
+    }
+
+    // MARK: - Filter chip header
+
+    private func buildFilterHeader() {
+        // filterHeaderView は tableHeaderView なのでフレームベース（TAMIC=true のまま）
+        filterScrollView.showsHorizontalScrollIndicator = false
+        filterScrollView.alwaysBounceHorizontal = true
+        filterScrollView.autoresizingMask = [.flexibleWidth]
+
+        filterChipStack.axis = .horizontal
+        filterChipStack.spacing = 8
+        filterChipStack.alignment = .center
+        filterChipStack.translatesAutoresizingMaskIntoConstraints = false
+
+        filterScrollView.addSubview(filterChipStack)
+        NSLayoutConstraint.activate([
+            filterChipStack.topAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.topAnchor),
+            filterChipStack.leadingAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.leadingAnchor, constant: 16),
+            filterChipStack.trailingAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.trailingAnchor, constant: -16),
+            filterChipStack.bottomAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.bottomAnchor),
+            filterChipStack.heightAnchor.constraint(equalTo: filterScrollView.frameLayoutGuide.heightAnchor)
+        ])
+
+        filterScrollView.frame = CGRect(x: 0, y: 6, width: view.bounds.width, height: 36)
+        filterHeaderView.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: 48)
+        filterHeaderView.addSubview(filterScrollView)
+        syllabus_table.tableHeaderView = filterHeaderView
+
+        updateFilterChips()
+    }
+
+    private func updateFilterChips() {
+        filterChipStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+
+        // ⚙ フィルター ボタン（常時表示）
+        let activeCount = activeFilterCount()
+        let gearBtn = makeChip(
+            title: activeCount > 0 ? "フィルター (\(activeCount))" : "フィルター",
+            isFilled: activeCount > 0,
+            action: #selector(didTapSearchButton(_:))
+        )
+        filterChipStack.addArrangedSubview(gearBtn)
+
+        // アクティブフィルターをチップとして追加
+        if let t = filterTerm,    !t.isEmpty { filterChipStack.addArrangedSubview(removableChip(label: t,    key: "term")) }
+        if let c = filterCampus,  !c.isEmpty { filterChipStack.addArrangedSubview(removableChip(label: c,    key: "campus")) }
+        if let p = filterPlace,   !p.isEmpty { filterChipStack.addArrangedSubview(removableChip(label: p,    key: "place")) }
+        if let slots = filterTimeSlots, !slots.isEmpty {
+            for (day, period) in slots {
+                filterChipStack.addArrangedSubview(removableChip(label: "\(day)\(period)", key: "slot_\(day)_\(period)"))
+            }
+        } else if let d = filterDay, !d.isEmpty {
+            filterChipStack.addArrangedSubview(removableChip(label: d+"曜", key: "day"))
+        }
+        if let cat = selectedCategory, !cat.isEmpty {
+            filterChipStack.addArrangedSubview(removableChip(label: cat, key: "category"))
+        }
+
+        // テーブルヘッダーの高さを更新
+        filterHeaderView.frame.size.height = 48
+        syllabus_table.tableHeaderView = filterHeaderView
+    }
+
+    private func activeFilterCount() -> Int {
+        var n = 0
+        if filterTerm?.isEmpty == false     { n += 1 }
+        if filterCampus?.isEmpty == false   { n += 1 }
+        if filterPlace?.isEmpty == false    { n += 1 }
+        if filterTimeSlots?.isEmpty == false {
+            n += filterTimeSlots!.count
+        } else if filterDay?.isEmpty == false {
+            n += 1
+        }
+        if selectedCategory?.isEmpty == false { n += 1 }
+        if filterDepartment?.isEmpty == false { n += 1 }
+        return n
+    }
+
+    private func makeChip(title: String, isFilled: Bool, action: Selector) -> UIButton {
+        let btn = UIButton(type: .system)
+        var cfg = isFilled ? UIButton.Configuration.filled() : UIButton.Configuration.tinted()
+        cfg.title = title
+        cfg.image = UIImage(systemName: "slider.horizontal.3")
+        cfg.imagePlacement = .leading
+        cfg.imagePadding = 5
+        cfg.cornerStyle = .capsule
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
+            var b = a; b.font = .systemFont(ofSize: 13, weight: .medium); return b
+        }
+        let green = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+        cfg.baseBackgroundColor = isFilled ? green : green.withAlphaComponent(0.12)
+        cfg.baseForegroundColor = isFilled ? .white : green
+        btn.configuration = cfg
+        btn.setContentHuggingPriority(.required, for: .horizontal)
+        btn.setContentCompressionResistancePriority(.required, for: .horizontal)
+        btn.addTarget(self, action: action, for: .touchUpInside)
+        return btn
+    }
+
+    private func removableChip(label: String, key: String) -> UIView {
+        let btn = UIButton(type: .system)
+        var cfg = UIButton.Configuration.tinted()
+        cfg.title = label
+        cfg.image = UIImage(systemName: "xmark")
+        cfg.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 9, weight: .medium)
+        cfg.imagePlacement = .trailing
+        cfg.imagePadding = 4
+        cfg.cornerStyle = .capsule
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 8)
+        cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
+            var b = a; b.font = .systemFont(ofSize: 13, weight: .medium); return b
+        }
+        let green = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+        cfg.baseBackgroundColor = green.withAlphaComponent(0.12)
+        cfg.baseForegroundColor = green
+        btn.configuration = cfg
+        btn.setContentHuggingPriority(.required, for: .horizontal)
+        btn.setContentCompressionResistancePriority(.required, for: .horizontal)
+        btn.addAction(UIAction { [weak self] _ in self?.removeFilter(key: key) }, for: .touchUpInside)
+        return btn
+    }
+
+    private func removeFilter(key: String) {
+        switch key {
+        case "term":     filterTerm = nil
+        case "campus":   filterCampus = nil
+        case "place":    filterPlace = nil
+        case "day":      filterDay = nil; filterPeriods = nil; filterTimeSlots = nil
+        case "category": selectedCategory = nil; filterDepartment = nil
+        default:
+            if key.hasPrefix("slot_") {
+                let parts = key.dropFirst(5).split(separator: "_")
+                if parts.count == 2, let period = Int(parts[1]) {
+                    filterTimeSlots?.removeAll { $0.day == String(parts[0]) && $0.period == period }
+                    if filterTimeSlots?.isEmpty == true { filterTimeSlots = nil; filterDay = nil; filterPeriods = nil }
+                }
+            }
+        }
+        resetAndReload(keyword: activeKeyword)
+        updateFilterChips()
     }
 
     @IBAction func didTapFavorites(_ sender: Any) {
@@ -1293,7 +1470,8 @@ final class syllabus: UIViewController,
             return
         }
 
-        if isLocalIndexReady, LocalSyllabusIndex.shared.isReady {
+        // ローカルインデックスが使えれば n-gram 部分一致検索
+        if LocalSyllabusIndex.shared.isReady {
             let criteria = currentCriteria(keyword: text)
             let models = LocalSyllabusIndex.shared.search(text: text, criteria: criteria)
             let merged = preserveEvalMethod(from: data, into: models).filter { self.modelMatchesCurrentCriteria($0) }
@@ -1310,9 +1488,22 @@ final class syllabus: UIViewController,
             return
         }
 
-        filteredData.removeAll()
-        syllabus_table.reloadData()
-        scrollToTop()
+        // ローカルインデックス未ロード: 既存データを substring フィルタ→Firestore prefix 検索
+        let normText = normalizeForSearch(text)
+        let localMatches = data.filter { item in
+            normalizeForSearch(item.class_name).contains(normText) ||
+            normalizeForSearch(item.teacher_name).contains(normText)
+        }
+        if !localMatches.isEmpty {
+            filteredData = localMatches
+            syllabus_table.reloadData()
+            scrollToTop()
+            clearStatusMessageIfNeeded()
+        } else {
+            filteredData.removeAll()
+            syllabus_table.reloadData()
+            scrollToTop()
+        }
         fallbackPrefixSearch(text: text)
     }
 

@@ -105,7 +105,10 @@ final class LocalSyllabusIndex {
 
     private func loadFromDiskAndBuild() -> Bool {
         guard let data = try? Data(contentsOf: diskURL) else { return false }
-        guard let raws = try? JSONDecoder().decode([SyllabusRaw].self, from: data) else { return false }
+        guard var raws = try? JSONDecoder().decode([SyllabusRaw].self, from: data) else { return false }
+
+        // 起動ごとに順番をシャッフル（ABC順で同じ授業ばかり先頭に来るのを防ぐ）
+        raws.shuffle()
 
         // ビルド
         var built: [SyllabusEntry] = []
@@ -382,8 +385,7 @@ final class LocalSyllabusIndex {
             taken += 1
             if taken >= limit { break }
         }
-        // 必要なら並びを軽めに整える
-        out.sort { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
+        // entries がシャッフル済みなのでソート不要
         return out
     }
 
@@ -396,7 +398,8 @@ final class LocalSyllabusIndex {
             out.append(toModel(e))
             if let lim = limit, out.count >= lim { break }
         }
-        return out.sorted { $0.class_name.localizedStandardCompare($1.class_name) == .orderedAscending }
+        // entries がシャッフル済みなのでソート不要
+        return out
     }
 
     // UI表示用へ変換（syllabus.swift の toModel と同等）

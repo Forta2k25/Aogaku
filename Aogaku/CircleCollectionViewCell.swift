@@ -266,18 +266,21 @@ final class CircleCollectionViewCell: UICollectionViewCell {
     // MARK: - Image
     private func loadImage(url: URL) {
         imageTask?.cancel()
+        imageTask = nil
 
-        if let cached = SimpleImageCache.shared.image(for: url) {
+        // メモリ or ディスクヒット → 即時表示
+        if let cached = DiskImageCache.shared.image(for: url) {
             imageView.image = cached
             return
         }
 
         imageView.image = placeholderImage()
 
-        imageTask = URLSession.shared.dataTask(with: url) { data, _, _ in
+        // ネットワーク → ダウンロード後にディスク保存
+        imageTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data, let img = UIImage(data: data) else { return }
-            SimpleImageCache.shared.set(img, for: url)
-            DispatchQueue.main.async { [weak self] in
+            DiskImageCache.shared.set(img, for: url)
+            DispatchQueue.main.async {
                 self?.imageView.image = img
             }
         }
@@ -315,17 +318,73 @@ final class PaddingLabel: UILabel {
     }
 }
 
-// MARK: - Tiny in-memory cache
-final class SimpleImageCache {
-    static let shared = SimpleImageCache()
-    private let cache = NSCache<NSURL, UIImage>()
-    private init() {}
+// MARK: - Disk + Memory Image Cache
+final class DiskImageCache {
+    static let shared = DiskImageCache()
 
-    func image(for url: URL) -> UIImage? {
-        cache.object(forKey: url as NSURL)
+    // メモリ層（セッション内高速アクセス）
+    private let memory = NSCache<NSString, UIImage>()
+
+    // ディスク層
+    private let cacheDir: URL
+    private let ioQueue = DispatchQueue(label: "DiskImageCache.io", qos: .utility)
+
+    // TTL: 14日
+    private let ttl: TimeInterval = 14 * 24 * 3600
+
+    private init() {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        cacheDir = base.appendingPathComponent("CircleImages", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        memory.countLimit = 120
+        memory.totalCostLimit = 60 * 1024 * 1024   // 60MB
     }
 
+    /// メモリ → ディスクの順に同期取得
+    func image(for url: URL) -> UIImage? {
+        let key = cacheKey(for: url)
+
+        // メモリヒット
+        if let img = memory.object(forKey: key as NSString) { return img }
+
+        // ディスクヒット（TTLチェック付き）
+        let file = cacheDir.appendingPathComponent(key)
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+           let mod = attrs[.modificationDate] as? Date,
+           Date().timeIntervalSince(mod) > ttl {
+            ioQueue.async { try? FileManager.default.removeItem(at: file) }
+            return nil
+        }
+
+        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe),
+              let img  = UIImage(data: data) else { return nil }
+
+        memory.setObject(img, forKey: key as NSString, cost: data.count)
+        return img
+    }
+
+    /// メモリに即時保存 + ディスクに非同期書き込み
     func set(_ image: UIImage, for url: URL) {
-        cache.setObject(image, forKey: url as NSURL)
+        let key = cacheKey(for: url)
+        memory.setObject(image, forKey: key as NSString)
+
+        let file = cacheDir.appendingPathComponent(key)
+        ioQueue.async {
+            if let data = image.jpegData(compressionQuality: 0.85) {
+                try? data.write(to: file, options: .atomic)
+            }
+        }
+    }
+
+    private func cacheKey(for url: URL) -> String {
+        // URLをBase64エンコードしてファイル名に使える形式に変換
+        let encoded = Data(url.absoluteString.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
+        return String(encoded.prefix(200)) + ".jpg"
     }
 }

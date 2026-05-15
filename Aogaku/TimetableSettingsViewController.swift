@@ -53,9 +53,7 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
             labeled("時限数", periodsSeg),
             labeled("曜日", daysSeg),
         ]
-        #if DEBUG
-        rows.append(labeled("広告（開発用）", makeAdsToggleSwitch()))
-        #endif
+
         let stack = UIStackView(arrangedSubviews: rows)
         stack.axis = .vertical
         stack.spacing = 16
@@ -75,11 +73,6 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
         NotificationCenter.default.addObserver(self,
             selector: #selector(onAdsConfigUpdated),
             name: AdsSwitchboard.didUpdate, object: nil)
-        #if DEBUG
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(onAdsEnabledDidChange),
-            name: .adsEnabledDidChange, object: nil)
-        #endif
     }
     @objc private func onAdsConfigUpdated() {
         // スタイル or ユニットIDが変わったら作り直し
@@ -308,27 +301,4 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
 
     @objc private func close() { dismiss(animated: true) }
 
-    // MARK: - 広告トグル（DEBUG のみ）
-    #if DEBUG
-    private func makeAdsToggleSwitch() -> UISwitch {
-        let sw = UISwitch()
-        sw.isOn = !AdsDebugState.isHidden
-        sw.onTintColor = UIColor(red: 0, green: 120/255, blue: 87/255, alpha: 1)
-        sw.addTarget(self, action: #selector(adsToggleChanged(_:)), for: .valueChanged)
-        return sw
-    }
-
-    @objc private func adsToggleChanged(_ sw: UISwitch) {
-        AdsDebugState.toggle()   // UserDefaults 書き換え + .adsEnabledDidChange 通知
-    }
-
-    @objc private func onAdsEnabledDidChange() {
-        let show = AdsConfig.enabled
-        adContainer.isHidden = !show
-        adContainerHeight?.constant = show
-            ? (bannerView?.adSize.size.height ?? 0) + bannerTopPadding
-            : 0
-        UIView.animate(withDuration: 0.2) { self.view.layoutIfNeeded() }
-    }
-    #endif
 }

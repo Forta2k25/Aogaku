@@ -504,14 +504,31 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     private enum SectionKind {
         case planned(DisplayCategory)
         case earned(DisplayCategory)
+        case earnedTermGroup(String, [Course])               // (termText, courses)
+        case mergedCategory(DisplayCategory, [Course], [Course])  // (category, planned, earned)
         var title: String {
             switch self {
-            case .planned(let d): return "取得予定（今学期） — \(d.title)"
-            case .earned(let d):  return "取得済み（過年度） — \(d.title)"
+            case .planned(let d):
+                return "取得予定（今学期） — \(d.title)"
+            case .earned(let d):
+                return "取得済み（過年度） — \(d.title)"
+            case .earnedTermGroup(let t, let arr):
+                let total = arr.reduce(0) { $0 + (($1.credits as Int?) ?? 0) }
+                return "\(t)　\(total) 単位"
+            case .mergedCategory(let d, _, _):
+                return d.title
             }
         }
     }
     private var sections: [SectionKind] = []
+
+    // 学期別ビュー用
+    private var earnedByTerm: [(String, [Course])] = []   // (termText, courses) 新→旧順
+    private var earnedViewMode = 0                        // 0=カテゴリ別 / 1=学期別
+
+    // バナー
+    private let graduationBannerView  = UIView()
+    private let graduationBannerLabel = UILabel()
 
     // MARK: - Life
     override func viewDidLoad() {
@@ -527,6 +544,13 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         }
         donut.backgroundColor = .clear
         donut.isOpaque = false
+
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "plus"),
+            style: .plain,
+            target: self,
+            action: #selector(showManualEditor)
+        )
 
         buildUI()
         loadSelection()
@@ -805,13 +829,38 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             earnedByDisplay[k]  = (earnedByDisplay[k]  ?? []).sorted { $0.title < $1.title }
         }
 
+        // 学期別集計（新→旧順）
+        var tg: [String: [Course]] = [:]
+        for c in earnedCourses {
+            let t = earnedTermText[courseKey(c)] ?? "不明"
+            tg[t, default: []].append(c)
+        }
+        earnedByTerm = tg
+            .sorted { $0.key > $1.key }
+            .map { ($0.key, $0.value.sorted { $0.title < $1.title }) }
+
         // セクション
         sections.removeAll()
-        for d in DisplayCategory.allCases {
-            if let arr = plannedByDisplay[d], !arr.isEmpty { sections.append(.planned(d)) }
-        }
-        for d in DisplayCategory.allCases {
-            if let arr = earnedByDisplay[d], !arr.isEmpty { sections.append(.earned(d)) }
+        if earnedViewMode == 1 {
+            // 学期別: 今学期の取得予定を先頭にまとめ、続けて過去学期
+            let plannedAll = DisplayCategory.allCases
+                .flatMap { plannedByDisplay[$0] ?? [] }
+                .sorted { $0.title < $1.title }
+            if !plannedAll.isEmpty {
+                sections.append(.earnedTermGroup("今学期（取得予定）", plannedAll))
+            }
+            for (t, arr) in earnedByTerm where !arr.isEmpty {
+                sections.append(.earnedTermGroup(t, arr))
+            }
+        } else {
+            // カテゴリ別: 取得予定と取得済みを同じセクションに統合
+            for d in DisplayCategory.allCases {
+                let p = plannedByDisplay[d] ?? []
+                let e = earnedByDisplay[d]  ?? []
+                if !p.isEmpty || !e.isEmpty {
+                    sections.append(.mergedCategory(d, p, e))
+                }
+            }
         }
     }
 
@@ -870,6 +919,26 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         legendStack.addArrangedSubview(row(.free,       need: req.free))
 
         tableView.reloadData()
+
+        // バナー更新
+        let req2 = requirement4()
+        if selectedFaculty == nil {
+            graduationBannerView.isHidden = true
+        } else {
+            let totalWithPlanned = totals.earnedTotal + totals.plannedTotal
+            let remaining = max(0, req2.total - totalWithPlanned)
+            graduationBannerView.isHidden = false
+            if remaining == 0 {
+                graduationBannerLabel.text = "🎓 卒業要件を満たしています"
+                graduationBannerView.backgroundColor = HackColors.nowAccent.withAlphaComponent(0.15)
+                graduationBannerLabel.textColor = HackColors.nowAccent
+            } else {
+                graduationBannerLabel.text = "卒業まであと \(remaining) 単位"
+                graduationBannerView.backgroundColor = UIColor.tertiarySystemBackground
+                graduationBannerLabel.textColor = .label
+            }
+        }
+
         updateTableHeaderHeightIfNeeded()
     }
 
@@ -983,6 +1052,30 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         legendStack.axis = .vertical
         legendStack.spacing = 6
 
+        // 学期別 / カテゴリ別 セグメント（取得済みセクション切り替え）
+        let earnedSeg = UISegmentedControl(items: ["カテゴリ別", "学期別"])
+        earnedSeg.selectedSegmentIndex = earnedViewMode
+        earnedSeg.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
+        earnedSeg.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
+        earnedSeg.addTarget(self, action: #selector(earnedViewModeChanged(_:)), for: .valueChanged)
+
+        // 卒業バナー
+        graduationBannerView.layer.cornerRadius = 10
+        graduationBannerView.layer.masksToBounds = true
+        graduationBannerView.isHidden = true
+        graduationBannerView.layoutMargins = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+        graduationBannerLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        graduationBannerLabel.textAlignment = .center
+        graduationBannerLabel.numberOfLines = 0
+        graduationBannerLabel.translatesAutoresizingMaskIntoConstraints = false
+        graduationBannerView.addSubview(graduationBannerLabel)
+        NSLayoutConstraint.activate([
+            graduationBannerLabel.topAnchor.constraint(equalTo: graduationBannerView.layoutMarginsGuide.topAnchor),
+            graduationBannerLabel.bottomAnchor.constraint(equalTo: graduationBannerView.layoutMarginsGuide.bottomAnchor),
+            graduationBannerLabel.leadingAnchor.constraint(equalTo: graduationBannerView.layoutMarginsGuide.leadingAnchor),
+            graduationBannerLabel.trailingAnchor.constraint(equalTo: graduationBannerView.layoutMarginsGuide.trailingAnchor),
+        ])
+
         // add
         stack.addArrangedSubview(filtersRow)
         stack.addArrangedSubview(captionLabel)
@@ -990,6 +1083,10 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         stack.setCustomSpacing(4, after: donutWrap)
         stack.addArrangedSubview(needLabel)
         stack.addArrangedSubview(legendStack)
+        stack.setCustomSpacing(12, after: legendStack)
+        stack.addArrangedSubview(graduationBannerView)
+        stack.setCustomSpacing(10, after: graduationBannerView)
+        stack.addArrangedSubview(earnedSeg)
         
         
         
@@ -1007,28 +1104,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         ])
         tableView.tableHeaderView = container
         
-        // ★ ここから追加：テーブルのフッター（追加＋）を用意
-        let footer = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 64))
-        let addBtn = UIButton(type: .system)
-        addBtn.configuration = {
-            var c = UIButton.Configuration.filled()
-            c.title = "追加＋"
-            c.baseBackgroundColor = .systemGray5
-            c.baseForegroundColor = .label
-            c.cornerStyle = .large
-            return c
-        }()
-        addBtn.addAction(UIAction { [weak self] _ in self?.showManualEditor() }, for: .touchUpInside)
-        addBtn.translatesAutoresizingMaskIntoConstraints = false
-        footer.addSubview(addBtn)
-        NSLayoutConstraint.activate([
-            addBtn.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
-            addBtn.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            addBtn.widthAnchor.constraint(equalTo: footer.widthAnchor, multiplier: 0.92),
-            addBtn.heightAnchor.constraint(equalToConstant: 44)
-        ])
-        tableView.tableFooterView = footer
-        // ★ ここまで追加
+        // フッターは不要（追加はナビバーの + ボタンに移動）
+        tableView.tableFooterView = UIView(frame: .zero)
 
     }
     
@@ -1125,6 +1202,12 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     }
 
     
+    @objc private func earnedViewModeChanged(_ seg: UISegmentedControl) {
+        earnedViewMode = seg.selectedSegmentIndex
+        compute()
+        apply()
+    }
+
     private func makeTermText(_ key: TermKey) -> String {
         // 手元の実装に合わせて整形。分からなければ最小限これでOK
         return String(describing: key)
@@ -1246,8 +1329,10 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { sections[section].title }
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch sections[section] {
-        case .planned(let d): return plannedByDisplay[d]?.count ?? 0
-        case .earned(let d):  return earnedByDisplay[d]?.count ?? 0
+        case .planned(let d):                    return plannedByDisplay[d]?.count ?? 0
+        case .earned(let d):                    return earnedByDisplay[d]?.count ?? 0
+        case .earnedTermGroup(_, let arr):       return arr.count
+        case .mergedCategory(_, let p, let e):  return p.count + e.count
         }
     }
     // 右から左スワイプのアクション（iOS 11+）
@@ -1281,8 +1366,10 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
     private func rows(for section: Int) -> [Course] {
         switch sections[section] {
-        case .planned(let d): return plannedByDisplay[d] ?? []
-        case .earned(let d):  return earnedByDisplay[d]  ?? []
+        case .planned(let d):                    return plannedByDisplay[d] ?? []
+        case .earned(let d):                    return earnedByDisplay[d]  ?? []
+        case .earnedTermGroup(_, let arr):       return arr
+        case .mergedCategory(_, let p, let e):  return p + e
         }
     }
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -1290,14 +1377,25 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         var cfg = cell.defaultContentConfiguration()
         cfg.text = c.title
-        var creditsText = "\(((c.credits as Int?) ?? 0))単位"
+        let creditsText = "\(((c.credits as Int?) ?? 0))単位"
         var subtitle = "\(c.teacher) ・ \(creditsText)"
 
-        // 取得済みセクションなら学期を間に挟む
-        if case .earned = sections[indexPath.section] {
+        switch sections[indexPath.section] {
+        case .earned:
+            // 取得済みセクション: 学期を挿入
             if let t = earnedTermText[courseKey(c)] {
                 subtitle = "\(c.teacher) ・ \(t) ・ \(creditsText)"
             }
+        case .mergedCategory(_, let planned, _):
+            // 統合セクション: 取得予定 or 取得済み + 学期 のラベルを先頭に
+            if indexPath.row < planned.count {
+                subtitle = "今学期（取得予定） ・ \(c.teacher) ・ \(creditsText)"
+            } else {
+                let termLabel = earnedTermText[courseKey(c)] ?? "取得済み"
+                subtitle = "\(termLabel) ・ \(c.teacher) ・ \(creditsText)"
+            }
+        default:
+            break
         }
         cfg.secondaryText = subtitle
         cell.contentConfiguration = cfg

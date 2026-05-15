@@ -21,9 +21,12 @@ struct Course: Codable, Equatable {
     var syllabusURL: String?
     var term: String?
 
-    // 追加: Firestore の time 情報（オンライン一覧の曜日/時限フィルタで使用）
+    // Firestore の time 情報（オンライン一覧の曜日/時限フィルタで使用）
     var timeDay: String?         // time.day （例: "月" / "月曜" / "月曜日"）
     var periods: [Int]?          // time.periods（例: [1,2]）
+
+    // classes コレクションの Firestore document ID。レビューキーとして使用。
+    var firestoreDocID: String?
 
     init(id: String,
          title: String,
@@ -44,9 +47,9 @@ struct Course: Codable, Equatable {
         self.category = category
         self.syllabusURL = syllabusURL
         self.term = term
-        // 追加フィールドの初期値
         self.timeDay = nil
         self.periods = nil
+        self.firestoreDocID = nil
     }
 
     /// Firestore のドキュメントから生成
@@ -73,7 +76,10 @@ struct Course: Codable, Equatable {
                   syllabusURL: url,
                   term: term)
 
-        // ← 追加: time 情報を取り出して保持
+        // Firestore document ID を保持（レビューキーとして使用）
+        self.firestoreDocID = doc.documentID
+
+        // time 情報を取り出して保持
         if let time = d["time"] as? [String: Any] {
             if let day = time["day"] as? String {
                 self.timeDay = day

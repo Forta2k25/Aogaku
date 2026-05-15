@@ -3,6 +3,29 @@ import UserNotifications
 
 // MARK: - Models
 
+// MARK: カスタム（手動）課題
+
+struct CustomAssignment: Codable {
+    let id: String           // UUID
+    var title: String        // 課題名
+    var courseName: String   // 科目名（任意）
+    var dueDate: Date
+
+    /// MoodleEvent に変換して既存のリスト UI に混ぜる
+    func toMoodleEvent() -> MoodleEvent {
+        MoodleEvent(
+            uid: "custom:\(id)",
+            summary: title,
+            cleanTitle: title,
+            dueDate: dueDate,
+            eventDescription: courseName,   // 科目名を description に格納
+            eventURL: nil,
+            courseCode: "custom",
+            eventType: .deadline
+        )
+    }
+}
+
 enum MoodleEventType: String, Codable {
     case deadline   // 「...」の提出期限
     case start      // 「...」開始
@@ -34,11 +57,12 @@ final class MoodleService {
     private init() {}
 
     private enum UDKey {
-        static let icalURL           = "moodle.icalURL"
-        static let cache             = "moodle.cachedEvents"
-        static let submittedUIDs     = "moodle.submittedUIDs"
-        static let globalNotifHours  = "moodle.globalNotifHours"   // [Int]
-        static let globalNotifIds    = "moodle.globalNotifIds"     // [String:[String]]
+        static let icalURL             = "moodle.icalURL"
+        static let cache               = "moodle.cachedEvents"
+        static let submittedUIDs       = "moodle.submittedUIDs"
+        static let globalNotifHours    = "moodle.globalNotifHours"   // [Int]
+        static let globalNotifIds      = "moodle.globalNotifIds"     // [String:[String]]
+        static let customAssignments   = "moodle.customAssignments"  // [CustomAssignment]
     }
 
     // MARK: - URL 管理
@@ -97,6 +121,33 @@ final class MoodleService {
     }
 
     func isSubmitted(uid: String) -> Bool { submittedUIDs.contains(uid) }
+
+    // MARK: - カスタム課題 CRUD
+
+    func customAssignments() -> [CustomAssignment] {
+        guard let data = UserDefaults.standard.data(forKey: UDKey.customAssignments),
+              let items = try? JSONDecoder().decode([CustomAssignment].self, from: data)
+        else { return [] }
+        return items
+    }
+
+    func addCustomAssignment(_ item: CustomAssignment) {
+        var items = customAssignments()
+        items.append(item)
+        saveCustomAssignments(items)
+    }
+
+    func deleteCustomAssignment(id: String) {
+        var items = customAssignments()
+        items.removeAll { $0.id == id }
+        saveCustomAssignments(items)
+    }
+
+    private func saveCustomAssignments(_ items: [CustomAssignment]) {
+        if let data = try? JSONEncoder().encode(items) {
+            UserDefaults.standard.set(data, forKey: UDKey.customAssignments)
+        }
+    }
 
     // MARK: - 手動マッピング（記号IDなど自動変換できない場合）
     // キー: CATEGORIESコード、値: 授業名

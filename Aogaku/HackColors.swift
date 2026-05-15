@@ -23,16 +23,16 @@ enum HackColors {
 
     // MARK: - 授業セル
     /// 授業コマの背景色（デフォルト = teal 相当）
-    /// Light: 深い青山グリーン / Dark: ダーク背景で視認できる明るめ深緑
+    /// Light: 水色 / Dark: 少し暗めの水色
     static let cellFill = make(
-        light: UIColor(red:  0/255, green: 105/255, blue: 52/255, alpha: 1),  // #006934
-        dark:  UIColor(red: 30/255, green: 140/255, blue: 70/255, alpha: 1)   // #1E8C46 明るく
+        light: UIColor(red:  0/255, green: 140/255, blue: 180/255, alpha: 1),  // #008CB4 水色
+        dark:  UIColor(red:  0/255, green: 118/255, blue: 155/255, alpha: 1)   // #00769B 少し暗め
     )
 
     /// 授業コマのボーダー（ダーク限定。ライトは不要）
     static let cellBorder = make(
         light: .clear,
-        dark:  UIColor(red: 30/255, green: 100/255, blue: 55/255, alpha: 0.4)
+        dark:  UIColor(red: 0/255, green: 100/255, blue: 140/255, alpha: 0.5)
     )
 
     // MARK: - 空きコマ
@@ -73,6 +73,12 @@ enum HackColors {
 
     /// タブバー・ボタン等のUIアクセント（nowAccentと同値）
     static let accent = nowAccent
+
+    /// 「今週」バッジ用。ダークモードでも眩しくない落ち着いた緑
+    static let weekBadge = make(
+        light: UIColor(red:  0/255, green: 105/255, blue:  52/255, alpha: 1),  // #006934
+        dark:  UIColor(red: 30/255, green: 140/255, blue:  70/255, alpha: 1)   // #1E8C46
+    )
 
     /// 今日のヘッダーハイライト背景
     static let todayHighlightBg = make(

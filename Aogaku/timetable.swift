@@ -39,11 +39,12 @@ private func encodeCourseMap(_ c: Course, colorKey: String?) -> [String: Any] {
     var m: [String: Any] = [
         "id": c.id, "title": c.title, "room": c.room, "teacher": c.teacher
     ]
-    if let v = c.credits     { m["credits"] = v }
-    if let v = c.campus      { m["campus"] = v }
-    if let v = c.category    { m["category"] = v }
-    if let v = c.syllabusURL { m["syllabusURL"] = v }
-    if let v = colorKey      { m["colorKey"] = v }
+    if let v = c.credits        { m["credits"] = v }
+    if let v = c.campus         { m["campus"] = v }
+    if let v = c.category       { m["category"] = v }
+    if let v = c.syllabusURL    { m["syllabusURL"] = v }
+    if let v = c.firestoreDocID { m["firestoreDocID"] = v }
+    if let v = colorKey         { m["colorKey"] = v }
     return m
 }
 private func decodeCourseMap(_ m: [String: Any]) -> Course {
@@ -59,11 +60,14 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
     let campus   = m["campus"] as? String
     let category = m["category"] as? String
     let url      = m["syllabusURL"] as? String
+    let docID    = m["firestoreDocID"] as? String
     if id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         id = [title, teacher, room, campus ?? "", ""].joined(separator: "|")
     }
-    return Course(id: id, title: title, room: room, teacher: teacher,
-                  credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
+    var c = Course(id: id, title: title, room: room, teacher: teacher,
+                   credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
+    c.firestoreDocID = docID
+    return c
 }
 
 private let cellPastelRatio: CGFloat = 0.50 // 0.35〜0.65あたりでお好み調整
@@ -310,7 +314,12 @@ final class timetable: UIViewController,
     // ====== 行数の上限 ======
     private let titleMaxLines = 5
     private let subtitleMaxLines = 2
-    private let periodRowMinHeight: CGFloat = 105
+    private var periodRowMinHeight: CGFloat {
+        let h = UIScreen.main.bounds.height
+        if h >= 900 { return 105 }   // Plus / Pro Max
+        if h >= 800 { return 94 }    // 標準（14/15/16）
+        return 80                     // SE など小型
+    }
 
     // ===== Scroll root =====
     private let scrollView = UIScrollView()
@@ -377,6 +386,8 @@ final class timetable: UIViewController,
     private let headerRowHeight: CGFloat = 28
     private let timeColWidth: CGFloat = 40
     private let topRatio: CGFloat = 0.02
+    /// オンデマンド行の高さ（通常コマより低くて OK）
+    private let onlineRowHeight: CGFloat = 68
 
     // 現在学期
     private var currentTerm: TermKey = timetable.loadInitialTerm()
@@ -426,8 +437,8 @@ final class timetable: UIViewController,
     // === 背景テーマ ===
     private enum TTBackground: String { case system, lightGray, white }
     
-    // オンライン行の見た目（縦に積むスタック）を曜日ごとに保持
-    private var onlineRowStacks: [UIStackView] = []
+    // オンライン行のボタン（複数スロット行対応）
+    // ※ onlineRowStacks は廃止。各ボタンが 1 コースを直接表示する。
 
     // 選択中テーマに応じた背景色（ダークは薄グレー）
     private func appBGColor() -> UIColor {
@@ -499,6 +510,7 @@ final class timetable: UIViewController,
     private var onlineKeyPrefix: String { "tt.online.\(currentTerm.storageKey)" }
 
     private func loadSavedOnlineSlots() {
+        // 先に全日を読み込んでから UI を更新する（途中で odSlotCount が変わると rebuildGrid が複数回走るのを防ぐ）
         for day in 0..<dayLabels.count {
             let k = "\(onlineKeyPrefix).d\(day)"
             if let data = UserDefaults.standard.data(forKey: k),
@@ -507,7 +519,12 @@ final class timetable: UIViewController,
             } else {
                 onlineSlots[day] = []
             }
-            updateOnlineUI(for: day)
+        }
+        // スロット数が変わっていればグリッドごと再構築、そうでなければ UI だけ更新
+        if odSlotCount > 1 {
+            rebuildGrid()
+        } else {
+            for d in 0..<dayLabels.count { updateOnlineUI(for: d) }
         }
     }
 
@@ -560,65 +577,71 @@ final class timetable: UIViewController,
         }
 
         guard !changedDays.isEmpty else { return }
+        let prevSlotCount = odSlotCount
         for d in changedDays {
             if !viewOnly, overrideUID == nil { saveOnline(for: d) }
-            updateOnlineUI(for: d)
         }
+        if odSlotCount != prevSlotCount { rebuildGrid() }
+        else { for d in changedDays { updateOnlineUI(for: d) } }
     }
 
 
     
-    // 追加：OD 行( period==0 )のボタンを通常セル風に更新
+    // OD スロット行（全スロット）を曜日ごとに更新
+    // s < count    → コースチップ（タップで詳細）
+    // s == count   → ＋ボタン（この曜日の次のスロット）
+    // s > count    → 空白セル・非インタラクティブ（他曜日のために存在する行）
     private func updateOnlineUI(for day: Int) {
-        guard day >= 0, day < onlineRowStacks.count else { return }
-        guard let btn = onlineRowButtons.first(where: { $0.tag == day }) else { return }
-        let stack = onlineRowStacks[day]
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-
         let list = onlineSlots[day] ?? []
+        for s in 0..<odSlotCount {
+            let tag = s * 100 + day
+            guard let btn = onlineRowButtons.first(where: { $0.tag == tag }) else { continue }
+            btn.subviews.filter { $0.tag == 42 }.forEach { $0.removeFromSuperview() }
 
-        // ボタン外観は「通常セル」と同じ（＋の位置・枠線・角丸）
-        btn.backgroundColor = .clear
-        btn.layer.borderWidth = 0
-        btn.layer.cornerRadius = 0
-
-        if list.isEmpty {
-            stack.isHidden = true
-
-            var cfg = baseCellConfig(
-                bg: HackColors.emptyCellBg,
-                fg: HackColors.plusIcon,
-                stroke: HackColors.gridLine,
-                strokeWidth: HackColors.emptyCellBorderWidth(for: traitCollection)
-            )
-            cfg.title = viewOnly ? " " : "＋"
-            cfg.titleAlignment = .center
-            cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { inAttr in
-                var out = inAttr
-                out.font = .systemFont(ofSize: 16, weight: .light)
-                let p = NSMutableParagraphStyle()
-                p.alignment = .center
-                out.paragraphStyle = p
-                return out
+            if s < list.count {
+                // ── コース表示 ──
+                let chip = makeOnlineChip(for: list[s], day: day)
+                chip.tag = 42
+                chip.isUserInteractionEnabled = false
+                chip.translatesAutoresizingMaskIntoConstraints = false
+                btn.addSubview(chip)
+                btn.configuration = nil
+                btn.isHidden = false
+                btn.isUserInteractionEnabled = true
+                NSLayoutConstraint.activate([
+                    chip.leadingAnchor.constraint(equalTo: btn.leadingAnchor),
+                    chip.trailingAnchor.constraint(equalTo: btn.trailingAnchor),
+                    chip.topAnchor.constraint(equalTo: btn.topAnchor),
+                    chip.bottomAnchor.constraint(equalTo: btn.bottomAnchor)
+                ])
+            } else if s == list.count {
+                // ── この曜日の追加ボタン（＋）──
+                btn.isHidden = false
+                var cfg = baseCellConfig(
+                    bg: HackColors.emptyCellBg,
+                    fg: HackColors.plusIcon,
+                    stroke: HackColors.gridLine,
+                    strokeWidth: HackColors.emptyCellBorderWidth(for: traitCollection)
+                )
+                cfg.title = viewOnly ? " " : "＋"
+                cfg.titleAlignment = .center
+                cfg.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { inAttr in
+                    var out = inAttr
+                    out.font = .systemFont(ofSize: 16, weight: .light)
+                    let p = NSMutableParagraphStyle(); p.alignment = .center
+                    out.paragraphStyle = p
+                    return out
+                }
+                btn.configuration = cfg
+                btn.isUserInteractionEnabled = !viewOnly
+            } else {
+                // ── 余白行（完全非表示・タップ不可）──
+                btn.configuration = nil
+                btn.backgroundColor = .clear
+                btn.layer.borderWidth = 0
+                btn.isUserInteractionEnabled = false
+                btn.isHidden = true
             }
-            btn.configuration = cfg
-            return
-        }
-
-        // 複数あれば上下に等分して全部並べる
-        stack.isHidden = false
-        var cfg = baseCellConfig(
-            bg: HackColors.emptyCellBg,
-            fg: .label,
-            stroke: HackColors.gridLine,
-            strokeWidth: HackColors.emptyCellBorderWidth(for: traitCollection)
-        )
-        cfg.title = " " // タイトル領域は使わず、上に載せるスタックで描画
-        btn.configuration = cfg
-
-        stack.distribution = .fillEqually
-        for c in list {
-            stack.addArrangedSubview(makeOnlineChip(for: c, day: day))
         }
     }
     private func makeOnlineChip(for course: Course, day: Int) -> UIView {
@@ -627,7 +650,7 @@ final class timetable: UIViewController,
         let colorKey = SlotColorStore.color(for: loc) ?? .teal
         let isDark = traitCollection.userInterfaceStyle == .dark
         let pastel = isDark
-            ? colorKey.uiColor.mixed(with: UIColor(white: 0.08, alpha: 1), ratio: 0.35)
+            ? colorKey.uiColor.mixed(with: .white, ratio: 0.12)
             : colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
 
         let v = UIView()
@@ -639,6 +662,9 @@ final class timetable: UIViewController,
         let content = TimetableCellContentView()
         content.translatesAutoresizingMaskIntoConstraints = false
         content.titleLabel.text = course.title
+            .replacingOccurrences(of: #"\s*[\[［]オンライン[\]］]\s*$"#, with: "",
+                                  options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
         content.titleLabel.textColor = .white
         // オンデマは教室不要 → setRoom("") でピル非表示＋タイトルをセル全体に
         content.setRoom("")
@@ -679,11 +705,18 @@ final class timetable: UIViewController,
     // === 追加: TimetableViewController 内に追記 ===============================
 
     // OD 行のボタン保持（再レイアウト時に消すため）
+    // tag = slotIndex * 100 + day
     private var onlineRowButtons: [UIButton] = []
     private var onlineRowLabel: UILabel?
 
-    // OD 行の行インデックス（ヘッダー0 + 1限〜N限 の次）
-    private var odRowIndex: Int { return 1 + periodLabels.count }
+    // OD セクションの最初の行インデックス（ヘッダー0 + 1限〜N限 の次）
+    private var odRowStartIndex: Int { 1 + periodLabels.count }
+
+    /// 現在のコース数から動的に決まる OD 行数（コース数 + 1「＋」行）
+    private var odSlotCount: Int {
+        let maxCourses = onlineSlots.values.map { $0.count }.max() ?? 0
+        return maxCourses + 1   // 常に末尾に「＋」行を確保
+    }
 
     // OD マーカー（左の「OD」ラベル）を作成
     private func makeODMarker() -> UILabel {
@@ -725,57 +758,41 @@ final class timetable: UIViewController,
         return v
     }
 
-    // OD 行（オンライン用セル）を並べる（通常セルと同じ枠・サイズ）
-private func placeOnlineRow() {
-    // 既存のオンライン行があれば一旦クリア
-    onlineRowButtons.forEach { $0.removeFromSuperview() }
-    onlineRowStacks.forEach { $0.removeFromSuperview() }
-    onlineRowButtons.removeAll()
-    onlineRowStacks.removeAll()
+    // OD セクションを複数スロット行で配置する（通常セルと同じ枠・サイズ）
+    // スロット行 0...(odSlotCount-2): 登録済みコース or ＋
+    // スロット行 (odSlotCount-1): 常に＋（新規追加行）
+    private func placeOnlineRows() {
+        onlineRowButtons.forEach { $0.removeFromSuperview() }
+        onlineRowButtons.removeAll()
+        onlineRowLabel?.removeFromSuperview()
+        onlineRowLabel = nil
 
-    guard rowGuides.indices.contains(odRowIndex) else { return }
-    let rowG = rowGuides[odRowIndex]
+        for s in 0..<odSlotCount {
+            guard rowGuides.indices.contains(odRowStartIndex + s) else { continue }
+            let rowG = rowGuides[odRowStartIndex + s]
 
-    for day in 0..<dayLabels.count {
-        // 1) セル（通常の時間割セルと同じ制約で配置）
-        let button = UIButton(type: .system)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        gridContainerView.addSubview(button)
+            for day in 0..<dayLabels.count {
+                let button = UIButton(type: .system)
+                button.translatesAutoresizingMaskIntoConstraints = false
+                gridContainerView.addSubview(button)
 
-        let colG = colGuides[day + 1]
-        NSLayoutConstraint.activate([
-            button.topAnchor.constraint(equalTo: rowG.topAnchor, constant: cellPadding),
-            button.bottomAnchor.constraint(equalTo: rowG.bottomAnchor, constant: -cellPadding),
-            button.leadingAnchor.constraint(equalTo: colG.leadingAnchor, constant: cellPadding),
-            button.trailingAnchor.constraint(equalTo: colG.trailingAnchor, constant: -cellPadding)
-        ])
+                let colG = colGuides[day + 1]
+                NSLayoutConstraint.activate([
+                    button.topAnchor.constraint(equalTo: rowG.topAnchor, constant: cellPadding),
+                    button.bottomAnchor.constraint(equalTo: rowG.bottomAnchor, constant: -cellPadding),
+                    button.leadingAnchor.constraint(equalTo: colG.leadingAnchor, constant: cellPadding),
+                    button.trailingAnchor.constraint(equalTo: colG.trailingAnchor, constant: -cellPadding)
+                ])
 
-        button.tag = day
-        button.addTarget(self, action: #selector(tapOnlineCell(_:)), for: .touchUpInside)
-        onlineRowButtons.append(button)
+                // tag = slotIndex * 100 + day（dayLabels.count は最大 6）
+                button.tag = s * 100 + day
+                button.addTarget(self, action: #selector(tapOnlineCell(_:)), for: .touchUpInside)
+                onlineRowButtons.append(button)
+            }
+        }
 
-        // 2) 表示用スタック（科目がある時だけ使う。空の時は＋をボタン側で出す）
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.alignment = .fill
-        stack.distribution = .fillEqually
-        // 通常セル（1〜5限）と同じ見え方に寄せるため、余白/間隔を最小に
-        stack.spacing = 1
-        stack.isUserInteractionEnabled = false
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: button.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: button.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: button.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: button.bottomAnchor)
-        ])
-        onlineRowStacks.append(stack)
+        for d in 0..<dayLabels.count { updateOnlineUI(for: d) }
     }
-
-    // 初期UI反映
-    for d in 0..<dayLabels.count { updateOnlineUI(for: d) }
-}
 
 
  
@@ -787,48 +804,44 @@ private func placeOnlineRow() {
 
 
     @objc private func tapOnlineCell(_ sender: UIButton) {
-        let day = sender.tag
-        let list = onlineSlots[day] ?? []
+        let slotIndex = sender.tag / 100
+        let day       = sender.tag % 100
+        let list      = onlineSlots[day] ?? []
 
-        let ac = UIAlertController(
-            title: "\(dayName(for: day))曜日のオンライン授業を追加",
-            message: nil,
-            preferredStyle: .actionSheet
-        )
-
-        if !list.isEmpty {
-            for c in list {
-                ac.addAction(UIAlertAction(title: c.title, style: .default, handler: { [weak self] _ in
-                    guard let self = self else { return }
-                    let loc = SlotLocation(day: day, period: 0)
-                    self.presentCourseDetail(c, at: loc)   // 既存の詳細表示ルートを再利用
-                }))
-            }
-        }
-
-        // 追加ボタン：オンライン一覧画面へ（OD 行＝ period:0）
-        ac.addAction(UIAlertAction(title: "+ 追加…", style: .default, handler: { [weak self] _ in
-            guard let self = self else { return }
+        if slotIndex < list.count {
+            // ── 既存コース：通常コマと同じく詳細画面へ直接遷移 ──
+            let course = list[slotIndex]
+            let loc    = SlotLocation(day: day, period: 0)
+            presentCourseDetail(course, at: loc)
+        } else {
+            // ── 空スロット：授業追加 ──
             let loc = SlotLocation(day: day, period: 0)
-
-            // TermKey をそのまま渡すのではなく “（後期）” のような文字列にして渡す
-            let termRaw: String? = self.currentTermDisplayString()    // ← 下に補助関数を追加
-
+            let termRaw = currentTermDisplayString()
             let vc = CourseListViewController(location: loc, termRaw: termRaw)
             vc.delegate = self
-            if let nav = self.navigationController {
+            if let nav = navigationController {
                 nav.pushViewController(vc, animated: true)
             } else {
-                // ナビゲーションバーが無いと「戻る」が出ないため、必ず UINavigationController で包んで出す
                 let nav = UINavigationController(rootViewController: vc)
                 nav.modalPresentationStyle = .fullScreen
-                self.present(nav, animated: true)
+                present(nav, animated: true)
             }
+        }
+    }
 
-        }))
-
-        ac.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
-        present(ac, animated: true)
+    /// OD コースを削除し、スロット数が変わる場合はグリッドを再構築する
+    private func removeOnlineCourse(_ course: Course, day: Int) {
+        guard var arr = onlineSlots[day] else { return }
+        let key = onlineCourseKey(course)
+        guard let i = arr.firstIndex(where: { onlineCourseKey($0) == key }) else { return }
+        let prevSlotCount = odSlotCount
+        arr.remove(at: i)
+        onlineSlots[day] = arr
+        saveOnline(for: day)
+        let fKey = onlineFieldKey(day: day, course: course)
+        remoteHashes.removeValue(forKey: fKey)
+        Task { await remoteStore?.delete(fieldKey: fKey) }
+        if odSlotCount != prevSlotCount { rebuildGrid() } else { updateOnlineUI(for: day) }
     }
 
 
@@ -1103,9 +1116,16 @@ private func placeOnlineRow() {
 
                     // UI反映
                     self.reloadAllButtons()
-                    for d in changedOnlineDays {
-                        if !self.viewOnly, self.overrideUID == nil { self.saveOnline(for: d) }
-                        self.updateOnlineUI(for: d)
+                    if !changedOnlineDays.isEmpty {
+                        let prevSlotCount = self.odSlotCount
+                        for d in changedOnlineDays {
+                            if !self.viewOnly, self.overrideUID == nil { self.saveOnline(for: d) }
+                        }
+                        if self.odSlotCount != prevSlotCount {
+                            self.rebuildGrid()
+                        } else {
+                            for d in changedOnlineDays { self.updateOnlineUI(for: d) }
+                        }
                     }
 
                     // 自分の時間割だけローカル永続化（友だち表示では上書きしない）
@@ -1148,7 +1168,7 @@ private func placeOnlineRow() {
         buildGridGuides()
         placeHeaders()
         placePlusButtons()
-        placeOnlineRow()   // ← 追加
+        placeOnlineRows()   // ← 追加
         loadSavedOnlineSlots()
         for d in 0..<dayLabels.count {   // 読み込んだ内容を見た目に反映
             updateOnlineUI(for: d)
@@ -1185,7 +1205,7 @@ private func placeOnlineRow() {
         let safeHeight = view.safeAreaLayoutGuide.layoutFrame.height
         headerTopConstraint.constant = safeHeight * 0.02
 
-        // ← 追加：実寸に合わせて“完璧なカプセル”
+        // ← 追加：実寸に合わせて"完璧なカプセル"
         leftButton.layer.cornerCurve = .continuous
         leftButton.layer.cornerRadius = leftButton.bounds.height / 2
         
@@ -1323,24 +1343,19 @@ private func placeOnlineRow() {
         if period == 0 {
             var arr = onlineSlots[day] ?? []
             let key = onlineCourseKey(course)
-
-            // ここでの重複判定は「授業名(title)」のみ。
-            // 登録番号（course.id）が ++++++ などで重複しても、授業名が違えば追加できる。
             if !arr.contains(where: { onlineCourseKey($0) == key }) {
+                let prevSlotCount = odSlotCount
                 arr.append(course)
                 onlineSlots[day] = arr
-                saveOnline(for: day)            // 永続化
-
-                // Firestore にも登録（友だち表示用）
+                saveOnline(for: day)
                 let loc = SlotLocation(day: day, period: 0)
                 let color = SlotColorStore.color(for: loc)?.rawValue
                 let fKey = onlineFieldKey(day: day, course: course)
                 remoteHashes[fKey] = slotHash(course, colorKey: color)
                 Task { await remoteStore?.upsert(course: course, colorKey: color, fieldKey: fKey) }
+                if odSlotCount != prevSlotCount { rebuildGrid() } else { updateOnlineUI(for: day) }
             }
-            dlog("online added day=\(day), count=\(onlineSlots[day]?.count ?? 0), id=\(course.id), title=\(course.title)")
-            updateOnlineUI(for: day)            // 行の UI を更新
-            reloadAllButtons()                  // 念のため全体も更新
+            dlog("online added day=\(day), count=\(onlineSlots[day]?.count ?? 0), id=\(course.id)")
             return
         }
 
@@ -1389,8 +1404,10 @@ private func placeOnlineRow() {
         let campus   = d["campus"]   as? String
         let category = d["category"] as? String
         let url      = d["url"]      as? String
-        return Course(id: code, title: title, room: room, teacher: teacher,
-                      credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
+        var c = Course(id: code, title: title, room: room, teacher: teacher,
+                       credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
+        c.firestoreDocID = docID
+        return c
     }
 
     // MARK: - Settings change
@@ -1449,7 +1466,7 @@ private func placeOnlineRow() {
         buildGridGuides()
         placeHeaders()
         placePlusButtons()
-        placeOnlineRow()          // ★ 追加：OD 行を毎回再配置
+        placeOnlineRows()          // ★ 追加：OD 行を毎回再配置
         reloadAllButtons()
     }
 
@@ -1621,7 +1638,7 @@ private func placeOnlineRow() {
             if i >= 2 { colGuides[i].widthAnchor.constraint(equalTo: colGuides[1].widthAnchor).isActive = true }
         }
 
-        let rowCount = 1 + periodLabels.count + 1
+        let rowCount = 1 + periodLabels.count + odSlotCount
         rowGuides.removeAll()
         for _ in 0..<rowCount {
             let g = UILayoutGuide()
@@ -1636,11 +1653,17 @@ private func placeOnlineRow() {
 
         for i in 1..<rowCount {
             rowGuides[i].topAnchor.constraint(equalTo: rowGuides[i-1].bottomAnchor, constant: spacing).isActive = true
-            if i >= 2 { rowGuides[i].heightAnchor.constraint(equalTo: rowGuides[1].heightAnchor).isActive = true }
+            // 通常コマ行（1〜periodLabels.count）のみ等高チェーン
+            if i >= 2 && i < odRowStartIndex {
+                rowGuides[i].heightAnchor.constraint(equalTo: rowGuides[1].heightAnchor).isActive = true
+            }
         }
-        // 各コマの高さを固定（OD 行を追加しても 1-5 限の枠サイズが縮まないようにする）
-        // 以前は >= で最小値だけ保証していたため、制約の組み合わせによって全体が詰まって見えることがあった。
+        // 通常コマの高さを固定
         rowGuides[1].heightAnchor.constraint(equalToConstant: periodRowMinHeight).isActive = true
+        // OD スロット行は全て onlineRowHeight（スタックではなく 1 コースずつ）
+        for s in 0..<odSlotCount {
+            rowGuides[odRowStartIndex + s].heightAnchor.constraint(equalToConstant: onlineRowHeight).isActive = true
+        }
     }
 
     // MARK: - Headers / Time markers
@@ -1679,17 +1702,18 @@ private func placeOnlineRow() {
 
         // 見出し作り直しのたびに最新状態へ
         updateNowHighlight()
-        // === 最下段（オンライン行）の左マーカー ===
-        if rowGuides.indices.contains(odRowIndex) {
+        // === OD セクションの左マーカー（全スロット行にまたがる） ===
+        let lastOdRowIdx = odRowStartIndex + odSlotCount - 1
+        if rowGuides.indices.contains(odRowStartIndex),
+           rowGuides.indices.contains(lastOdRowIdx) {
             let onlineMarker = makeOnlineMarkerView()
             gridContainerView.addSubview(onlineMarker)
             NSLayoutConstraint.activate([
                 onlineMarker.leadingAnchor.constraint(equalTo: colGuides[0].leadingAnchor),
                 onlineMarker.trailingAnchor.constraint(equalTo: colGuides[0].trailingAnchor),
-                onlineMarker.topAnchor.constraint(equalTo: rowGuides[odRowIndex].topAnchor),
-                onlineMarker.bottomAnchor.constraint(equalTo: rowGuides[odRowIndex].bottomAnchor)
+                onlineMarker.topAnchor.constraint(equalTo: rowGuides[odRowStartIndex].topAnchor),
+                onlineMarker.bottomAnchor.constraint(equalTo: rowGuides[lastOdRowIdx].bottomAnchor)
             ])
-            // 角丸を他の行見出しと合わせたい場合（任意）
             onlineMarker.layer.cornerRadius = 6
             onlineMarker.clipsToBounds = true
         }
@@ -1877,7 +1901,7 @@ private func placeOnlineRow() {
         // Dark: ごく僅かに暗色と混ぜて彩度を抑える / Light: 白を混ぜてパステルに
         let isDark = traitCollection.userInterfaceStyle == .dark
         let cellBg = isDark
-            ? colorKey.uiColor.mixed(with: UIColor(white: 0.18, alpha: 1), ratio: 0.15)
+            ? colorKey.uiColor.mixed(with: .white, ratio: 0.12)
             : colorKey.uiColor.mixed(with: .white, ratio: cellPastelRatio)
         var cfg = baseCellConfig(bg: cellBg, fg: .white)
 
@@ -1941,7 +1965,7 @@ private func placeOnlineRow() {
             }
             return
         }
-        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm)
+        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm, showsReview: true)
         vc.delegate = self
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController {
@@ -1986,7 +2010,7 @@ private func placeOnlineRow() {
             container.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -8),
         ])
 
-        // 最大 3 件までチップ表示、超過は “+N件”
+        // 最大 3 件までチップ表示、超過は "+N件"
         let maxChips = 3
         let show = Array(courses.prefix(maxChips))
         for c in show {
@@ -2050,6 +2074,7 @@ private func placeOnlineRow() {
             var arr = onlineSlots[location.day] ?? []
             let key = onlineCourseKey(course)
             if !arr.contains(where: { onlineCourseKey($0) == key }) {
+                let prevSlotCount = odSlotCount
                 arr.append(course)
                 onlineSlots[location.day] = arr
                 saveOnline(for: location.day)
@@ -2058,17 +2083,12 @@ private func placeOnlineRow() {
                 let colorName = SlotColorStore.color(for: location)?.rawValue
                 let fKey = onlineFieldKey(day: location.day, course: course)
                 remoteHashes[fKey] = slotHash(course, colorKey: colorName)
-
                 Task {
-                    await remoteStore?.upsert(
-                        course: course,
-                        colorKey: colorName,
-                        fieldKey: fKey
-                    )
+                    await remoteStore?.upsert(course: course, colorKey: colorName, fieldKey: fKey)
                 }
+                // スロット行が増えた場合はグリッドを再構築
+                if odSlotCount != prevSlotCount { rebuildGrid() } else { updateOnlineUI(for: location.day) }
             }
-            updateOnlineUI(for: location.day)
-            reloadAllButtons()
             dlog("OD added: day=\(location.day), count=\(onlineSlots[location.day]?.count ?? 0), id=\(course.id)")
         } else {
             // 通常コマに割当
@@ -2165,22 +2185,7 @@ private func placeOnlineRow() {
                       at location: SlotLocation) {
         // オンライン行（period==0）は onlineSlots を編集
         if location.period == 0 {
-            let day = location.day
-            if var arr = onlineSlots[day] {
-                let key = onlineCourseKey(course)
-                if let i = arr.firstIndex(where: { onlineCourseKey($0) == key }) {
-                    arr.remove(at: i)
-                    onlineSlots[day] = arr
-                    saveOnline(for: day)       // 既存の永続化関数
-                    updateOnlineUI(for: day)   // 見た目を更新
-
-                    // Firestore 上の OD も削除（友だち表示用）
-                    let fKey = onlineFieldKey(day: day, course: course)
-                    remoteHashes.removeValue(forKey: fKey)
-                    Task { await remoteStore?.delete(fieldKey: fKey) }
-                }
-            }
-            // 画面を閉じる
+            removeOnlineCourse(course, day: location.day)
             vc.dismiss(animated: true)
             return
         }
@@ -2639,7 +2644,6 @@ final class TimetableCellContentView: UIView {
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
-            titleBottomWithPill,          // 初期状態: 教室あり
 
             // roomPill は高さ固定（18pt）＋下端固定で位置が一切変わらない
             roomPill.heightAnchor.constraint(equalToConstant: 18),
@@ -2648,6 +2652,9 @@ final class TimetableCellContentView: UIView {
             roomPill.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 5),
             roomPill.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -5)
         ])
+
+        // 初期状態は教室なし（空きコマでピルが残らないよう setRoom("") で確定）
+        setRoom("")
     }
 
     /// 教室番号テキストを設定。空の場合はピルを非表示にしてタイトルをセル全体に広げる

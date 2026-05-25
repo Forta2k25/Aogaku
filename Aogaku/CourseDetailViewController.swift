@@ -80,6 +80,13 @@ final class CourseDetailViewController: UIViewController {
     private let syllabusDetailStack  = UIStackView()
     private var isSyllabusDetailOpen = false
     private var syllabusPageURL: URL?
+    private let syllabusViewToggle = UISegmentedControl(items: ["独自UI", "ポータル"])
+    private var syllabusDisplayMode: Int {
+        get { UserDefaults.standard.integer(forKey: "syllabus.displayMode") }
+        set { UserDefaults.standard.set(newValue, forKey: "syllabus.displayMode") }
+    }
+    private var syllabusWebPageLoaded = false
+    private var didRetryLocalSyllabusIndex = false
 
     private let editButton   = UIButton(type: .system)
     private let deleteButton = UIButton(type: .system)
@@ -102,9 +109,15 @@ final class CourseDetailViewController: UIViewController {
     private let actionsRow = UIStackView()
 
     // MARK: - Friends in Course
-    private let friendsCourseSection = UIView()
+    private let friendsCourseSection = UIStackView()
     private let friendsCourseScroll  = UIScrollView()
     private let friendsCourseStack   = UIStackView()
+    private var friendsCourseChevron: UIImageView?
+    private var friendsCourseContentContainer: UIView?
+    private var isFriendsCourseSectionExpanded: Bool {
+        get { UserDefaults.standard.object(forKey: "friends.section.expanded") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "friends.section.expanded") }
+    }
     
     //下端のバー
 
@@ -339,6 +352,14 @@ final class CourseDetailViewController: UIViewController {
             stack.addArrangedSubview(moodleSection)
         }
 
+        // ──── シラバス表示切り替えトグル（Moodle課題の直下）────
+        syllabusViewToggle.selectedSegmentIndex = syllabusDisplayMode
+        syllabusViewToggle.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
+        syllabusViewToggle.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
+        syllabusViewToggle.addTarget(self, action: #selector(syllabusViewModeChanged), for: .valueChanged)
+        syllabusViewToggle.isHidden = true   // シラバスURLが判明してから表示
+        stack.addArrangedSubview(syllabusViewToggle)
+
         // ──── シラバスセクション（JS抽出のネイティブカード） ────
         syllabusSection.axis = .vertical
         syllabusSection.spacing = 10
@@ -373,6 +394,7 @@ final class CourseDetailViewController: UIViewController {
         webContainer.translatesAutoresizingMaskIntoConstraints = false
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.isScrollEnabled = false   // 外側 ScrollView に任せる
         webContainer.addSubview(webView)
         NSLayoutConstraint.activate([
             webView.topAnchor.constraint(equalTo: webContainer.topAnchor),
@@ -383,7 +405,7 @@ final class CourseDetailViewController: UIViewController {
         webHeightConstraint = webContainer.heightAnchor.constraint(equalToConstant: 600)
         webHeightConstraint.isActive = true
         stack.addArrangedSubview(webContainer)
-        webContainer.isHidden = true  // JSでデータ抽出するが生WebViewはUIに出さない
+        webContainer.isHidden = true   // ポータルモード時のみ表示
 
         if allowsCourseManagement {
             // 編集・削除ボタン（スクロール末尾）
@@ -395,28 +417,64 @@ final class CourseDetailViewController: UIViewController {
     // MARK: - Friends in Course
 
     private func buildFriendsCourseSection() {
+        // UIStackView なので arranged subview を isHidden にするとスペースが自動で詰まる
+        friendsCourseSection.axis = .vertical
+        friendsCourseSection.spacing = 0
         friendsCourseSection.translatesAutoresizingMaskIntoConstraints = false
         friendsCourseSection.isHidden = true   // 該当する友だちが見つかるまで非表示
         stack.addArrangedSubview(friendsCourseSection)
 
-        // セクションラベル
+        // ── ヘッダー行（タップで折りたたみ）──
+        let headerRow = UIView()
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+        headerRow.isUserInteractionEnabled = true
+
         let label = UILabel()
         label.text = "この授業を履修してる友だち"
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.textColor = .secondaryLabel
         label.translatesAutoresizingMaskIntoConstraints = false
-        friendsCourseSection.addSubview(label)
+        headerRow.addSubview(label)
+
+        let chevronCfg = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        let chevronName = isFriendsCourseSectionExpanded ? "chevron.up" : "chevron.down"
+        let chevronView = UIImageView(image: UIImage(systemName: chevronName, withConfiguration: chevronCfg))
+        chevronView.tintColor = .tertiaryLabel
+        chevronView.translatesAutoresizingMaskIntoConstraints = false
+        chevronView.setContentHuggingPriority(.required, for: .horizontal)
+        friendsCourseChevron = chevronView
+        headerRow.addSubview(chevronView)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor),
+            label.topAnchor.constraint(equalTo: headerRow.topAnchor, constant: 2),
+            label.bottomAnchor.constraint(equalTo: headerRow.bottomAnchor, constant: -2),
+            chevronView.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
+            chevronView.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
+        ])
+
+        let headerTap = UITapGestureRecognizer(target: self, action: #selector(toggleFriendsCourseSection))
+        headerRow.addGestureRecognizer(headerTap)
+        friendsCourseSection.addArrangedSubview(headerRow)
+
+        // ── コンテンツコンテナ（折りたたみ対象）──
+        // isHidden = true にすると UIStackView がスペースを詰めてくれる
+        let contentContainer = UIView()
+        contentContainer.translatesAutoresizingMaskIntoConstraints = false
+        contentContainer.clipsToBounds = true
+        contentContainer.isHidden = !isFriendsCourseSectionExpanded
+        friendsCourseContentContainer = contentContainer
 
         // 下線
         let underline = UIView()
         underline.backgroundColor = UIColor.label.withAlphaComponent(0.15)
         underline.translatesAutoresizingMaskIntoConstraints = false
-        friendsCourseSection.addSubview(underline)
+        contentContainer.addSubview(underline)
 
         // 横スクロール
         friendsCourseScroll.translatesAutoresizingMaskIntoConstraints = false
         friendsCourseScroll.showsHorizontalScrollIndicator = false
-        friendsCourseSection.addSubview(friendsCourseScroll)
+        contentContainer.addSubview(friendsCourseScroll)
 
         // 横並びスタック（名前付きアイコン）
         friendsCourseStack.axis = .horizontal
@@ -426,18 +484,15 @@ final class CourseDetailViewController: UIViewController {
         friendsCourseScroll.addSubview(friendsCourseStack)
 
         NSLayoutConstraint.activate([
-            label.topAnchor.constraint(equalTo: friendsCourseSection.topAnchor),
-            label.leadingAnchor.constraint(equalTo: friendsCourseSection.leadingAnchor),
-
-            underline.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 3),
-            underline.leadingAnchor.constraint(equalTo: label.leadingAnchor),
-            underline.trailingAnchor.constraint(equalTo: label.trailingAnchor),
+            underline.topAnchor.constraint(equalTo: contentContainer.topAnchor, constant: 3),
+            underline.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+            underline.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
             underline.heightAnchor.constraint(equalToConstant: 1),
 
             friendsCourseScroll.topAnchor.constraint(equalTo: underline.bottomAnchor, constant: 10),
-            friendsCourseScroll.leadingAnchor.constraint(equalTo: friendsCourseSection.leadingAnchor),
-            friendsCourseScroll.trailingAnchor.constraint(equalTo: friendsCourseSection.trailingAnchor),
-            friendsCourseScroll.bottomAnchor.constraint(equalTo: friendsCourseSection.bottomAnchor),
+            friendsCourseScroll.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+            friendsCourseScroll.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+            friendsCourseScroll.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
             friendsCourseScroll.heightAnchor.constraint(equalToConstant: 76),
 
             friendsCourseStack.topAnchor.constraint(equalTo: friendsCourseScroll.contentLayoutGuide.topAnchor),
@@ -446,6 +501,21 @@ final class CourseDetailViewController: UIViewController {
             friendsCourseStack.bottomAnchor.constraint(equalTo: friendsCourseScroll.contentLayoutGuide.bottomAnchor),
             friendsCourseStack.heightAnchor.constraint(equalTo: friendsCourseScroll.frameLayoutGuide.heightAnchor)
         ])
+
+        friendsCourseSection.addArrangedSubview(contentContainer)
+    }
+
+    @objc private func toggleFriendsCourseSection() {
+        isFriendsCourseSectionExpanded.toggle()
+
+        let chevronName = isFriendsCourseSectionExpanded ? "chevron.up" : "chevron.down"
+        let chevronCfg = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        friendsCourseChevron?.image = UIImage(systemName: chevronName, withConfiguration: chevronCfg)
+
+        UIView.animate(withDuration: 0.25) {
+            self.friendsCourseContentContainer?.isHidden = !self.isFriendsCourseSectionExpanded
+            self.friendsCourseSection.superview?.layoutIfNeeded()
+        }
     }
 
     private func loadFriendsInCourse() {
@@ -818,13 +888,47 @@ final class CourseDetailViewController: UIViewController {
 
     // MARK: - Web
     private func loadSyllabus() {
+        let resolvedSyllabusString = resolvedSyllabusURLString()
+        let cacheKey: String = {
+            let u = resolvedSyllabusString.trimmingCharacters(in: .whitespacesAndNewlines)
+            return u.isEmpty ? course.id : u
+        }()
+
+        if let cached = SyllabusDataCache.shared.load(for: cacheKey) {
+            syllabusPageURL = URL(string: resolvedSyllabusString)
+            syllabusSection.isHidden = false
+            webContainer.isHidden = true
+            buildSyllabusUI(fields: cached)
+            return
+        }
+
         guard
-            let s = course.syllabusURL?.trimmingCharacters(in: .whitespacesAndNewlines),
-            let url = URL(string: s),
+            !resolvedSyllabusString.isEmpty,
+            let url = URL(string: resolvedSyllabusString),
             let scheme = url.scheme?.lowercased(),
             scheme == "http" || scheme == "https"
         else {
-            syllabusSection.isHidden = true
+            if !didRetryLocalSyllabusIndex, !LocalSyllabusIndex.shared.isReady {
+                didRetryLocalSyllabusIndex = true
+                LocalSyllabusIndex.shared.prepare()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.loadSyllabus()
+                }
+                // インデックス準備中なのでスピナーだけ出す
+                syllabusSection.isHidden = false
+                syllabusSpinner.startAnimating()
+            } else {
+                // URL解決完全失敗: id/URLを見せてデバッグしやすくする
+                syllabusSection.isHidden = false
+                syllabusSpinner.stopAnimating()
+                syllabusLoadingRow.isHidden = true
+                let dbg = UILabel()
+                dbg.font = .systemFont(ofSize: 11)
+                dbg.textColor = .tertiaryLabel
+                dbg.numberOfLines = 0
+                dbg.text = "[シラバスURL未解決] id=\(course.id) syllabusURL=\(course.syllabusURL ?? "nil")"
+                syllabusSection.addArrangedSubview(dbg)
+            }
             webContainer.isHidden = true
             return
         }
@@ -833,21 +937,210 @@ final class CourseDetailViewController: UIViewController {
 
         // ── キャッシュがあればオフライン表示 ──
         // URLをキーにすることで、同じ登録番号の別授業（担当教員違い）でもキャッシュが混在しない
-        let cacheKey: String = {
-            let u = (course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return u.isEmpty ? course.id : u
-        }()
-        if let cached = SyllabusDataCache.shared.load(for: cacheKey) {
-            buildSyllabusUI(fields: cached)
-            return
-        }
-
         // ── キャッシュなし → WebView で読み込む（初回ヒントを表示）──
         syllabusLoadingHint.isHidden = false
         syllabusSpinner.startAnimating()
         webContainer.isHidden = true
         webView.navigationDelegate = self
         webView.load(URLRequest(url: url))
+    }
+
+    // MARK: - Syllabus URL resolution
+    // 優先順位:
+    //   1. course.syllabusURL が公開URL (syllabus.aoyama.ac.jp) → そのまま使う
+    //   2. course.syllabusURL が非公開URL (aguinfo/Shousai.aspx) → FN+YR+BQ で変換
+    //   3. course.syllabusURL が空 → course.id (= 登録番号/FN) で LocalSyllabusIndex 直接検索
+    //   4. 直接検索でヒットしない → 科目名＋曜日時限の fuzzy 検索
+    //   5. すべて失敗 → "" を返す（呼び出し側がエラー表示）
+    private func resolvedSyllabusURLString() -> String {
+        let rawURL = (course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let indexReady = LocalSyllabusIndex.shared.isReady
+
+        print("[SyllabusResolve] course='\(course.title)' id='\(course.id)'"
+            + " syllabusURL='\(rawURL)'"
+            + " LocalSyllabusIndex.isReady=\(indexReady)")
+
+        // ── 1. 既に公開URL ──────────────────────────────────────────
+        if !rawURL.isEmpty,
+           let comps = URLComponents(string: rawURL),
+           comps.host == "syllabus.aoyama.ac.jp" {
+            print("[SyllabusResolve] → (1) existing public URL")
+            return rawURL
+        }
+
+        // ── 2. 非公開URL → FN/YR+BQ で変換 ───────────────────────
+        if !rawURL.isEmpty, let converted = publicSyllabusURLString(from: rawURL) {
+            let fn = URLComponents(string: rawURL)?.queryItems?
+                .first(where: { $0.name == "FN" })?.value ?? "?"
+            let yr = URLComponents(string: rawURL)?.queryItems?
+                .first(where: { $0.name == "YR" })?.value ?? "?"
+            print("[SyllabusResolve] → (2) aguinfo→public FN=\(fn) YR=\(yr)")
+            return converted
+        }
+
+        // その他 URL（非空だが変換不要）
+        if !rawURL.isEmpty {
+            print("[SyllabusResolve] → (other) non-empty raw URL, use as-is")
+            return rawURL
+        }
+
+        // ── 3. course.id が登録番号形式(FN)なら YR+FN+BQ で直接URL構築 ─
+        // LocalSyllabusIndex に URL が入っていなくても動く。
+        // rishuu/jugyou_kamoku ソースで course.id = "1611100-0072" 形式のもの。
+        let courseID = course.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if looksLikeFN(courseID) {
+            let yr = String(term.year)
+            var comps = URLComponents()
+            comps.scheme = "https"
+            comps.host = "syllabus.aoyama.ac.jp"
+            comps.path = "/shousai.ashx"
+            comps.queryItems = [
+                URLQueryItem(name: "YR", value: yr),
+                URLQueryItem(name: "FN", value: courseID),
+                URLQueryItem(name: "KW", value: ""),
+                URLQueryItem(name: "BQ", value: Self.publicSyllabusBQ)
+            ]
+            if let builtURL = comps.url?.absoluteString {
+                print("[SyllabusResolve] → (3) FN+YR direct build id='\(courseID)' YR=\(yr) → \(builtURL)")
+                return builtURL
+            }
+        }
+
+        // ── LocalSyllabusIndex を使う（FN構築できなかったケース） ────
+        if !indexReady {
+            LocalSyllabusIndex.shared.prepare()
+            print("[SyllabusResolve] → LocalSyllabusIndex not ready, triggered prepare()")
+            return ""
+        }
+
+        // ── 3b. course.id で LocalSyllabusIndex 直接検索（URL付きなら優先）
+        if !courseID.isEmpty, !courseID.hasPrefix("portal_") {
+            if let directURL = LocalSyllabusIndex.shared.url(forRegistrationNumber: courseID) {
+                let resolved = publicSyllabusURLString(from: directURL) ?? directURL
+                print("[SyllabusResolve] → (3b) index FN hit id='\(courseID)' → \(resolved)")
+                return resolved
+            }
+            print("[SyllabusResolve] → (3b) index FN: no URL for id='\(courseID)'")
+        }
+
+        // ── 4. fuzzy fallback ─────────────────────────────────────────
+        var criteria = SyllabusSearchCriteria()
+        criteria.day = location.dayName
+        criteria.periods = [location.period]
+        criteria.term = term.semester.rawValue
+        if let campus = course.campus, !campus.isEmpty {
+            criteria.campus = campus
+        }
+
+        // url が空でも regNumber がFN形式なら後で構築できる。フィルタしない。
+        let matches = LocalSyllabusIndex.shared.search(text: course.title, criteria: criteria)
+
+        print("[SyllabusResolve] → (4) fuzzy: candidates=\(matches.count)"
+            + " title='\(course.title)' day=\(location.dayName) period=\(location.period)"
+            + " term=\(term.semester.rawValue)")
+
+        guard !matches.isEmpty else {
+            print("[SyllabusResolve] → (5) no matches, giving up")
+            return ""
+        }
+
+        func compact(_ value: String) -> String {
+            value
+                .lowercased()
+                .replacingOccurrences(of: " ", with: "")
+                .replacingOccurrences(of: "　", with: "")
+                .replacingOccurrences(of: "\n", with: "")
+                .replacingOccurrences(of: "\t", with: "")
+        }
+
+        let titleKey   = compact(course.title)
+        let teacherKey = compact(course.teacher)
+        let idKey      = compact(course.id)
+        let best = matches.max { lhs, rhs in
+            func score(_ item: syllabus.SyllabusData) -> Int {
+                var v = 0
+                if compact(item.class_name) == titleKey { v += 100 }
+                if !teacherKey.isEmpty && compact(item.teacher_name).contains(teacherKey) { v += 40 }
+                if !idKey.isEmpty && compact(item.regNumber) == idKey { v += 30 }
+                if let credits = course.credits, item.credit == String(credits) { v += 10 }
+                return v
+            }
+            return score(lhs) < score(rhs)
+        }
+
+        let bestURL    = best?.url.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let bestRegNum = best?.regNumber.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // URLが入っていればそのまま使う（aguinfo形式なら変換）
+        if !bestURL.isEmpty {
+            let resolved = publicSyllabusURLString(from: bestURL) ?? bestURL
+            print("[SyllabusResolve] → (4) fuzzy best='\(best?.class_name ?? "")'"
+                + " regNum='\(bestRegNum)' url → \(resolved)")
+            return resolved
+        }
+
+        // URLが空でも regNumber がFN形式 (NNNNNNN-NNNN) なら直接構築
+        if looksLikeFN(bestRegNum) {
+            let yr = String(term.year)
+            var comps = URLComponents()
+            comps.scheme = "https"
+            comps.host = "syllabus.aoyama.ac.jp"
+            comps.path = "/shousai.ashx"
+            comps.queryItems = [
+                URLQueryItem(name: "YR", value: yr),
+                URLQueryItem(name: "FN", value: bestRegNum),
+                URLQueryItem(name: "KW", value: ""),
+                URLQueryItem(name: "BQ", value: Self.publicSyllabusBQ)
+            ]
+            if let built = comps.url?.absoluteString {
+                print("[SyllabusResolve] → (4) fuzzy regNum→FN build '\(bestRegNum)' → \(built)")
+                return built
+            }
+        }
+
+        print("[SyllabusResolve] → (5) fuzzy found '\(best?.class_name ?? "")' but no usable URL/FN")
+        return ""
+    }
+
+    private func publicSyllabusURLString(from rawURLString: String) -> String? {
+        guard
+            let rawComponents = URLComponents(string: rawURLString),
+            rawComponents.path.contains("/kouginaiyou/Shousai.aspx")
+        else {
+            return nil
+        }
+
+        let params = rawComponents.queryItems ?? []
+        guard
+            let fn = params.first(where: { $0.name == "FN" })?.value,
+            let yr = params.first(where: { $0.name == "YR" })?.value
+        else {
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "syllabus.aoyama.ac.jp"
+        components.path = "/shousai.ashx"
+        components.queryItems = [
+            URLQueryItem(name: "YR", value: yr),
+            URLQueryItem(name: "FN", value: fn),
+            URLQueryItem(name: "KW", value: ""),
+            URLQueryItem(name: "BQ", value: Self.publicSyllabusBQ)
+        ]
+        return components.url?.absoluteString
+    }
+
+    private static let publicSyllabusBQ = "3f5e5d46524048535c48584c4959336c647d22233127225448512b3e2e296c6f54714344415772021a1d495f401d180a02055e5d5f7b534f4c1f6564796b7b7114001004110803091c746c14131b070a0702061200101112161c081a08120c62542350205423205e4e2b3f562e385f493b264f553f384b513330475d3f2d4f42efefa4c0d4b1bbe8e6afcdc9bdcfd1bfadb7d5d8d6a8b0d3d4a4f0fabacecaa286f1e59e969d80f7eb949f989a8bfee68d8384"
+
+    // ポータル登録番号（FN）形式かどうかを判定する。
+    // 例: "1611100-0072"。数字とハイフンのみ、かつ数字4桁以上含む。
+    // AGU シラバスFNの形式: "NNNNNNN-NNNN"（例: 1611100-0072）
+    // 数字のみ（13301 = 履修登録番号）はFNではないのでハイフン必須
+    private func looksLikeFN(_ s: String) -> Bool {
+        guard !s.isEmpty, !s.hasPrefix("portal_"), s.contains("-") else { return false }
+        let allowed = CharacterSet.decimalDigits.union(CharacterSet(charactersIn: "-"))
+        return s.unicodeScalars.allSatisfy({ allowed.contains($0) })
     }
 
     // MARK: - Syllabus UI Building
@@ -1042,6 +1335,10 @@ final class CourseDetailViewController: UIViewController {
         buildStructuredSecondarySection(fields: fields)
 
         addOpenInBrowserButton()
+
+        // トグルを表示して現在のモードを適用
+        syllabusViewToggle.isHidden = syllabusPageURL == nil
+        applySyllabusDisplayMode()
     }
 
     private func makeSyllabusPill(label: String, value: String) -> UIView {
@@ -1456,6 +1753,33 @@ final class CourseDetailViewController: UIViewController {
         syllabusSpinner.stopAnimating()
         syllabusLoadingRow.isHidden = true
         addOpenInBrowserButton()
+        // ポータルには表示できるかもしれないのでトグルを出す
+        syllabusViewToggle.isHidden = syllabusPageURL == nil
+        applySyllabusDisplayMode()
+    }
+
+    // MARK: - Syllabus Display Mode Toggle
+
+    @objc private func syllabusViewModeChanged() {
+        syllabusDisplayMode = syllabusViewToggle.selectedSegmentIndex
+        UIView.animate(withDuration: 0.2) { self.applySyllabusDisplayMode() }
+    }
+
+    private func applySyllabusDisplayMode() {
+        guard syllabusPageURL != nil else { return }
+        let isNative = syllabusDisplayMode == 0
+        syllabusSection.isHidden = !isNative
+        if isNative {
+            webContainer.isHidden = true
+        } else {
+            // ポータルモード: キャッシュから表示した場合は初めてここでWebViewをロード
+            if !syllabusWebPageLoaded, let url = syllabusPageURL {
+                webView.navigationDelegate = self
+                webView.load(URLRequest(url: url))
+                syllabusWebPageLoaded = true
+            }
+            webContainer.isHidden = false
+        }
     }
 
     @objc private func toggleSyllabusDetail() {
@@ -2417,13 +2741,32 @@ extension CourseDetailViewController: BannerViewDelegate {
 extension CourseDetailViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // SPAレンダリング完了を待つため2秒後に抽出
+        syllabusWebPageLoaded = true
+        // SPAレンダリング完了を待つため2秒後に抽出 ＋ ポータル高さ更新
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.extractSyllabusFields()
+            guard let self else { return }
+            self.extractSyllabusFields()
+            // ページの実際の高さに合わせてコンテナを広げる
+            webView.evaluateJavaScript("document.documentElement.scrollHeight") { result, _ in
+                DispatchQueue.main.async {
+                    if let h = result as? CGFloat, h > 200 {
+                        self.webHeightConstraint.constant = h + 40
+                        UIView.animate(withDuration: 0.2) { self.view.layoutIfNeeded() }
+                    }
+                }
+            }
         }
     }
 
     private func extractSyllabusFields() {
+        // キャッシュ済みならポータル表示で再ロードされても再抽出しない
+        let existingCK: String = {
+            let u = syllabusPageURL?.absoluteString
+                ?? (course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return u.isEmpty ? course.id : u
+        }()
+        if SyllabusDataCache.shared.exists(for: existingCK) { return }
+
         let js = """
         (function() {
           var data = {};
@@ -2619,9 +2962,10 @@ extension CourseDetailViewController: WKNavigationDelegate {
                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                    !dict.isEmpty {
                     print("🟢 Syllabus keys found: \(Array(dict.keys))")
-                    // 抽出成功 → キャッシュに保存してオフライン化（URLキーで保存）
+                    // load と同じキー（resolved URL or course.id）で保存してキャッシュが効くようにする
                     let saveCK: String = {
-                        let u = (self.course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        let u = self.syllabusPageURL?.absoluteString
+                            ?? (self.course.syllabusURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                         return u.isEmpty ? self.course.id : u
                     }()
                     SyllabusDataCache.shared.save(dict, for: saveCK)
@@ -2985,4 +3329,3 @@ extension CourseDetailViewController: WKNavigationDelegate {
         }
     }
 }
-

@@ -18,6 +18,16 @@
 				<string>aogaku</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>google-signin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.505828754933-ttjfriejlg827644jf5hut7d7h501m5s</string>
+			</array>
+		</dict>
 	</array>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-8730273808494471~8905053964</string>

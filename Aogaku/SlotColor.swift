@@ -31,6 +31,8 @@ enum SlotColorKey: String, Codable, CaseIterable {
 /// (曜日,時限)ごとの色を UserDefaults に保存/読込する軽量ストア
 struct SlotColorStore {
     private static let storeKey = "slotColors_v2"             // ← 文字列キー名
+    static let defaultCourseColor: SlotColorKey = .green
+
     static func storageKey(for loc: SlotLocation) -> String { // "day-period" 例: "3-2"
         "\(loc.day)-\(loc.period)"
     }
@@ -47,6 +49,12 @@ struct SlotColorStore {
     static func set(_ color: SlotColorKey, for loc: SlotLocation) {
         var dict = (UserDefaults.standard.dictionary(forKey: storeKey) as? [String:String]) ?? [:]
         dict[storageKey(for: loc)] = color.rawValue
+        UserDefaults.standard.set(dict, forKey: storeKey)
+    }
+
+    static func remove(for loc: SlotLocation) {
+        var dict = (UserDefaults.standard.dictionary(forKey: storeKey) as? [String:String]) ?? [:]
+        dict.removeValue(forKey: storageKey(for: loc))
         UserDefaults.standard.set(dict, forKey: storeKey)
     }
 

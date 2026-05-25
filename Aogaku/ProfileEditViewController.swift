@@ -293,28 +293,18 @@ final class ProfileEditViewController: UIViewController {
     }
 
     private func performDeleteAccount() {
-        guard let user = Auth.auth().currentUser, let uid = user.uid as String? else { return }
-
         Task { @MainActor in
-            do { try await db.collection("users").document(uid).delete() } catch { }
-
             do {
-                try await user.delete()
+                try await AuthManager.shared.deleteAccount(presenting: self)
             } catch {
                 showAlert(title: "削除に失敗",
-                          message: "再ログイン直後に再度お試しください。\n(\(error.localizedDescription))")
+                          message: "再度お試しください。\n(\(error.localizedDescription))")
                 return
             }
-
+            // AuthStateListenerがログアウトを検知して画面を切り替えるので、
+            // ここではdismissだけ試みる（既に外れている場合は無視）
             try? Auth.auth().signOut()
-
-            if presentingViewController != nil {
-                dismiss(animated: true)
-            } else {
-                navigationController?.popViewController(animated: true)
-            }
-
-            showAlert(title: "アカウント削除", message: "削除が完了しました。")
+            dismiss(animated: true)
         }
     }
 
@@ -422,6 +412,79 @@ final class ProfileEditViewController: UIViewController {
         idStack.axis = .vertical
         idStack.spacing = 8
         stack.addArrangedSubview(idStack)
+
+        // --- Google linking section ---
+        stack.addArrangedSubview(makeGoogleLinkSection())
+    }
+
+    private func makeGoogleLinkSection() -> UIView {
+        let container = UIView()
+
+        let label = UILabel()
+        label.text = "Google連携"
+        label.font = .systemFont(ofSize: 16, weight: .semibold)
+
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        if AuthManager.shared.isGoogleLinked {
+            button.setTitle("連携済み ✓", for: .normal)
+            button.setTitleColor(.secondaryLabel, for: .normal)
+            button.isEnabled = false
+        } else {
+            button.setTitle("Googleアカウントを連携する", for: .normal)
+            button.setTitleColor(HackColors.accent, for: .normal)
+            button.addTarget(self, action: #selector(linkGoogle), for: .touchUpInside)
+        }
+        button.titleLabel?.font = .systemFont(ofSize: 15)
+        button.contentHorizontalAlignment = .left
+
+        let sub = UILabel()
+        sub.text = "連携するとパスワードなしでログインできます。青学のメールアドレスでなくてもOKです。"
+        sub.font = .systemFont(ofSize: 12)
+        sub.textColor = .secondaryLabel
+        sub.numberOfLines = 0
+
+        let vStack = UIStackView(arrangedSubviews: [label, button, sub])
+        vStack.axis = .vertical
+        vStack.spacing = 4
+        vStack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(vStack)
+        NSLayoutConstraint.activate([
+            vStack.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            vStack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            vStack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            vStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4),
+        ])
+        return container
+    }
+
+    @objc private func linkGoogle() {
+        let hud = UIActivityIndicatorView(style: .large)
+        hud.startAnimating()
+        view.isUserInteractionEnabled = false
+        view.addSubview(hud)
+        hud.center = view.center
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                hud.removeFromSuperview()
+                self.view.isUserInteractionEnabled = true
+            }
+            do {
+                try await AuthManager.shared.linkGoogle(presenting: self)
+                await MainActor.run {
+                    self.showAlert(title: "連携完了", message: "Googleアカウントと連携しました。次回からはGoogleでログインできます。")
+                    // ボタンを連携済み表示に更新するためレイアウト再構築
+                    self.setupLayout()
+                    self.applyTheme()
+                }
+            } catch let e as AuthError {
+                await MainActor.run { self.showAlert(title: "エラー", message: e.localizedDescription) }
+            } catch {
+                await MainActor.run { self.showAlert(title: "エラー", message: error.localizedDescription) }
+            }
+        }
     }
 
     private func setupPickers() {

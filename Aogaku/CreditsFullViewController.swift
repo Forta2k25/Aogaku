@@ -423,6 +423,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     private let headerContainer = UIView()
     private let facultyButton = UIButton(type: .system)
     private let departmentButton = UIButton(type: .system)
+    private let deptInfoLabel = UILabel()   // 学部・学科（ポータルから自動設定）
     private let captionLabel = UILabel()
     private let donut = DonutChartView()
     private let centerValueLabel = UILabel()
@@ -506,6 +507,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         case earned(DisplayCategory)
         case earnedTermGroup(String, [Course])               // (termText, courses)
         case mergedCategory(DisplayCategory, [Course], [Course])  // (category, planned, earned)
+        case portalSummary([CreditSummaryItem])               // ポータル取得の詳細要件
         var title: String {
             switch self {
             case .planned(let d):
@@ -517,6 +519,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                 return "\(t)　\(total) 単位"
             case .mergedCategory(let d, _, _):
                 return d.title
+            case .portalSummary:
+                return "卒業要件詳細（ポータル取得）"
             }
         }
     }
@@ -526,9 +530,22 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     private var earnedByTerm: [(String, [Course])] = []   // (termText, courses) 新→旧順
     private var earnedViewMode = 0                        // 0=カテゴリ別 / 1=学期別
 
+    // ポータル成績データ（GradeStore から）
+    private var portalGrades: GradesData? = nil
+    /// 科目名 → 成績文字列 のルックアップ（ポータルデータから）
+    private var gradeLookup: [String: String] = [:]
+    /// 科目名 → カテゴリ文字列 のルックアップ（ポータル成績データから）
+    private var categoryLookup: [String: String] = [:]
+
     // バナー
     private let graduationBannerView  = UIView()
     private let graduationBannerLabel = UILabel()
+    // GPAカード（ポータルデータ存在時のみ表示）
+    private let gpaBannerView  = UIView()
+    private let gpaBannerLabel = UILabel()      // 合格数・取込日サブテキスト
+    private let gpaValueLabel  = UILabel()      // 大きいGPA数値
+    private var gpaHidden      = false          // 伏せ字フラグ
+    private let emptyStateView = UIView()       // 成績データなし時の空状態
 
     // MARK: - Life
     override func viewDidLoad() {
@@ -554,7 +571,71 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
         buildUI()
         loadSelection()
+        reloadPortalGrades()
         updateFilterButtons() // ← 復元→再計算→UI反映
+
+        NotificationCenter.default.addObserver(self,
+            selector: #selector(onGradesImport),
+            name: .gradesImportDidComplete, object: nil)
+    }
+
+    // MARK: - 成績データ読み込み
+
+    private func reloadPortalGrades() {
+        portalGrades = GradeStore.load()
+        var lookup: [String: String] = [:]
+        var catLookup: [String: String] = [:]
+        for record in portalGrades?.records ?? [] {
+            let key = record.name.trimmingCharacters(in: .whitespaces)
+            lookup[key]    = record.grade.trimmingCharacters(in: .whitespaces)
+            if !record.category.trimmingCharacters(in: .whitespaces).isEmpty {
+                catLookup[key] = record.category.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        gradeLookup    = lookup
+        categoryLookup = catLookup
+        // ポータルの学部・学科情報から selectedFaculty/selectedDepartment を自動設定
+        if let deptStr = portalGrades?.department, !deptStr.isEmpty {
+            autoDetectFacultyDept(from: deptStr)
+        }
+        updateDeptInfoLabel()
+        if let g = portalGrades {
+            print("[CreditsVC] portalGrades loaded: \(g.records.count) records, GPA=\(g.gpa), summary=\(g.creditSummary.count) rows")
+        } else {
+            print("[CreditsVC] portalGrades = nil (GradeStore empty)")
+        }
+    }
+
+    @objc private func onGradesImport() {
+        reloadPortalGrades()
+        compute()
+        apply()
+        updateEmptyState()
+    }
+
+    /// 科目名（Course.title）から対応する成績を返す（完全一致 → 部分一致 → スペース除去一致）
+    private func gradeForCourse(_ course: Course) -> String? {
+        let title = course.title.trimmingCharacters(in: .whitespaces)
+        if let g = gradeLookup[title] { return g }
+        // 部分一致フォールバック
+        if let g = gradeLookup.first(where: { title.contains($0.key) || $0.key.contains(title) })?.value { return g }
+        // スペース除去後に再試行（「英語 I」と「英語I」のような揺れに対応）
+        let stripped = title.filter { !$0.isWhitespace }
+        return gradeLookup.first(where: {
+            let k = $0.key.filter { !$0.isWhitespace }
+            return stripped == k || stripped.contains(k) || k.contains(stripped)
+        })?.value
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // 画面表示のたびに成績データを再読み込み（取り込み後に開いた場合も拾う）
+        let prev = portalGrades?.importedAt
+        reloadPortalGrades()
+        if portalGrades?.importedAt != prev {
+            compute()
+            apply()
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -581,18 +662,86 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     }
 
     // MARK: - 判定
+
+    /// Course のカテゴリ文字列を複数ソースから解決する。
+    /// 優先順位: Course.category → 成績ルックアップ → シラバスURL の FN コード
+    private func effectiveCategory(for c: Course) -> String {
+        // 1. Course 本体に category がある場合はそのまま
+        if let cat = c.category, !cat.trimmingCharacters(in: .whitespaces).isEmpty {
+            return cat
+        }
+        // 2. 成績データ（tuutisho.aspx）の category 列から科目名で引く（完全一致 → 部分一致）
+        let titleKey = c.title.trimmingCharacters(in: .whitespaces)
+        if let cat = categoryLookup[titleKey], !cat.isEmpty {
+            return cat
+        }
+        if let cat = categoryLookup.first(where: { titleKey.contains($0.key) || $0.key.contains(titleKey) })?.value,
+           !cat.isEmpty {
+            return cat
+        }
+        // 3. シラバス URL の FN コードから推測
+        if let url = c.syllabusURL, let cat = categoryFromFNCode(url) {
+            return cat
+        }
+        return ""
+    }
+
+    /// シラバス URL（shousai.ashx?YR=YYYY&FN=XXXXXXX-NNNN）の FN 接頭辞から
+    /// カテゴリ文字列を返す。不明なコードは nil。
+    private func categoryFromFNCode(_ urlString: String) -> String? {
+        // FN パラメータを取り出す（URLComponents 優先 → 文字列検索フォールバック）
+        var fn: String?
+        if let comps = URLComponents(string: urlString) {
+            fn = comps.queryItems?.first(where: { $0.name == "FN" })?.value
+        }
+        // フォールバック: "FN=..." を文字列検索で取り出す
+        if fn == nil, let range = urlString.range(of: "FN=") {
+            let after = String(urlString[range.upperBound...])
+            fn = String(after.prefix(while: { $0 != "&" && $0 != "#" }))
+        }
+        guard let fn = fn, !fn.isEmpty else { return nil }
+
+        // FN の形式: "1611020-0001" → prefix = "1611020"（先頭 1 桁はダミー、次の 6 桁が分類コード）
+        let prefix = String(fn.prefix(while: { $0 != "-" }))
+        // 6 桁コード部分：先頭 1 桁を除いた 6 桁、または先頭 6 桁
+        let code6: String
+        if prefix.count >= 7 {
+            code6 = String(prefix.dropFirst())   // 先頭の "1" を除く
+        } else {
+            code6 = prefix                        // 6 桁以下ならそのまま
+        }
+
+        // 青山キャンパス共通教育（青山スタンダード科目）
+        let aoyamaCodes: Set<String> = ["611020", "611021"]
+        // 外国語科目
+        let languageCodes: Set<String> = ["611100", "611101", "611102", "611110"]
+        // 教職課程
+        let teacherCodes: Set<String>  = ["611400", "611401"]
+
+        if aoyamaCodes.contains(code6)  { return "青山スタンダード科目" }
+        if languageCodes.contains(code6) { return "外国語科目" }
+        if teacherCodes.contains(code6)  { return "教職課程科目" }
+        // その他は学科科目として扱う（部門コードがあれば department 判定は後段で）
+        return nil
+    }
+
     // 語学判定（既定は「外国語」を含むもの）
     private func isLanguageCourse(_ c: Course) -> Bool {
-        // c.title は非Optional のはずなので ?? "" は不要
-        let s = "\(c.title) \(c.category ?? "")".lowercased()
-        let keys = ["外国語", "english", "advanced", "speaking", "abroad", ]  // 必要に応じて ["english","英語",…] など拡張
+        let cat = effectiveCategory(for: c)
+        // category 文字列の照合（全角・半角カタカナどちらも対応）
+        let catL = cat.lowercased()
+        if catL.contains("外国語") || catL.contains("ｶﾞｲｺｸｺﾞ") { return true }
+        // タイトル由来のフォールバック
+        let s = c.title.lowercased()
+        let keys = ["外国語", "english", "advanced english", "speaking", "abroad"]
         return keys.contains { s.contains($0) }
     }
-    
+
     // 自学科の科目か（選択中の学科ごとの詳細ルールで判定）
     private func isOwnDepartmentCourse(_ c: Course) -> Bool {
         guard let depName = selectedDepartment, !depName.isEmpty else { return false }
-        let hay = norm("\(c.title) \(c.category ?? "")")
+        let cat = effectiveCategory(for: c)
+        let hay = norm("\(c.title) \(cat)")
 
         if let rule = DEPT_RULES[depName] {
             // ルールがあればルールで判定（キーワードも正規化してから）
@@ -607,15 +756,18 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             return hay.contains(norm(depName))
         }
     }
+
     // 青山スタンダード
     private func isAoyamaStandard(_ c: Course) -> Bool {
-        let cat = (c.category ?? "").lowercased()
-        return cat.contains("スタンダード") || cat.contains("standard")
+        let cat = effectiveCategory(for: c).lowercased()
+        // 全角カタカナ "スタンダード" と半角カタカナ "ｽﾀﾝﾀﾞｰﾄﾞ" の両方に対応
+        return cat.contains("スタンダード") || cat.contains("ｽﾀﾝﾀﾞｰ") || cat.contains("standard")
     }
-    
-    // 教職課程科目（category が完全一致「教職課程科目」）
+
+    // 教職課程科目
     private func isTeacherTraining(_ c: Course) -> Bool {
-        return (c.category ?? "") == "教職課程科目"
+        let cat = effectiveCategory(for: c)
+        return cat.contains("教職")
     }
 
     private func classifySeg4(_ c: Course) -> Seg4 {
@@ -626,12 +778,18 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             return fixed
         }
 
-        // ← 追加：教職課程は最優先で teacher に振る
+        // 教職課程は最優先で teacher に振る
         if isTeacherTraining(c) { return .teacher }
 
         if isAoyamaStandard(c) { return .aoyama }
         if isLanguageCourse(c) { return currentLanguageSink() }
         if isOwnDepartmentCourse(c) { return .department }
+
+        // 成績データのカテゴリで最終判断（"学　科" 系はすでに isOwnDepartmentCourse でカバー
+        // されない場合のための安全網）
+        let finalCat = effectiveCategory(for: c)
+        if finalCat.contains("学科") || finalCat.contains("ｶﾞｸｶ") { return .department }
+
         return .free
     }
     
@@ -862,6 +1020,11 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                 }
             }
         }
+
+        // ポータルから取得した詳細要件テーブルを末尾に追加（空でなければ）
+        if let summary = portalGrades?.creditSummary, !summary.isEmpty {
+            sections.append(.portalSummary(summary))
+        }
     }
 
     // MARK: - 表示反映
@@ -894,29 +1057,53 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         ]
         donut.configure(segments: segs)
 
-        // 凡例 4行
+        // 凡例 4行（プログレスバー付き）
         legendStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        func row(_ seg: Seg4, need: Int) -> UIStackView {
-            let dot = UIView(); dot.backgroundColor = seg.color; dot.layer.cornerRadius = 6
+        func legendRow(_ seg: Seg4, need: Int) -> UIView {
+            let e = totals.earned[seg] ?? 0
+            let p = totals.planned[seg] ?? 0
+            let ep = min(need, e + p)
+
+            let outer = UIStackView(); outer.axis = .vertical; outer.spacing = 4
+
+            // 上段: ドット＋名前 | カウント
+            let dot = UIView()
+            dot.backgroundColor = seg.color; dot.layer.cornerRadius = 5
             dot.translatesAutoresizingMaskIntoConstraints = false
-            dot.widthAnchor.constraint(equalToConstant: 12).isActive = true
-            dot.heightAnchor.constraint(equalToConstant: 12).isActive = true
+            NSLayoutConstraint.activate([
+                dot.widthAnchor.constraint(equalToConstant: 10),
+                dot.heightAnchor.constraint(equalToConstant: 10)
+            ])
+            let nameLabel = UILabel()
+            nameLabel.text = seg.title
+            nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
 
-            let name = UILabel(); name.text = seg.title; name.font = .systemFont(ofSize: 15, weight: .semibold)
-            let left = UIStackView(arrangedSubviews: [dot, name]); left.axis = .horizontal; left.alignment = .center; left.spacing = 8
+            let countLabel = UILabel()
+            countLabel.text = need > 0 ? "\(e)(\(ep))/\(need)" : "–"
+            countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            countLabel.textColor = .secondaryLabel
 
-            let right = UILabel(); right.textColor = .secondaryLabel; right.font = .systemFont(ofSize: 15)
-            let e = totals.earned[seg] ?? 0, p = totals.planned[seg] ?? 0
-            let ep = min(need, e + p)   // 必要単位を超えないようクリップ
-            right.text = "\(e)(\(ep)) / \(need)"
+            let topLine = UIStackView(arrangedSubviews: [dot, nameLabel, UIView(), countLabel])
+            topLine.axis = .horizontal; topLine.alignment = .center; topLine.spacing = 6
 
-            let line = UIStackView(arrangedSubviews: [left, UIView(), right]); line.alignment = .center
-            return line
+            // プログレスバー
+            let progress = UIProgressView(progressViewStyle: .default)
+            progress.progressTintColor = seg.color
+            progress.trackTintColor = seg.color.withAlphaComponent(0.18)
+            progress.progress = need > 0 ? Float(ep) / Float(need) : 0
+            progress.layer.cornerRadius = 2.5; progress.clipsToBounds = true
+            progress.translatesAutoresizingMaskIntoConstraints = false
+            progress.heightAnchor.constraint(equalToConstant: 5).isActive = true
+
+            outer.addArrangedSubview(topLine)
+            outer.addArrangedSubview(progress)
+            return outer
         }
-        legendStack.addArrangedSubview(row(.aoyama,     need: req.aoyama))
-        legendStack.addArrangedSubview(row(.language,   need: req.language))
-        legendStack.addArrangedSubview(row(.department, need: req.department))
-        legendStack.addArrangedSubview(row(.free,       need: req.free))
+        legendStack.spacing = 10
+        legendStack.addArrangedSubview(legendRow(.aoyama,     need: req.aoyama))
+        legendStack.addArrangedSubview(legendRow(.language,   need: req.language))
+        legendStack.addArrangedSubview(legendRow(.department, need: req.department))
+        legendStack.addArrangedSubview(legendRow(.free,       need: req.free))
 
         tableView.reloadData()
 
@@ -939,13 +1126,37 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             }
         }
 
+        // GPAカード更新
+        if let grades = portalGrades {
+            let df = DateFormatter()
+            df.dateStyle = .short
+            df.timeStyle = .none
+            df.locale = Locale(identifier: "ja_JP")
+            let dateStr = df.string(from: grades.importedAt)
+            let passed = grades.records.filter { $0.isPassed }.count
+            let total  = grades.records.count
+            // 小数2桁に丸め（例: "0.92500" → "0.93"）
+            let gpaFormatted: String = {
+                if let v = Double(grades.gpa) {
+                    return String(format: "%.2f", v)
+                }
+                return grades.gpa.isEmpty ? "–" : grades.gpa
+            }()
+            gpaValueLabel.text = gpaHidden ? "●●●" : gpaFormatted
+            gpaBannerLabel.text = "合格 \(passed) / \(total) 科目\n取込: \(dateStr)"
+            gpaBannerView.isHidden = false
+        } else {
+            gpaBannerView.isHidden = true
+        }
+        updateEmptyState()
+
         updateTableHeaderHeightIfNeeded()
     }
 
     private func makeCenterValue(earned: Int, totalWithPlanned: Int) -> NSAttributedString {
         let s = "\(earned)(\(totalWithPlanned))"
-        let big = UIFont.systemFont(ofSize: 44, weight: .black)
-        let small = UIFont.systemFont(ofSize: 32, weight: .black)
+        let big = UIFont.systemFont(ofSize: 26, weight: .black)
+        let small = UIFont.systemFont(ofSize: 18, weight: .black)
         let attr = NSMutableAttributedString(string: s, attributes: [.font: big, .foregroundColor: UIColor.label])
         if let open = s.firstIndex(of: "("), let close = s.firstIndex(of: ")") {
             let r = NSRange(open...close, in: s)
@@ -1008,12 +1219,14 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             stack.bottomAnchor.constraint(equalTo: headerContainer.layoutMarginsGuide.bottomAnchor)
         ])
 
-        // フィルタ（学部/学科）
-        let filtersRow = UIStackView(); filtersRow.axis = .horizontal; filtersRow.spacing = 8; filtersRow.distribution = .fillEqually
-        styleFilterButton(facultyButton, placeholder: "学部（指定なし）")
-        styleFilterButton(departmentButton, placeholder: "学科（指定なし）", enabled: false)
-        filtersRow.addArrangedSubview(facultyButton)
-        filtersRow.addArrangedSubview(departmentButton)
+        // 学部・学科（ポータルデータから自動設定・変更不可）
+        let filtersRow = UIStackView(); filtersRow.axis = .horizontal; filtersRow.spacing = 8; filtersRow.distribution = .fill
+        deptInfoLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        deptInfoLabel.textColor = .secondaryLabel
+        deptInfoLabel.textAlignment = .center
+        deptInfoLabel.numberOfLines = 1
+        deptInfoLabel.text = "学部・学科はポータルから自動設定されます"
+        filtersRow.addArrangedSubview(deptInfoLabel)
 
         // キャプション
         captionLabel.text = "取得済み単位（取得予定）"
@@ -1027,27 +1240,27 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         NSLayoutConstraint.activate([
             donut.centerXAnchor.constraint(equalTo: donutWrap.centerXAnchor),
             donut.centerYAnchor.constraint(equalTo: donutWrap.centerYAnchor),
-            donut.widthAnchor.constraint(equalTo: donutWrap.widthAnchor, multiplier: 0.78),
+            donut.widthAnchor.constraint(equalTo: donutWrap.widthAnchor, multiplier: 0.92),
             donut.heightAnchor.constraint(equalTo: donut.widthAnchor)
         ])
         centerValueLabel.textAlignment = .center
         centerValueLabel.adjustsFontSizeToFitWidth = true
-        centerValueLabel.minimumScaleFactor = 0.6
+        centerValueLabel.minimumScaleFactor = 0.5
         centerValueLabel.translatesAutoresizingMaskIntoConstraints = false
         donutWrap.addSubview(centerValueLabel)
         NSLayoutConstraint.activate([
             centerValueLabel.centerXAnchor.constraint(equalTo: donutWrap.centerXAnchor),
             centerValueLabel.centerYAnchor.constraint(equalTo: donutWrap.centerYAnchor),
-            centerValueLabel.widthAnchor.constraint(lessThanOrEqualTo: donutWrap.widthAnchor, multiplier: 0.8)
+            centerValueLabel.widthAnchor.constraint(lessThanOrEqualTo: donutWrap.widthAnchor, multiplier: 0.42)
         ])
-        let ratio = donutWrap.heightAnchor.constraint(equalTo: donutWrap.widthAnchor, multiplier: 0.78)
+        let ratio = donutWrap.heightAnchor.constraint(equalTo: donutWrap.widthAnchor, multiplier: 0.92)
         ratio.priority = .defaultHigh   // AutoLayout 警告回避
         ratio.isActive = true
 
         // 必要単位ラベル
-        needLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        needLabel.textColor = .secondaryLabel
-        needLabel.textAlignment = .center
+        needLabel.font = .systemFont(ofSize: 12)
+        needLabel.textColor = .tertiaryLabel
+        needLabel.textAlignment = .left
 
         legendStack.axis = .vertical
         legendStack.spacing = 6
@@ -1076,14 +1289,97 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             graduationBannerLabel.trailingAnchor.constraint(equalTo: graduationBannerView.layoutMarginsGuide.trailingAnchor),
         ])
 
+        // ── GPAカード ──────────────────────────────────────────────
+        // 左アクセントバー（indigo）＋ 大きいGPA数値 ＋ 縦区切り ＋ サブテキスト
+        gpaBannerView.backgroundColor = .secondarySystemBackground
+        gpaBannerView.layer.cornerRadius = 14
+        gpaBannerView.layer.masksToBounds = true
+        gpaBannerView.isHidden = true
+        // タップで伏せ字トグル
+        let gpaTap = UITapGestureRecognizer(target: self, action: #selector(toggleGPAVisibility))
+        gpaBannerView.addGestureRecognizer(gpaTap)
+        gpaBannerView.isUserInteractionEnabled = true
+
+        let gpaStripe = UIView()
+        gpaStripe.backgroundColor = .systemIndigo
+        gpaStripe.translatesAutoresizingMaskIntoConstraints = false
+        gpaBannerView.addSubview(gpaStripe)
+
+        let gpaTagLabel = UILabel()
+        gpaTagLabel.text = "GPA"
+        gpaTagLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        gpaTagLabel.textColor = UIColor.systemIndigo.withAlphaComponent(0.75)
+        gpaTagLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        gpaValueLabel.font = .systemFont(ofSize: 34, weight: .black)
+        gpaValueLabel.textColor = .systemIndigo
+        gpaValueLabel.text = "–"
+        gpaValueLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let gpaLeftCol = UIStackView(arrangedSubviews: [gpaTagLabel, gpaValueLabel])
+        gpaLeftCol.axis = .vertical
+        gpaLeftCol.spacing = 0
+        gpaLeftCol.alignment = .leading
+        gpaLeftCol.translatesAutoresizingMaskIntoConstraints = false
+        gpaBannerView.addSubview(gpaLeftCol)
+
+        let gpaDivider = UIView()
+        gpaDivider.backgroundColor = .separator
+        gpaDivider.translatesAutoresizingMaskIntoConstraints = false
+        gpaBannerView.addSubview(gpaDivider)
+
+        gpaBannerLabel.font = .systemFont(ofSize: 13)
+        gpaBannerLabel.textColor = .secondaryLabel
+        gpaBannerLabel.numberOfLines = 0
+        gpaBannerLabel.translatesAutoresizingMaskIntoConstraints = false
+        gpaBannerView.addSubview(gpaBannerLabel)
+
+        NSLayoutConstraint.activate([
+            gpaStripe.leadingAnchor.constraint(equalTo: gpaBannerView.leadingAnchor),
+            gpaStripe.topAnchor.constraint(equalTo: gpaBannerView.topAnchor),
+            gpaStripe.bottomAnchor.constraint(equalTo: gpaBannerView.bottomAnchor),
+            gpaStripe.widthAnchor.constraint(equalToConstant: 4),
+
+            gpaLeftCol.leadingAnchor.constraint(equalTo: gpaStripe.trailingAnchor, constant: 14),
+            gpaLeftCol.topAnchor.constraint(equalTo: gpaBannerView.topAnchor, constant: 12),
+            gpaLeftCol.bottomAnchor.constraint(equalTo: gpaBannerView.bottomAnchor, constant: -12),
+
+            gpaDivider.leadingAnchor.constraint(equalTo: gpaLeftCol.trailingAnchor, constant: 14),
+            gpaDivider.centerYAnchor.constraint(equalTo: gpaBannerView.centerYAnchor),
+            gpaDivider.widthAnchor.constraint(equalToConstant: 1),
+            gpaDivider.heightAnchor.constraint(equalTo: gpaBannerView.heightAnchor, multiplier: 0.55),
+
+            gpaBannerLabel.leadingAnchor.constraint(equalTo: gpaDivider.trailingAnchor, constant: 14),
+            gpaBannerLabel.trailingAnchor.constraint(equalTo: gpaBannerView.trailingAnchor, constant: -14),
+            gpaBannerLabel.centerYAnchor.constraint(equalTo: gpaBannerView.centerYAnchor),
+        ])
+
         // add
         stack.addArrangedSubview(filtersRow)
+        stack.addArrangedSubview(gpaBannerView)
         stack.addArrangedSubview(captionLabel)
-        stack.addArrangedSubview(donutWrap)
-        stack.setCustomSpacing(4, after: donutWrap)
-        stack.addArrangedSubview(needLabel)
-        stack.addArrangedSubview(legendStack)
-        stack.setCustomSpacing(12, after: legendStack)
+
+        // ── ドーナツ ＋ 凡例 を横並び ──────────────────────────────
+        let chartRow = UIStackView()
+        chartRow.axis = .horizontal
+        chartRow.alignment = .center
+        chartRow.spacing = 16
+        chartRow.distribution = .fill
+
+        let legendSide = UIStackView()
+        legendSide.axis = .vertical
+        legendSide.spacing = 10
+        legendSide.alignment = .fill
+        legendSide.addArrangedSubview(legendStack)
+        legendSide.addArrangedSubview(needLabel)
+
+        chartRow.addArrangedSubview(donutWrap)
+        chartRow.addArrangedSubview(legendSide)
+        // donutWrap 幅 ≈ legendSide の 75%（全体の約43%）
+        donutWrap.widthAnchor.constraint(equalTo: legendSide.widthAnchor, multiplier: 0.75).isActive = true
+
+        stack.addArrangedSubview(chartRow)
+        stack.setCustomSpacing(12, after: chartRow)
         stack.addArrangedSubview(graduationBannerView)
         stack.setCustomSpacing(10, after: graduationBannerView)
         stack.addArrangedSubview(earnedSeg)
@@ -1107,6 +1403,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         // フッターは不要（追加はナビバーの + ボタンに移動）
         tableView.tableFooterView = UIView(frame: .zero)
 
+        buildEmptyState()
     }
     
     @objc private func handleLongPressOnRow(_ gr: UILongPressGestureRecognizer) {
@@ -1311,7 +1608,41 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         configureFacultyMenus()
     }
 
+    /// ポータルの「学部・学科」文字列（例: "文学部英米文学科"）から selectedFaculty / selectedDepartment を設定する。
+    /// すでに設定済みの場合はスキップしない（ポータルデータを優先）。
+    private func autoDetectFacultyDept(from deptStr: String) {
+        // 学部を先頭一致で探す
+        for faculty in FACULTY_MAP.keys.sorted(by: { $0.count > $1.count }) {  // 長い名前を優先
+            guard deptStr.contains(faculty) else { continue }
+            selectedFaculty = faculty
+            // 学科を含むか確認
+            if let depts = FACULTY_MAP[faculty] {
+                for dept in depts.sorted(by: { $0.count > $1.count }) {
+                    if deptStr.contains(dept) {
+                        selectedDepartment = dept
+                        return
+                    }
+                }
+            }
+            selectedDepartment = nil
+            return
+        }
+    }
+
+    private func updateDeptInfoLabel() {
+        if let f = selectedFaculty {
+            let d = selectedDepartment ?? ""
+            deptInfoLabel.text = d.isEmpty ? f : "\(f)  \(d)"
+            deptInfoLabel.textColor = .label
+        } else {
+            deptInfoLabel.text = "学部・学科はポータルから自動設定されます"
+            deptInfoLabel.textColor = .secondaryLabel
+        }
+    }
+
     private func loadSelection() {
+        // 学部・学科はポータルデータから自動検出するため、UserDefaults からは読み込まない
+        // （既存の保存値は autoDetectFacultyDept で上書きされる）
         let ud = UserDefaults.standard
         if let f = ud.string(forKey: Prefs.faculty), FACULTY_MAP.keys.contains(f) {
             selectedFaculty = f
@@ -1326,19 +1657,112 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
     // MARK: - Table
     func numberOfSections(in tableView: UITableView) -> Int { sections.count }
-    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { sections[section].title }
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { nil }
+
+    // MARK: - カスタムセクションヘッダー
+    private func sectionAccentColor(for kind: SectionKind) -> UIColor {
+        switch kind {
+        case .mergedCategory(let d, _, _):
+            switch d {
+            case .aoyama:     return Seg4.aoyama.color
+            case .language:   return Seg4.language.color
+            case .department: return Seg4.department.color
+            case .free:       return Seg4.free.color
+            case .teacher:    return .systemOrange
+            }
+        case .planned(let d):
+            switch d {
+            case .aoyama:     return Seg4.aoyama.color
+            case .language:   return Seg4.language.color
+            case .department: return Seg4.department.color
+            case .free:       return Seg4.free.color
+            case .teacher:    return .systemOrange
+            }
+        case .earned(let d):
+            switch d {
+            case .aoyama:     return Seg4.aoyama.color
+            case .language:   return Seg4.language.color
+            case .department: return Seg4.department.color
+            case .free:       return Seg4.free.color
+            case .teacher:    return .systemOrange
+            }
+        case .earnedTermGroup:  return .systemGray3
+        case .portalSummary:    return .systemTeal
+        }
+    }
+
+    func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        let kind = sections[section]
+        let color = sectionAccentColor(for: kind)
+
+        let wrapper = UIView()
+        wrapper.backgroundColor = .clear
+
+        let dot = UIView()
+        dot.backgroundColor = color
+        dot.layer.cornerRadius = 4
+        dot.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = UILabel()
+        titleLabel.text = kind.title
+        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.textColor = .secondaryLabel
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let countLabel = UILabel()
+        countLabel.font = .systemFont(ofSize: 11)
+        countLabel.textColor = .tertiaryLabel
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+        switch kind {
+        case .mergedCategory(_, let p, let e):
+            let units = (p + e).reduce(0) { $0 + ($1.credits ?? 0) }
+            countLabel.text = "\(p.count + e.count)科目 · \(units)単位"
+        case .earnedTermGroup(_, let arr):
+            let units = arr.reduce(0) { $0 + ($1.credits ?? 0) }
+            countLabel.text = "\(arr.count)科目 · \(units)単位"
+        default:
+            countLabel.text = nil
+        }
+
+        wrapper.addSubview(dot)
+        wrapper.addSubview(titleLabel)
+        wrapper.addSubview(countLabel)
+
+        NSLayoutConstraint.activate([
+            dot.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor, constant: 24),
+            dot.widthAnchor.constraint(equalToConstant: 8),
+            dot.heightAnchor.constraint(equalToConstant: 8),
+            dot.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor),
+
+            titleLabel.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 7),
+            titleLabel.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: countLabel.leadingAnchor, constant: -8),
+
+            countLabel.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor, constant: -24),
+            countLabel.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor),
+        ])
+
+        return wrapper
+    }
+
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat { 34 }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch sections[section] {
         case .planned(let d):                    return plannedByDisplay[d]?.count ?? 0
         case .earned(let d):                    return earnedByDisplay[d]?.count ?? 0
         case .earnedTermGroup(_, let arr):       return arr.count
         case .mergedCategory(_, let p, let e):  return p.count + e.count
+        case .portalSummary(let items):          return items.count
         }
     }
     // 右から左スワイプのアクション（iOS 11+）
     func tableView(_ tableView: UITableView,
                    trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
     -> UISwipeActionsConfiguration? {
+
+        // ポータル要件セクションはスワイプ不可
+        if case .portalSummary = sections[indexPath.section] { return nil }
 
         let course = rows(for: indexPath.section)[indexPath.row]
         guard let mid = manualId(from: course) else {
@@ -1370,9 +1794,47 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         case .earned(let d):                    return earnedByDisplay[d]  ?? []
         case .earnedTermGroup(_, let arr):       return arr
         case .mergedCategory(_, let p, let e):  return p + e
+        case .portalSummary:                    return []
         }
     }
+
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        // ── ポータル詳細要件セクション専用セル ──────────────────────
+        if case .portalSummary(let items) = sections[indexPath.section] {
+            let item = items[indexPath.row]
+            let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
+            var cfg = cell.defaultContentConfiguration()
+
+            // インデント（先頭スペース量でレベルを表現）
+            let label = item.label
+            let isIndented = label.hasPrefix("　") || label.hasPrefix(" ")
+            cfg.text = isIndented ? label : label
+
+            // 右側: 修得/必要
+            var rightParts: [String] = []
+            if let e = item.earned   { rightParts.append("修得\(e)") }
+            if let r = item.required { rightParts.append("必要\(r)") }
+            cfg.secondaryText = rightParts.isEmpty ? nil : rightParts.joined(separator: " / ")
+
+            // 合格ライン表示（修得≧必要なら緑）
+            if let e = item.earned, let r = item.required, e >= r {
+                cfg.textProperties.color = .systemGreen
+            }
+
+            // 背景
+            if #available(iOS 14.0, *) {
+                var bg = UIBackgroundConfiguration.clear()
+                bg.backgroundColor = UIColor.cardBG
+                cell.backgroundConfiguration = bg
+            } else {
+                cell.backgroundColor = UIColor.cardBG
+            }
+            cell.contentConfiguration = cfg
+            cell.selectionStyle = .none
+            return cell
+        }
+
+        // ── 通常の科目セル ────────────────────────────────────────
         let c = rows(for: indexPath.section)[indexPath.row]
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         var cfg = cell.defaultContentConfiguration()
@@ -1397,17 +1859,83 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         default:
             break
         }
+
+        // 取得予定行かどうかを判定
+        var isPlannedRow = false
+        if case .mergedCategory(_, let planned, _) = sections[indexPath.section] {
+            isPlannedRow = indexPath.row < planned.count
+        } else if case .planned = sections[indexPath.section] {
+            isPlannedRow = true
+        }
+
+        // ポータル成績バッジ（右端に成績文字を accessoryView として表示）
+        if let grade = gradeForCourse(c), !isPlannedRow {
+            let badgeLabel = UILabel()
+            badgeLabel.text = " \(grade) "
+            badgeLabel.font = .systemFont(ofSize: 11, weight: .bold)
+            badgeLabel.textColor = .white
+            badgeLabel.layer.cornerRadius = 5
+            badgeLabel.layer.masksToBounds = true
+            let passed = ["AA", "A", "B", "C", "++", "**"]
+            let failed = ["XX", "FF", "X", "W"]
+            if passed.contains(grade) {
+                badgeLabel.backgroundColor = .systemGreen
+            } else if failed.contains(grade) {
+                badgeLabel.backgroundColor = .systemRed
+            } else {
+                // "**"等はグレー（既にpassedに含むが念のため）
+                badgeLabel.backgroundColor = .systemGray
+            }
+            badgeLabel.sizeToFit()
+            cell.accessoryView = badgeLabel
+        } else if isPlannedRow {
+            let badgeLabel = UILabel()
+            badgeLabel.text = " 未定 "
+            badgeLabel.font = .systemFont(ofSize: 11, weight: .bold)
+            badgeLabel.textColor = .white
+            badgeLabel.backgroundColor = .systemPurple
+            badgeLabel.layer.cornerRadius = 5
+            badgeLabel.layer.masksToBounds = true
+            badgeLabel.sizeToFit()
+            cell.accessoryView = badgeLabel
+        } else {
+            cell.accessoryView = nil
+        }
+
         cfg.secondaryText = subtitle
         cell.contentConfiguration = cfg
-        
+
         if #available(iOS 14.0, *) {
-            var bg = UIBackgroundConfiguration.clear()   // ← listInsetGroupedCell() は使わない
-            bg.backgroundColor = UIColor.cardBG          // ← 型を明示
+            var bg = UIBackgroundConfiguration.clear()
+            bg.backgroundColor = UIColor.cardBG
             cell.backgroundConfiguration = bg
         } else {
             cell.backgroundColor = UIColor.cardBG
             cell.contentView.backgroundColor = UIColor.cardBG
         }
+
+        // ── 左アクセントバー（カテゴリ色） ──────────────────────
+        cell.contentView.viewWithTag(9901)?.removeFromSuperview()
+        let accentBar = UIView()
+        accentBar.tag = 9901
+        accentBar.translatesAutoresizingMaskIntoConstraints = false
+        let accentColor: UIColor = {
+            switch classifySeg4(c) {
+            case .aoyama:     return Seg4.aoyama.color
+            case .language:   return Seg4.language.color
+            case .department: return Seg4.department.color
+            case .free:       return Seg4.free.color
+            case .teacher:    return .systemOrange
+            }
+        }()
+        accentBar.backgroundColor = accentColor
+        cell.contentView.addSubview(accentBar)
+        NSLayoutConstraint.activate([
+            accentBar.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor),
+            accentBar.topAnchor.constraint(equalTo: cell.contentView.topAnchor),
+            accentBar.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor),
+            accentBar.widthAnchor.constraint(equalToConstant: 3),
+        ])
 
         return cell
     }
@@ -1415,6 +1943,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     //追加
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
+        // ポータル要件セクションはタップ不可
+        if case .portalSummary = sections[indexPath.section] { return }
         let course = rows(for: indexPath.section)[indexPath.row]
         let key = courseKey(course)
 
@@ -1441,6 +1971,100 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         present(sheet, animated: true)
     }
 
+    // MARK: - GPA 伏せ字トグル
+    @objc private func toggleGPAVisibility() {
+        gpaHidden.toggle()
+        // gpaValueLabel だけ切り替える（合格数・取込日はそのまま）
+        if let grades = portalGrades {
+            if gpaHidden {
+                gpaValueLabel.text = "●●●"
+            } else {
+                if let v = Double(grades.gpa) {
+                    gpaValueLabel.text = String(format: "%.2f", v)
+                } else {
+                    gpaValueLabel.text = grades.gpa.isEmpty ? "–" : grades.gpa
+                }
+            }
+        }
+        // 軽くバウンスしてフィードバック
+        UIView.animate(withDuration: 0.1, animations: {
+            self.gpaValueLabel.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.2,
+                           delay: 0,
+                           usingSpringWithDamping: 0.5,
+                           initialSpringVelocity: 0.5) {
+                self.gpaValueLabel.transform = .identity
+            }
+        })
+    }
+
+    // MARK: - 空状態（成績データなし）
+    private func buildEmptyState() {
+        emptyStateView.backgroundColor = .appBG
+        emptyStateView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(emptyStateView)
+        NSLayoutConstraint.activate([
+            emptyStateView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            emptyStateView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            emptyStateView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            emptyStateView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        let iconLabel = UILabel()
+        iconLabel.text = "📊"
+        iconLabel.font = .systemFont(ofSize: 64)
+        iconLabel.textAlignment = .center
+
+        let titleLabel = UILabel()
+        titleLabel.text = "成績データがありません"
+        titleLabel.font = .systemFont(ofSize: 20, weight: .bold)
+        titleLabel.textAlignment = .center
+
+        let bodyLabel = UILabel()
+        bodyLabel.text = "Safari でポータルにログインし\n共有ボタン → 青山ハック で\n成績を取り込んでください"
+        bodyLabel.font = .systemFont(ofSize: 15)
+        bodyLabel.textColor = .secondaryLabel
+        bodyLabel.textAlignment = .center
+        bodyLabel.numberOfLines = 0
+
+        var portalConfig = UIButton.Configuration.filled()
+        portalConfig.title = "ポータルを開く"
+        portalConfig.image = UIImage(systemName: "safari")
+        portalConfig.imagePlacement = .leading
+        portalConfig.imagePadding = 6
+        portalConfig.cornerStyle = .capsule
+        portalConfig.baseBackgroundColor = .systemGreen
+        portalConfig.baseForegroundColor = .white
+        let portalBtn = UIButton(configuration: portalConfig)
+        portalBtn.addTarget(self, action: #selector(openPortalForGrades), for: .touchUpInside)
+
+        let emptyStack = UIStackView(arrangedSubviews: [iconLabel, titleLabel, bodyLabel, portalBtn])
+        emptyStack.axis = .vertical
+        emptyStack.spacing = 12
+        emptyStack.alignment = .center
+        emptyStack.setCustomSpacing(20, after: bodyLabel)
+        emptyStack.translatesAutoresizingMaskIntoConstraints = false
+        emptyStateView.addSubview(emptyStack)
+
+        NSLayoutConstraint.activate([
+            emptyStack.centerXAnchor.constraint(equalTo: emptyStateView.centerXAnchor),
+            emptyStack.centerYAnchor.constraint(equalTo: emptyStateView.centerYAnchor, constant: -40),
+            emptyStack.leadingAnchor.constraint(greaterThanOrEqualTo: emptyStateView.leadingAnchor, constant: 32),
+            emptyStack.trailingAnchor.constraint(lessThanOrEqualTo: emptyStateView.trailingAnchor, constant: -32),
+        ])
+
+        updateEmptyState()
+    }
+
+    @objc private func openPortalForGrades() {
+        guard let url = URL(string: "https://aguinfo.jm.aoyama.ac.jp/AGUInfo/message_list.aspx") else { return }
+        UIApplication.shared.open(url)
+    }
+
+    private func updateEmptyState() {
+        emptyStateView.isHidden = (portalGrades != nil)
+    }
 }
 
 

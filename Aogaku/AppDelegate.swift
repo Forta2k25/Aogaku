@@ -8,7 +8,8 @@
 import UIKit
 import FirebaseCore
 import GoogleMobileAds
-import FirebaseRemoteConfig   // ← 追加
+import FirebaseRemoteConfig
+import GoogleSignIn
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -17,9 +18,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         FirebaseApp.configure()
+        if let clientID = FirebaseApp.app()?.options.clientID {
+            GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
+        }
         AppAnalytics.logAppLaunch()
-        PushManager.shared.start()   // ← 追加
-        setupGlobalAppearance()      // ← グローバルUI設定
+        PushManager.shared.start()
+        setupGlobalAppearance()
         
        
         // AdMob 初期化（Google Mobile Ads SDK v12+）
@@ -81,6 +85,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ app: UIApplication,
                      open url: URL,
                      options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+        if GIDSignIn.sharedInstance.handle(url) { return true }
         _ = DeepLinkRouter.handle(url, window: UIApplication.shared.windows.first)
         return true
     }

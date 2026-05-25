@@ -772,7 +772,7 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
             headerScrollView.topAnchor.constraint(equalTo: contentView.topAnchor),
             headerScrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             headerScrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            headerScrollView.heightAnchor.constraint(equalToConstant: 240),
+            headerScrollView.heightAnchor.constraint(equalTo: headerScrollView.widthAnchor),
 
             headerImagesStack.topAnchor.constraint(equalTo: headerScrollView.contentLayoutGuide.topAnchor),
             headerImagesStack.bottomAnchor.constraint(equalTo: headerScrollView.contentLayoutGuide.bottomAnchor),
@@ -1031,9 +1031,9 @@ final class CircleDetailViewController: UIViewController, UIScrollViewDelegate {
     private func makeHeaderImageView() -> UIImageView {
         let iv = UIImageView()
         iv.translatesAutoresizingMaskIntoConstraints = false
-        iv.contentMode = .scaleAspectFill
+        iv.contentMode = .scaleAspectFit
         iv.clipsToBounds = true
-        iv.backgroundColor = .tertiarySystemFill
+        iv.backgroundColor = .black
         iv.isUserInteractionEnabled = true
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(didTapHeaderImage(_:)))

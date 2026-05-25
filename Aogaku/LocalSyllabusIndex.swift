@@ -402,6 +402,37 @@ final class LocalSyllabusIndex {
         return out
     }
 
+    // 登録番号（FN）で直接 URL を引く。テキスト検索を介さないので確実。
+    // ハイフン・空白を除去して比較するため表記ゆれに強い。
+    func url(forRegistrationNumber regNum: String) -> String? {
+        let needle = regNum
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "　", with: "")
+        guard !needle.isEmpty else { return nil }
+        for e in entries {
+            let candidates = [
+                e.raw.registration_number,
+                e.raw.code,
+                e.raw.class_code,
+                e.raw.course_code
+            ].compactMap { $0 }
+            for c in candidates {
+                let cn = c.lowercased()
+                    .replacingOccurrences(of: "-", with: "")
+                    .replacingOccurrences(of: " ", with: "")
+                    .replacingOccurrences(of: "　", with: "")
+                if cn == needle {
+                    let url = (e.raw.url ?? e.raw.syllabusURL ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return url.isEmpty ? nil : url
+                }
+            }
+        }
+        return nil
+    }
+
     // UI表示用へ変換（syllabus.swift の toModel と同等）
     private func toModel(_ e: SyllabusEntry) -> syllabus.SyllabusData {
         let day = e.raw.time?.day ?? ""

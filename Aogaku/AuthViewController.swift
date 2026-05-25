@@ -14,26 +14,25 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
 
     // MARK: - UI
     private let titleLabel = UILabel()
-    private let gradeField = UITextField()         // 学年
-    private let facultyDeptField = UITextField()   // 学部・学科（2コンポーネントピッカー）
+    private let googleButton = UIButton(type: .system)
+    private let dividerView = UIView()   // "または" divider
+    private let legacyToggle = UIButton(type: .system)
+    private let legacyContainer = UIView()
     private let idField = UITextField()
     private let pwField = UITextField()
-    private let signupButton = UIButton(type: .system)
     private let loginButton = UIButton(type: .system)
     private let noteLabel = UILabel()
     private let stack = UIStackView()
+    private var isLegacyExpanded = false
+
     private enum Keys {
         static let localProfileDraft = "LocalProfileDraftV1"
         static let shouldPromptInitialAvatar = "ShouldPromptInitialAvatarV1"
     }
 
-    // MARK: - Pickers
-    private let gradePicker = UIPickerView()
-    private let facultyDeptPicker = UIPickerView()
-    private let gradeOptions = ["1年","2年","3年","4年","指定なし"]
-    private let noneLabel = "指定なし"
+    // ===== Header banner =====
+    private let headerBanner = UIView()
 
-    
     // ===== AdMob (Banner) =====
     private let adContainer = UIView()
     private var bannerView: BannerView?
@@ -45,42 +44,12 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
     private var stackBottomToSafeArea: NSLayoutConstraint?
     private var stackBottomToAdTop: NSLayoutConstraint?
 
-    // 学部→学科（必要に応じて編集）
-    private let FACULTY_DATA: [String: [String]] = [
-        "文学部": ["英米文学科","フランス文学科","日本文学科","史学科","比較芸術学科"],
-        "教育人間科学部": ["教育学科","心理学科"],
-        "経済学部": ["経済学科","現代経済デザイン学科"],
-        "法学部": ["法学科","ヒューマンライツ学科"],
-        "経営学部": ["経営学科","マーケティング学科"],
-        "国際政治経済学部": ["国際政治学科","国際経済学科","国際コミュニケーション学科"],
-        "総合文化政策学部": ["総合文化政策学科"],
-        "理工学部": ["物理科学科","数理サイエンス学科","化学・生命科学科","電気電子工学科","機械創造工学科","経営システム工学科","情報テクノロジー学科"],
-        "コミュニティ人間科学部": ["コミュニティ人間科学科"],
-        "社会情報学部": ["社会情報学科"],
-        "地球社会共生学部": ["地球社会共生学科"],
-    ]
-    private var facultyNames: [String] { FACULTY_DATA.keys.sorted() }
-    private var selectedFacultyIndex = 0
-    private var selectedDepartmentIndex = 0
-    
     private func appBackgroundColor(for traits: UITraitCollection) -> UIColor {
         traits.userInterfaceStyle == .dark ? UIColor(white: 0.20, alpha: 1.0) : .systemGroupedBackground
     }
-    private func cardBackgroundColor(for traits: UITraitCollection) -> UIColor {
-        traits.userInterfaceStyle == .dark ? UIColor(white: 0.16, alpha: 1.0) : .secondarySystemBackground
-    }
     private func applyBackgroundStyle() {
-        let bg = appBackgroundColor(for: traitCollection)
-        view.backgroundColor = bg
-        adContainer.backgroundColor = bg
-
-        // ▼ ここを置換：ダーク時は黒、ライト時は白
-        let inputBG: UIColor = (traitCollection.userInterfaceStyle == .dark) ? .black : .white
-        [gradeField, facultyDeptField].forEach {
-            $0.backgroundColor = inputBG
-            $0.textColor = .label           // 文字はモードに追従
-            // （placeholder は既に UIColor.placeholderText を使用しているのでOK）
-        }
+        view.backgroundColor = appBackgroundColor(for: traitCollection)
+        adContainer.backgroundColor = appBackgroundColor(for: traitCollection)
     }
 
 
@@ -120,7 +89,6 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         view.backgroundColor = .systemBackground
 
         setupUI()
-        setupPickers()
         setupKeyboardToolbars()
         setupPasswordToggle()
         setupDismissKeyboardGesture()
@@ -129,14 +97,13 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
             selector: #selector(onAdMobReady),
             name: .adMobReady, object: nil)
 
-        // 右上のメニューボタン（未ログインは「その他」だけ）
         let menuButton = makeHamburgerButton(target: self, action: #selector(didTapSideMenuButton(_:)))
         view.addSubview(menuButton)
         NSLayoutConstraint.activate([
             menuButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             menuButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
         ])
-        
+
         applyBackgroundStyle()
     }
     @objc private func onAdMobReady() {
@@ -163,24 +130,64 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
 
     // MARK: - UI
     private func setupUI() {
-        titleLabel.text = "青山ハック アカウント"
-        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
-        titleLabel.textAlignment = .center
+        setupHeaderBanner()
 
-        // Placeholder（薄いグレー）
-        gradeField.attributedPlaceholder = NSAttributedString(
-            string: "学年を選択",
-            attributes: [.foregroundColor: UIColor.placeholderText]
-        )
-        gradeField.borderStyle = .roundedRect
-        gradeField.inputView = gradePicker
+        // --- Google sign-in button ---
+        googleButton.backgroundColor = .white
+        googleButton.setTitleColor(UIColor(white: 0.2, alpha: 1), for: .normal)
+        googleButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
+        googleButton.layer.cornerRadius = 12
+        googleButton.layer.borderWidth = 1
+        googleButton.layer.borderColor = UIColor.separator.cgColor
+        googleButton.layer.shadowColor = UIColor.black.cgColor
+        googleButton.layer.shadowOpacity = 0.06
+        googleButton.layer.shadowOffset = CGSize(width: 0, height: 1)
+        googleButton.layer.shadowRadius = 3
+        googleButton.setTitle("  Googleでログイン / 新規登録", for: .normal)
+        if let gIcon = UIImage(named: "google_logo") {
+            googleButton.setImage(gIcon, for: .normal)
+        }
+        googleButton.imageView?.contentMode = .scaleAspectFit
+        googleButton.addTarget(self, action: #selector(signInWithGoogle), for: .touchUpInside)
 
-        facultyDeptField.attributedPlaceholder = NSAttributedString(
-            string: "学部・学科を選択",
-            attributes: [.foregroundColor: UIColor.placeholderText]
-        )
-        facultyDeptField.borderStyle = .roundedRect
-        facultyDeptField.inputView = facultyDeptPicker
+        // --- "または" divider ---
+        let orLabel = UILabel()
+        orLabel.text = "または"
+        orLabel.font = .systemFont(ofSize: 13)
+        orLabel.textColor = .secondaryLabel
+        orLabel.textAlignment = .center
+        dividerView.addSubview(orLabel)
+        orLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let leftLine = UIView()
+        leftLine.backgroundColor = .separator
+        let rightLine = UIView()
+        rightLine.backgroundColor = .separator
+        [leftLine, rightLine].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            dividerView.addSubview($0)
+        }
+        NSLayoutConstraint.activate([
+            orLabel.centerXAnchor.constraint(equalTo: dividerView.centerXAnchor),
+            orLabel.centerYAnchor.constraint(equalTo: dividerView.centerYAnchor),
+            leftLine.leadingAnchor.constraint(equalTo: dividerView.leadingAnchor),
+            leftLine.trailingAnchor.constraint(equalTo: orLabel.leadingAnchor, constant: -8),
+            leftLine.centerYAnchor.constraint(equalTo: dividerView.centerYAnchor),
+            leftLine.heightAnchor.constraint(equalToConstant: 0.5),
+            rightLine.leadingAnchor.constraint(equalTo: orLabel.trailingAnchor, constant: 8),
+            rightLine.trailingAnchor.constraint(equalTo: dividerView.trailingAnchor),
+            rightLine.centerYAnchor.constraint(equalTo: dividerView.centerYAnchor),
+            rightLine.heightAnchor.constraint(equalToConstant: 0.5),
+        ])
+
+        // --- Legacy toggle ---
+        legacyToggle.setTitle("IDとパスワードでログイン（既存ユーザー）", for: .normal)
+        legacyToggle.titleLabel?.font = .systemFont(ofSize: 14)
+        legacyToggle.setTitleColor(.secondaryLabel, for: .normal)
+        legacyToggle.addTarget(self, action: #selector(toggleLegacy), for: .touchUpInside)
+
+        // --- Legacy container (hidden by default) ---
+        legacyContainer.isHidden = true
 
         idField.placeholder = "ID（英数字・._）"
         idField.autocapitalizationType = .none
@@ -194,57 +201,99 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         pwField.borderStyle = .roundedRect
         pwField.returnKeyType = .done
 
-        signupButton.setTitle("アカウント作成", for: .normal)
-        signupButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
-        signupButton.addTarget(self, action: #selector(signUp), for: .touchUpInside)
-
         loginButton.setTitle("ログイン", for: .normal)
         loginButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
         loginButton.addTarget(self, action: #selector(login), for: .touchUpInside)
 
-        noteLabel.text = "※一度作成したアカウントのIDを変更することはできません。\n※登録する「ID」は、学内システムで使う学生番号とは異なります。"
+        let legacyStack = UIStackView(arrangedSubviews: [idField, pwField, loginButton])
+        legacyStack.axis = .vertical
+        legacyStack.spacing = 12
+        legacyStack.translatesAutoresizingMaskIntoConstraints = false
+        legacyContainer.addSubview(legacyStack)
+        NSLayoutConstraint.activate([
+            legacyStack.topAnchor.constraint(equalTo: legacyContainer.topAnchor),
+            legacyStack.leadingAnchor.constraint(equalTo: legacyContainer.leadingAnchor),
+            legacyStack.trailingAnchor.constraint(equalTo: legacyContainer.trailingAnchor),
+            legacyStack.bottomAnchor.constraint(equalTo: legacyContainer.bottomAnchor),
+            idField.heightAnchor.constraint(equalToConstant: 44),
+            pwField.heightAnchor.constraint(equalToConstant: 44),
+            loginButton.heightAnchor.constraint(equalToConstant: 50),
+        ])
+
+        noteLabel.text = "※Googleアカウントは青学のメールアドレスでなくてもOKです。\n※登録する「ID」は、学内システムの学生番号とは異なります。"
         noteLabel.textColor = .secondaryLabel
         noteLabel.font = .systemFont(ofSize: 12)
         noteLabel.numberOfLines = 0
         noteLabel.textAlignment = .center
-        
-        let ps = NSMutableParagraphStyle()
-        ps.lineSpacing = 8
-        ps.alignment = .center
-        noteLabel.attributedText = NSAttributedString(
-            string: noteLabel.text ?? "",
-            attributes: [.paragraphStyle: ps,
-                         .foregroundColor: UIColor.secondaryLabel,
-                         .font: UIFont.systemFont(ofSize: 12)]
-        )
 
-        // スタック：上下に広げる（中央寄せをやめる）
         stack.axis = .vertical
         stack.spacing = 18
-        [titleLabel,
-         gradeField, facultyDeptField,
-         idField, pwField,
-         signupButton, loginButton,
-         noteLabel].forEach { stack.addArrangedSubview($0) }
+        [headerBanner, googleButton, dividerView, legacyToggle, legacyContainer, noteLabel]
+            .forEach { stack.addArrangedSubview($0) }
+        stack.setCustomSpacing(32, after: headerBanner)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         view.addSubview(stack)
-        
+
         stackBottomToSafeArea = stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24)
 
-        let topInset: CGFloat = 120
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: topInset),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 48),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
             stackBottomToSafeArea!,
+            googleButton.heightAnchor.constraint(equalToConstant: 52),
+            dividerView.heightAnchor.constraint(equalToConstant: 24),
+        ])
+    }
 
-            gradeField.heightAnchor.constraint(equalToConstant: 44),
-            facultyDeptField.heightAnchor.constraint(equalToConstant: 44),
-            idField.heightAnchor.constraint(equalToConstant: 44),
-            pwField.heightAnchor.constraint(equalToConstant: 44),
-            signupButton.heightAnchor.constraint(equalToConstant: 50),
-            loginButton.heightAnchor.constraint(equalToConstant: 50)
+    private func setupHeaderBanner() {
+        // アクセントカラーの小さい角丸アイコン枠
+        let iconBg = UIView()
+        iconBg.backgroundColor = HackColors.accent
+        iconBg.layer.cornerRadius = 16
+        iconBg.translatesAutoresizingMaskIntoConstraints = false
+
+        let iconView = UIImageView(image: UIImage(
+            systemName: "building.2.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .medium)
+        ))
+        iconView.tintColor = .white
+        iconView.contentMode = .scaleAspectFit
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconBg.addSubview(iconView)
+        NSLayoutConstraint.activate([
+            iconView.centerXAnchor.constraint(equalTo: iconBg.centerXAnchor),
+            iconView.centerYAnchor.constraint(equalTo: iconBg.centerYAnchor),
+            iconBg.widthAnchor.constraint(equalToConstant: 56),
+            iconBg.heightAnchor.constraint(equalToConstant: 56),
+        ])
+
+        let appNameLabel = UILabel()
+        appNameLabel.text = "青山ハック"
+        appNameLabel.font = .systemFont(ofSize: 28, weight: .bold)
+        appNameLabel.textColor = .label
+        appNameLabel.textAlignment = .center
+
+        let subLabel = UILabel()
+        subLabel.text = "ログイン / アカウント作成"
+        subLabel.font = .systemFont(ofSize: 14)
+        subLabel.textColor = .secondaryLabel
+        subLabel.textAlignment = .center
+
+        let vStack = UIStackView(arrangedSubviews: [iconBg, appNameLabel, subLabel])
+        vStack.axis = .vertical
+        vStack.alignment = .center
+        vStack.spacing = 8
+        vStack.setCustomSpacing(12, after: iconBg)
+
+        headerBanner.addSubview(vStack)
+        vStack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            vStack.topAnchor.constraint(equalTo: headerBanner.topAnchor),
+            vStack.bottomAnchor.constraint(equalTo: headerBanner.bottomAnchor),
+            vStack.leadingAnchor.constraint(equalTo: headerBanner.leadingAnchor),
+            vStack.trailingAnchor.constraint(equalTo: headerBanner.trailingAnchor),
         ])
     }
     private func setupAdBanner() {
@@ -328,22 +377,9 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         print("Ad failed:", error.localizedDescription)
     }
 
-    private func setupPickers() {
-        gradePicker.dataSource = self
-        gradePicker.delegate = self
-
-        facultyDeptPicker.dataSource = self
-        facultyDeptPicker.delegate = self
-    }
-
     private func setupKeyboardToolbars() {
-        // すべての入力に「完了」ボタン
-        gradeField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
-        facultyDeptField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
         idField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
         pwField.inputAccessoryView = makeDoneToolbar(selector: #selector(doneEditing))
-
-        // Return キーの動作
         idField.addTarget(self, action: #selector(focusPassword), for: .editingDidEndOnExit)
         pwField.addTarget(self, action: #selector(submitOrDismiss), for: .editingDidEndOnExit)
     }
@@ -367,17 +403,26 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
         view.addGestureRecognizer(tap)
     }
 
-    // MARK: - Actions (Keyboard)
+    // MARK: - Actions (Keyboard / Toggle)
     @objc private func doneEditing() { view.endEditing(true) }
     @objc private func focusPassword() { pwField.becomeFirstResponder() }
-    @objc private func submitOrDismiss() { view.endEditing(true) } // ここで login() にしてもOK
+    @objc private func submitOrDismiss() { view.endEditing(true) }
+
+    @objc private func toggleLegacy() {
+        isLegacyExpanded.toggle()
+        UIView.animate(withDuration: 0.25) {
+            self.legacyContainer.isHidden = !self.isLegacyExpanded
+            self.stack.layoutIfNeeded()
+        }
+        let arrow = isLegacyExpanded ? "▲" : "▼"
+        legacyToggle.setTitle("IDとパスワードでログイン（既存ユーザー）\(arrow)", for: .normal)
+    }
 
     @objc private func togglePasswordVisibility(_ sender: UIButton) {
         pwField.isSecureTextEntry.toggle()
         let name = pwField.isSecureTextEntry ? "eye.slash" : "eye"
         sender.setImage(UIImage(systemName: name), for: .normal)
 
-        // isSecureTextEntry 切替時にカーソル位置が飛ぶのを防ぐ処理
         if let existingText = pwField.text, pwField.isFirstResponder {
             pwField.deleteBackward()
             pwField.insertText(existingText + " ")
@@ -450,123 +495,58 @@ final class AuthViewController: UIViewController, SideMenuDrawerDelegate, Banner
 
 
     // MARK: - Auth Flow
-    @objc private func signUp() { authFlow(isSignup: true) }
-    @objc private func login()  { authFlow(isSignup: false) }
 
-    private func authFlow(isSignup: Bool) {
+    @objc private func signInWithGoogle() {
+        view.endEditing(true)
+        let hud = makeHUD()
+        Task { [weak self] in
+            guard let self else { return }
+            defer { hud.removeFromSuperview(); self.view.isUserInteractionEnabled = true }
+            do {
+                let needsSetup = try await AuthManager.shared.signInWithGoogle(presenting: self)
+                // AuthStateListenerによるswapContentが終わった後に通知を投げる
+                // （signInWithGoogle返却時点ではswapContent完了済み）
+                if needsSetup {
+                    NotificationCenter.default.post(name: .googleSignInNeedsIDSetup, object: nil)
+                }
+            } catch {
+                await MainActor.run {
+                    self.showAlert(title: "ログインエラー", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    @objc private func login() {
         let id = idField.text ?? ""
         let pw = pwField.text ?? ""
-        let gradeText = gradeField.text ?? ""
-        let facultyDeptText = facultyDeptField.text ?? ""
-
-        guard !id.isEmpty, !pw.isEmpty, !gradeText.isEmpty, !facultyDeptText.isEmpty else {
-            showAlert(title: "入力エラー", message: "学年・学部学科・ID・パスワードを入力してください。")
+        guard !id.isEmpty, !pw.isEmpty else {
+            showAlert(title: "入力エラー", message: "IDとパスワードを入力してください。")
             return
         }
-
-        let grade: Int = (gradeText == "指定なし")
-            ? 0
-            : max(1, min(4, Int(gradeText.replacingOccurrences(of: "年", with: "")) ?? 1))
-        var comps = facultyDeptText.components(separatedBy: "・")
-        var faculty = comps.first ?? ""
-        var department = comps.count > 1 ? comps[1] : ""
-        if facultyDeptText == "指定なし" || faculty.isEmpty {
-            faculty = ""
-            department = ""
+        view.endEditing(true)
+        let hud = makeHUD()
+        Task { [weak self] in
+            guard let self else { return }
+            defer { hud.removeFromSuperview(); self.view.isUserInteractionEnabled = true }
+            do {
+                try await AuthManager.shared.login(id: id, password: pw)
+                // AuthStateListenerがSettingsHostVCを更新する
+            } catch let e as AuthError {
+                await MainActor.run { self.showAlert(title: "エラー", message: e.localizedDescription) }
+            } catch {
+                await MainActor.run { self.showAlert(title: "エラー", message: error.localizedDescription) }
+            }
         }
+    }
 
+    private func makeHUD() -> UIActivityIndicatorView {
         let hud = UIActivityIndicatorView(style: .large)
         hud.startAnimating()
         view.isUserInteractionEnabled = false
         view.addSubview(hud)
         hud.center = view.center
-
-        Task { [weak self] in
-            defer {
-                DispatchQueue.main.async {
-                    hud.removeFromSuperview()
-                    self?.view.isUserInteractionEnabled = true
-                }
-            }
-            do {
-                
-                if isSignup {
-                    try await AuthManager.shared.signUp(
-                        id: id, password: pw,
-                        grade: grade, faculty: faculty, department: department
-                    )
-
-                    UserDefaults.standard.set(true, forKey: Keys.shouldPromptInitialAvatar)
-
-                    // ローカル即時キャッシュ（プロフィール即反映用）
-                    UserDefaults.standard.set([
-                        "id": id,
-                        "grade": grade,
-                        "faculty": faculty,
-                        "department": department
-                    ], forKey: Keys.localProfileDraft)
-
-                    // ✅ Firestore保存を「完了まで待つ」
-                    if let user = Auth.auth().currentUser {
-                        try await Firestore.firestore()
-                            .collection("users")
-                            .document(user.uid)
-                            .setData([
-                                "id": id,
-                                "name": id,                 // ← 未入力ならIDを仮名にする（表示が空になりにくい）
-                                "grade": grade,
-                                "faculty": faculty,
-                                "department": department
-                            ], merge: true)
-                    }
-
-                    // AuthのdisplayNameにも反映（任意）
-                    if let user = Auth.auth().currentUser {
-                        let req = user.createProfileChangeRequest()
-                        req.displayName = id
-                        req.commitChanges(completion: nil)
-                    }
-
-                } else {
-                    try await AuthManager.shared.login(id: id, password: pw)
-
-                    // ✅ login後も profile を upsert（これで再ログイン後も確実に反映）
-                    if let user = Auth.auth().currentUser {
-                        try await Firestore.firestore()
-                            .collection("users")
-                            .document(user.uid)
-                            .setData([
-                                "id": id,
-                                "grade": grade,
-                                "faculty": faculty,
-                                "department": department
-                            ], merge: true)
-                    }
-
-                    // ローカルも更新（ProfileEditの即反映に効く）
-                    UserDefaults.standard.set([
-                        "id": id,
-                        "grade": grade,
-                        "faculty": faculty,
-                        "department": department
-                    ], forKey: Keys.localProfileDraft)
-                }
-
-                // 設定タブへ切り替え
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5秒
-                await MainActor.run {
-                    self?.tabBarController?.selectedIndex = 4
-                    // 0.8秒後に「初回アバター促し」通知を送る（設定VC側で1.2秒ディレイして提示）
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                        NotificationCenter.default.post(name: .shouldPromptInitialAvatar, object: nil)
-                    }
-                }
-            } catch let e as AuthError {
-                await MainActor.run { self?.showAlert(title: "エラー", message: e.localizedDescription) }
-            } catch {
-                await MainActor.run { self?.showAlert(title: "エラー", message: error.localizedDescription) }
-            }
-        }
+        return hud
     }
 
     // MARK: - SideMenuDrawerDelegate（未ログイン時に使う項目）
@@ -632,73 +612,3 @@ private extension AuthViewController {
 
 
 
-// MARK: - UIPickerView DataSource/Delegate
-extension AuthViewController: UIPickerViewDataSource, UIPickerViewDelegate {
-
-    func numberOfComponents(in pickerView: UIPickerView) -> Int {
-        if pickerView === gradePicker { return 1 }
-        return 2 // 学部・学科
-    }
-
-    func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int {
-        if pickerView === gradePicker { return gradeOptions.count }          // 学年は「指定なし」あり
-        if component == 0 { return facultyNames.count + 1 }                  // 学部末尾に「指定なし」
-        let fIndex = facultyDeptPicker.selectedRow(inComponent: 0)
-        if fIndex == facultyNames.count { return 0 }                         // 学部=指定なし → 学科行は無し
-        let faculty = facultyNames[fIndex]
-        return FACULTY_DATA[faculty]?.count ?? 0                             // 学科は通常のみ（指定なしナシ）
-    }
-
-    func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? {
-        if pickerView === gradePicker { return gradeOptions[row] }
-        if component == 0 { return row == facultyNames.count ? "指定なし" : facultyNames[row] }
-        let fIndex = facultyDeptPicker.selectedRow(inComponent: 0)
-        guard fIndex < facultyNames.count else { return nil }
-        let faculty = facultyNames[fIndex]
-        return FACULTY_DATA[faculty]?[row] ?? ""
-    }
-
-    func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
-        if pickerView === gradePicker {
-            gradeField.text = gradeOptions[row]                              // 保存は authFlow 内
-            return
-        }
-
-        if component == 0 {
-            // 学部
-            if row == facultyNames.count {
-                // 学部=指定なし → テキストを「指定なし」、学科は空
-                facultyDeptField.text = "指定なし"
-                selectedFacultyIndex = row
-                selectedDepartmentIndex = 0
-                facultyDeptPicker.reloadComponent(1)
-                return
-            }
-            selectedFacultyIndex = row
-            selectedDepartmentIndex = 0
-            facultyDeptPicker.reloadComponent(1)
-
-            // 先頭の学科があればプレビュー表示しておく
-            if let first = FACULTY_DATA[facultyNames[row]]?.first {
-                facultyDeptPicker.selectRow(0, inComponent: 1, animated: false)
-                facultyDeptField.text = "\(facultyNames[row])・\(first)"
-            } else {
-                facultyDeptField.text = facultyNames[row]
-            }
-        } else {
-            // 学科
-            let fIndex = facultyDeptPicker.selectedRow(inComponent: 0)
-            guard fIndex < facultyNames.count else { return }
-            selectedDepartmentIndex = row
-            let faculty = facultyNames[fIndex]
-            let dept = FACULTY_DATA[faculty]?[row] ?? ""
-            facultyDeptField.text = dept.isEmpty ? faculty : "\(faculty)・\(dept)"
-        }
-    }
-}
-
-
-// 安全添字ヘルパ
-private extension Array {
-    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
-}

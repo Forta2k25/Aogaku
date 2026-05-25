@@ -1,4 +1,3 @@
-// SettingsHostViewController.swift（←クラス名はあなたの既存名にしてOK）
 import UIKit
 import FirebaseAuth
 
@@ -20,13 +19,32 @@ final class SettingsHostViewController: UIViewController {
         authListener = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             guard let self else { return }
             self.swapContent(isLoggedIn: user != nil)
-            // ログイン直後は設定タブにフォーカス（不要なら消してOK）
             self.tabBarController?.selectedIndex = self.settingsTabIndex
+        }
+
+        // 新規Googleユーザーのセットアップ通知を監視
+        // （AuthVCがsignInWithGoogle完了後に投げるため、swapContent完了後に届く）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(presentIDSetup),
+            name: .googleSignInNeedsIDSetup,
+            object: nil
+        )
+    }
+
+    @objc private func presentIDSetup() {
+        // swapContentのアニメーション完了を待ってからpresent
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self else { return }
+            let setup = IDSetupViewController()
+            setup.modalPresentationStyle = .fullScreen
+            (self.tabBarController ?? self).present(setup, animated: true)
         }
     }
 
     deinit {
         if let h = authListener { Auth.auth().removeStateDidChangeListener(h) }
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func swapContent(isLoggedIn: Bool) {

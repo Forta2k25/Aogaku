@@ -54,6 +54,32 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
             labeled("曜日", daysSeg),
         ]
 
+        #if DEBUG
+        let resetBtn = UIButton(type: .system)
+        resetBtn.setTitle("⚠️ 2026年度前期の登録授業をリセット", for: .normal)
+        resetBtn.setTitleColor(.systemRed, for: .normal)
+        resetBtn.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+        resetBtn.contentHorizontalAlignment = .leading
+        resetBtn.addTarget(self, action: #selector(resetSpring2026), for: .touchUpInside)
+
+        let sep = UIView()
+        sep.backgroundColor = .separator
+        sep.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+
+        let creditsResetBtn = UIButton(type: .system)
+        creditsResetBtn.setTitle("⚠️ 単位・成績データをリセット", for: .normal)
+        creditsResetBtn.setTitleColor(.systemRed, for: .normal)
+        creditsResetBtn.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+        creditsResetBtn.contentHorizontalAlignment = .leading
+        creditsResetBtn.addTarget(self, action: #selector(resetCreditsData), for: .touchUpInside)
+
+        let sep2 = UIView()
+        sep2.backgroundColor = .separator
+        sep2.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+
+        rows += [sep, resetBtn, sep2, creditsResetBtn]
+        #endif
+
         let stack = UIStackView(arrangedSubviews: rows)
         stack.axis = .vertical
         stack.spacing = 16
@@ -300,5 +326,76 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
     }
 
     @objc private func close() { dismiss(animated: true) }
+
+    // MARK: - Debug
+
+    #if DEBUG
+    @objc private func resetSpring2026() {
+        let term = TermKey(year: 2026, semester: .spring)
+        let count = TermStore.loadAssigned(for: term).count
+
+        let alert = UIAlertController(
+            title: "登録授業をリセット",
+            message: "2026年度前期の登録授業（\(count)件）をすべて削除します。この操作は取り消せません。",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        alert.addAction(UIAlertAction(title: "削除する", style: .destructive) { _ in
+            TermStore.removeAssigned(for: term)
+            // timetableCoursesDidReset → timetable VC が
+            //   ① メモリ上の assigned をクリア
+            //   ② UserDefaults に空配列を保存
+            //   ③ Firestore からも全削除（listener による復元を防ぐ）
+            // の3ステップを行う
+            NotificationCenter.default.post(name: .timetableCoursesDidReset, object: nil)
+            let done = UIAlertController(
+                title: "削除完了",
+                message: "2026年度前期の登録授業を削除しました",
+                preferredStyle: .alert
+            )
+            done.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(done, animated: true)
+        })
+        present(alert, animated: true)
+    }
+
+    @objc private func resetCreditsData() {
+        let ud = UserDefaults.standard
+        let hasGrades  = ud.data(forKey: GradeStore.storageKey) != nil
+        let hasManual  = ud.object(forKey: "credits.manual.entries") != nil
+        let hasOverride = ud.object(forKey: "credits.category.override") != nil
+
+        var parts: [String] = []
+        if hasGrades   { parts.append("成績データ（GPA・取得済み単位）") }
+        if hasManual   { parts.append("手動追加した科目") }
+        if hasOverride { parts.append("カテゴリ上書き設定") }
+
+        let detail = parts.isEmpty
+            ? "リセットできるデータがありません。"
+            : "以下のデータを削除します：\n• " + parts.joined(separator: "\n• ")
+
+        let alert = UIAlertController(
+            title: "単位・成績データをリセット",
+            message: detail + "\n\nこの操作は取り消せません。",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        alert.addAction(UIAlertAction(title: "削除する", style: .destructive) { _ in
+            GradeStore.clear()
+            ud.removeObject(forKey: "credits.manual.entries")
+            ud.removeObject(forKey: "credits.category.override")
+            // 単位画面に変更を通知（CreditsFullViewController が reloadPortalGrades を呼ぶ）
+            NotificationCenter.default.post(name: .gradesImportDidComplete, object: nil)
+            let done = UIAlertController(
+                title: "削除完了",
+                message: "単位・成績データをリセットしました",
+                preferredStyle: .alert
+            )
+            done.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(done, animated: true)
+        })
+        present(alert, animated: true)
+    }
+    #endif
 
 }

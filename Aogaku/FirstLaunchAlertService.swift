@@ -9,42 +9,27 @@ import UIKit
 import FirebaseRemoteConfig
 import FirebaseCore
 
-/// 初回インストール時の一回限りアラート（Remote Configで文言と有効/無効を制御）
+/// 初回起動（バージョンキー更新ごと）に画像モーダルを一回だけ表示するサービス。
+/// Remote Config の "first_launch_alert_enabled" で表示ON/OFFを制御できます。
 final class FirstLaunchAlertService {
 
-    // ← バージョンを上げると全ユーザーに再表示させられます（例: v2）
-    private static let shownKey = "firstLaunchAlertShown_v1"
+    private static var shownKey: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        return "firstLaunchAlertShown_\(version)"
+    }
 
-    // Remote Config keys
-    private static let rcEnabledKey = "first_launch_alert_enabled"
-    private static let rcTitleKey   = "first_launch_alert_title"
-    private static let rcMessageKey = "first_launch_alert_message"
-    private static let rcOkKey      = "first_launch_alert_ok"
-
-    // ローカルのフォールバック（RC未取得時）
+    private static let rcEnabledKey  = "first_launch_alert_enabled"
     private static let defaultEnabled = true
-    private static let defaultTitle   = "ようこそ 青山ハックへ"
-    private static let defaultMessage = "はじめに簡単なご案内です。メニューから時間割を作成し、シラバス検索で授業を追加できます。"
-    private static let defaultOk      = "OK"
-
-    // 本番のフェッチ間隔（即時反映したければ 0、負荷を抑えるなら 300〜3600 など）
     private static let prodFetchInterval: TimeInterval = 0
 
-    /// アプリ起動時に1回だけ呼べばOK（SceneDelegateのsceneDidBecomeActive等）
+    /// アプリ起動時に1回だけ呼べばOK（SceneDelegate の sceneDidBecomeActive 等）
     static func maybeShow() {
-        // すでに表示済みなら何もしない
         guard !UserDefaults.standard.bool(forKey: shownKey) else { return }
 
-        // Firebase 初期化（済みならスキップ）
         if FirebaseApp.app() == nil { FirebaseApp.configure() }
 
         let rc = RemoteConfig.remoteConfig()
-        rc.setDefaults([
-            rcEnabledKey: NSNumber(value: defaultEnabled),
-            rcTitleKey:   NSString(string: defaultTitle),
-            rcMessageKey: NSString(string: defaultMessage),
-            rcOkKey:      NSString(string: defaultOk),
-        ])
+        rc.setDefaults([rcEnabledKey: NSNumber(value: defaultEnabled)])
 
         let settings = RemoteConfigSettings()
         #if DEBUG
@@ -54,10 +39,10 @@ final class FirstLaunchAlertService {
         #endif
         rc.configSettings = settings
 
-        // 2秒以内にRCが返ってこなければ、手元の値で判定して出す（＝確実にユーザーに見せる）
+        // 2秒以内に RC が返らなければローカル値で判定して表示する
         var didDecide = false
         let fallback = DispatchWorkItem { [weak rc] in
-            guard didDecide == false else { return }
+            guard !didDecide else { return }
             didDecide = true
             decideAndMaybePresent(using: rc)
         }
@@ -65,7 +50,7 @@ final class FirstLaunchAlertService {
 
         rc.fetchAndActivate { _, _ in
             DispatchQueue.main.async {
-                guard didDecide == false else { return }
+                guard !didDecide else { return }
                 didDecide = true
                 fallback.cancel()
                 decideAndMaybePresent(using: rc)
@@ -73,36 +58,28 @@ final class FirstLaunchAlertService {
         }
     }
 
-    /// enabled の値を見て表示するか決定
     private static func decideAndMaybePresent(using rc: RemoteConfig?) {
-        let enabled = (rc?[rcEnabledKey].boolValue ?? defaultEnabled)
-        guard enabled else {
-            // 無効なら何もせず、表示済みフラグも付けない（＝後で有効化されたら初回として出せる）
-            return
-        }
-        let title   = rc?[rcTitleKey].stringValue ?? defaultTitle
-        let message = rc?[rcMessageKey].stringValue ?? defaultMessage
-        let ok      = rc?[rcOkKey].stringValue ?? defaultOk
-        presentAlert(title: title, message: message, ok: ok)
+        let enabled = rc?[rcEnabledKey].boolValue ?? defaultEnabled
+        // 無効なら表示しない（フラグも立てない = 次に有効化されたら初回として出せる）
+        guard enabled else { return }
+        presentAnnouncement()
     }
 
-    /// 実表示
-    private static func presentAlert(title: String, message: String, ok: String) {
+    private static func presentAnnouncement() {
         guard let top = topViewController() else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                presentAlert(title: title, message: message, ok: ok)
+                presentAnnouncement()
             }
             return
         }
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: ok, style: .default, handler: { _ in
-            // OKを押したタイミングで一回限りフラグを立てる
+        let vc = UpdateAnnouncementViewController()
+        vc.modalPresentationStyle = .fullScreen
+        vc.onDismiss = {
             UserDefaults.standard.set(true, forKey: shownKey)
-        }))
-        top.present(alert, animated: true)
+        }
+        top.present(vc, animated: true)
     }
 
-    /// 表示中トップVC
     private static func topViewController() -> UIViewController? {
         guard
             let scene = UIApplication.shared.connectedScenes
@@ -118,7 +95,7 @@ final class FirstLaunchAlertService {
         return top
     }
 
-    // ▼ デバッグ用：一度表示済みにした後に再テストしたい場合に
+    // デバッグ用：表示済みフラグをリセットして再テスト
     static func _debugResetShownFlag() {
         UserDefaults.standard.removeObject(forKey: shownKey)
     }

@@ -70,4 +70,6 @@ extension Notification.Name {
     static let shouldPromptInitialAvatar = Notification.Name("ShouldPromptInitialAvatarV1")
     /// Moodle 課題の提出済み状態が変化した（object: uid: String）
     static let moodleSubmittedStateChanged = Notification.Name("MoodleSubmittedStateChanged")
+    /// Google新規登録後にIDセットアップ画面を出すよう通知
+    static let googleSignInNeedsIDSetup = Notification.Name("GoogleSignInNeedsIDSetup")
 }

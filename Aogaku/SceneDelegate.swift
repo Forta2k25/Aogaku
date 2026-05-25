@@ -29,7 +29,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
         window.rootViewController = root
         window.makeKeyAndVisible()
         self.window = window
-        
+
+        if let url = connectionOptions.urlContexts.first?.url {
+            _ = DeepLinkRouter.handle(url, window: window)
+        }
+
+        FirstLaunchAlertService.maybeShow()
     }
 
     func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
@@ -53,8 +58,15 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
         let top = (window?.rootViewController?.presentedViewController)
                  ?? window?.rootViewController
         if let top { AppGatekeeper.shared.forceRefreshAndPresentIfNeeded(on: top) }
-        FirstLaunchAlertService.maybeShow()
-        BroadcastAlertService.maybeShow()     // ← ：全員に一度だけ（内容が変わるたび再表示）
+
+        // AogakuAction Extension が保存した時間割データを取り込む
+        // ※ 次のランループサイクルに遅延させることで、時間割 VC の viewDidLoad が
+        //    先に完了して .portalImportDidComplete の observer が登録された後に通知が届くようにする
+        let win = window
+        DispatchQueue.main.async {
+            DeepLinkRouter.processPendingPortalImport(window: win)
+            DeepLinkRouter.processPendingGradesImport(window: win)
+        }
     }
     func sceneWillResignActive(_ scene: UIScene) {
         // Called when the scene will move from an active state to an inactive state.

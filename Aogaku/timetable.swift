@@ -199,6 +199,31 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
         try? await doc.setData(payload, merge: true)
     }
 
+    /// 通常コマ（period >= 1）を Firestore からすべて削除する（DEBUG用リセット）
+    func deleteAllRegularCells() async {
+        do {
+            let snap = try await doc.getDocument()
+            let data = snap.data() ?? [:]
+            var payload: [String: Any] = [:]
+            for key in data.keys where key.hasPrefix("cells.d") {
+                // "cells.dXpY" 形式で period >= 1 のものだけ削除
+                if let r = key.range(of: #"cells\.d\d+p(\d+)"#, options: .regularExpression) {
+                    let matched = String(key[r])
+                    let afterP = matched.components(separatedBy: "p").last.flatMap { Int($0) } ?? 0
+                    guard afterP >= 1 else { continue }
+                }
+                payload[key] = FieldValue.delete()
+                payload["\(key).u"] = FieldValue.delete()
+            }
+            if !payload.isEmpty {
+                payload["updatedAt"] = FieldValue.serverTimestamp()
+                try await doc.setData(payload, merge: true)
+            }
+        } catch {
+            print("[TTRemote] deleteAllRegularCells FAILED:", error.localizedDescription)
+        }
+    }
+
     func backfillMissing(from localAssigned: [Course?], columns: Int) async {
         do {
             let snap = try await doc.getDocument()
@@ -234,6 +259,48 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
             }
         } catch {
             print("[TTRemote] backfill FAILED:", error.localizedDescription)
+        }
+    }
+
+    /// ローカルの通常コマを Firestore の通常コマへ一括反映する。
+    /// 既存キーを削除してから backfill すると、古い listener の削除イベントが
+    /// ローカルの同じ曜日時限を nil に戻すことがあるため、同じ payload 内で置換する。
+    func replaceRegularCells(with localAssigned: [Course?], columns: Int) async {
+        do {
+            let snap = try await doc.getDocument()
+            let data = snap.data() ?? [:]
+            var payload: [String: Any] = [:]
+
+            for key in data.keys where key.hasPrefix("cells.d") {
+                guard let r = key.range(of: #"cells\.d\d+p(\d+)"#, options: .regularExpression) else {
+                    continue
+                }
+                let matched = String(key[r])
+                let period = matched.components(separatedBy: "p").last.flatMap { Int($0) } ?? 0
+                guard period >= 1 else { continue }
+                payload[key] = FieldValue.delete()
+                payload["\(key).u"] = FieldValue.delete()
+            }
+
+            let rows = (localAssigned.count + columns - 1) / columns
+            for period in 1...rows {
+                for day in 0..<columns {
+                    let idx = (period - 1) * columns + day
+                    guard idx < localAssigned.count, let course = localAssigned[idx] else { continue }
+                    let key = fieldKey(day: day, period: period)
+                    let color = SlotColorStore.color(for: SlotLocation(day: day, period: period))?.rawValue
+                    var map = encodeCourseMap(course, colorKey: color)
+                    map["h"] = slotHash(course, colorKey: color)
+                    payload[key] = map
+                    payload["\(key).u"] = FieldValue.serverTimestamp()
+                }
+            }
+
+            payload["updatedAt"] = FieldValue.serverTimestamp()
+            try await doc.setData(payload, merge: true)
+            print("[TTRemote] replaced regular cells \(payload.filter { $0.key.hasPrefix("cells.d") && !$0.key.hasSuffix(".u") }.count)")
+        } catch {
+            print("[TTRemote] replaceRegularCells FAILED:", error.localizedDescription)
         }
     }
 
@@ -647,7 +714,7 @@ final class timetable: UIViewController,
     private func makeOnlineChip(for course: Course, day: Int) -> UIView {
         // 1〜5限のセルと同じ「色の作り方」「角丸」「フォント」に寄せる
         let loc = SlotLocation(day: day, period: 0)
-        let colorKey = SlotColorStore.color(for: loc) ?? .teal
+        let colorKey = SlotColorStore.color(for: loc) ?? SlotColorStore.defaultCourseColor
         let isDark = traitCollection.userInterfaceStyle == .dark
         let pastel = isDark
             ? colorKey.uiColor.mixed(with: .white, ratio: 0.12)
@@ -982,6 +1049,12 @@ final class timetable: UIViewController,
         }
     }
 
+    /// Firestore 削除後に MainActor から呼ぶ用（Task 内で await できる）
+    @MainActor
+    private func startTermSyncAsync() {
+        startTermSync()
+    }
+
     private func startTermSync() {
         termListener?.remove(); termListener = nil
         guard let store = remoteStore else { return }
@@ -1067,6 +1140,7 @@ final class timetable: UIViewController,
                         let idx = (loc.period - 1) * cols + loc.day
                         if self.assigned.indices.contains(idx) {
                             self.assigned[idx] = nil
+                            SlotColorStore.remove(for: loc)
                             if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
                                 self.configureButton(btn, at: idx)
                             }
@@ -1178,6 +1252,10 @@ final class timetable: UIViewController,
 
         NotificationCenter.default.addObserver(self, selector: #selector(onSettingsChanged),
                                                name: .timetableSettingsChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(onPortalImport),
+                                               name: .portalImportDidComplete, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(onCoursesReset),
+                                               name: .timetableCoursesDidReset, object: nil)
 
         bgObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
@@ -1189,6 +1267,41 @@ final class timetable: UIViewController,
             name: .adMobReady, object: nil)
         applyViewOnlyUI() // ← 最後に反映
         mirrorForWidget()
+    }
+
+    // MARK: - ポータルから取り込む
+
+    @objc private func onPortalImport() {
+        loadAssigned(for: currentTerm)
+        reloadAllButtons()
+        saveAssigned()
+
+        // Firestore の古いデータが pullMerge で復元されないよう、
+        // 取り込み後のローカル状態をそのまま Firestore へ置換してから sync を再開する。
+        // deleteAllRegularCells → backfill の順にすると、古い listener の削除通知で
+        // 既存コマと同じ曜日時限だけ nil に戻ることがある。
+        guard !viewOnly, overrideUID == nil, let store = remoteStore else { return }
+        termListener?.remove(); termListener = nil
+        let snapshot = assigned
+        let cols = dayLabels.count
+        Task { [weak self] in
+            await store.replaceRegularCells(with: snapshot, columns: cols)
+            await self?.startTermSyncAsync()
+        }
+    }
+
+    @objc private func onCoursesReset() {
+        // ローカルをクリア
+        assigned = Array(repeating: nil, count: dayLabels.count * periodLabels.count)
+        reloadAllButtons()
+        saveAssigned()
+        // Firestore からも全削除（listener が復元しないよう先手を打つ）
+        guard !viewOnly, overrideUID == nil, let store = remoteStore else { return }
+        termListener?.remove(); termListener = nil   // listener を一旦止める
+        Task { [weak self] in
+            await store.deleteAllRegularCells()
+            await self?.startTermSyncAsync()         // クリア済み状態で listener を再開
+        }
     }
 
     deinit {
@@ -1546,7 +1659,7 @@ final class timetable: UIViewController,
         rightB.addTarget(self, action: #selector(tapRightB), for: .touchUpInside)
         rightC.addTarget(self, action: #selector(tapRightC), for: .touchUpInside)
 
-        // --- 並び順：学期 → 単 → 課 → 共有 → 設定（均一8pt間隔）---
+        // --- 並び順：学期 → 単 → 暦 → 共有 → 設定（均一8pt間隔）---
         headerBar.spacing = 8
         headerBar.addArrangedSubview(leftButton)
         headerBar.setCustomSpacing(16, after: leftButton)
@@ -1896,7 +2009,7 @@ final class timetable: UIViewController,
         let row  = idx / cols
         let col  = idx % cols
         let loc  = SlotLocation(day: col, period: row + 1)
-        let colorKey = SlotColorStore.color(for: loc) ?? .teal
+        let colorKey = SlotColorStore.color(for: loc) ?? SlotColorStore.defaultCourseColor
 
         // Dark: ごく僅かに暗色と混ぜて彩度を抑える / Light: 白を混ぜてパステルに
         let isDark = traitCollection.userInterfaceStyle == .dark
@@ -2095,7 +2208,11 @@ final class timetable: UIViewController,
             let cols = dayLabels.count
             let idx  = (location.period - 1) * cols + location.day
             if assigned.indices.contains(idx) {
+                let wasEmpty = assigned[idx] == nil
                 assigned[idx] = course
+                if wasEmpty {
+                    SlotColorStore.set(SlotColorStore.defaultCourseColor, for: location)
+                }
 
                 if let btn = slotButtons.first(where: { $0.tag == idx }) {
                     configureButton(btn, at: idx)
@@ -2198,6 +2315,7 @@ final class timetable: UIViewController,
     private func deleteAssignedCourse(at location: SlotLocation) {
         // 1) ローカルの割当を消す
         assigned[index(for: location)] = nil
+        SlotColorStore.remove(for: location)
         reloadAllButtons()
         saveAssigned()
 
@@ -2213,6 +2331,7 @@ final class timetable: UIViewController,
 
     func courseDetail(_ vc: CourseDetailViewController, didDeleteAt location: SlotLocation) {
         assigned[index(for: location)] = nil
+        SlotColorStore.remove(for: location)
         reloadAllButtons()
         saveAssigned()
         // ★ 追加：このコマの出席カウンターをリセット
@@ -2822,5 +2941,3 @@ extension timetable {
     
     
 }
-
-

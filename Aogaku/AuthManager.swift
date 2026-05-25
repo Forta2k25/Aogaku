@@ -1,16 +1,19 @@
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
+import GoogleSignIn
 
 enum AuthError: LocalizedError {
     case invalidID
     case idAlreadyTaken
+    case googleAlreadyLinked
     case unknown
 
     var errorDescription: String? {
         switch self {
         case .invalidID: return "IDは3〜24文字の英数字・ピリオド・アンダーバーのみが使えます。"
         case .idAlreadyTaken: return "このIDは既に使われています。別のIDを選んでください。"
+        case .googleAlreadyLinked: return "このGoogleアカウントは既に別のアカウントに連携されています。"
         case .unknown: return "エラーが発生しました。しばらくしてからお試しください。"
         }
     }
@@ -160,4 +163,127 @@ final class AuthManager {
 
     var currentUserID: String? { Auth.auth().currentUser?.displayName }
     var currentUID: String? { Auth.auth().currentUser?.uid }
+
+    var isGoogleLinked: Bool {
+        Auth.auth().currentUser?.providerData.contains(where: { $0.providerID == "google.com" }) ?? false
+    }
+
+    // MARK: - Google Sign-In
+    // Returns true if the user is new and needs ID setup.
+    func signInWithGoogle(presenting vc: UIViewController) async throws -> Bool {
+        let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: vc)
+        let googleUser = result.user
+        guard let idToken = googleUser.idToken?.tokenString else { throw AuthError.unknown }
+
+        let credential = GoogleAuthProvider.credential(
+            withIDToken: idToken,
+            accessToken: googleUser.accessToken.tokenString
+        )
+        let authResult = try await Auth.auth().signIn(with: credential)
+        cacheCurrentUID()
+
+        let uid = authResult.user.uid
+        let doc = try await db.collection("users").document(uid).getDocument()
+        let hasID = (doc.data()?["id"] as? String).map { !$0.isEmpty } ?? false
+        return !hasID
+    }
+
+    // Link Google to the currently signed-in (password-based) account.
+    func linkGoogle(presenting vc: UIViewController) async throws {
+        guard let currentUser = Auth.auth().currentUser else { throw AuthError.unknown }
+
+        let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: vc)
+        let googleUser = result.user
+        guard let idToken = googleUser.idToken?.tokenString else { throw AuthError.unknown }
+
+        let credential = GoogleAuthProvider.credential(
+            withIDToken: idToken,
+            accessToken: googleUser.accessToken.tokenString
+        )
+        do {
+            try await currentUser.link(with: credential)
+        } catch let e as NSError {
+            if let code = AuthErrorCode(rawValue: e.code),
+               code == .credentialAlreadyInUse || code == .providerAlreadyLinked {
+                throw AuthError.googleAlreadyLinked
+            }
+            throw AuthError.unknown
+        }
+    }
+
+    // MARK: - Account Deletion
+    func deleteAccount(presenting vc: UIViewController) async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthError.unknown }
+        let uid = user.uid
+
+        // Googleユーザーは削除前に再認証が必須
+        if isGoogleLinked {
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: vc)
+            let googleUser = result.user
+            guard let idToken = googleUser.idToken?.tokenString else { throw AuthError.unknown }
+            let credential = GoogleAuthProvider.credential(
+                withIDToken: idToken,
+                accessToken: googleUser.accessToken.tokenString
+            )
+            try await user.reauthenticate(with: credential)
+        }
+
+        // Aogaku IDを取得してusernamesも一緒に削除
+        let userSnap = try? await db.collection("users").document(uid).getDocument()
+        let aogakuID = userSnap?.data()?["id"] as? String
+
+        try? await db.collection("users").document(uid).delete()
+        if let id = aogakuID, !id.isEmpty {
+            try? await db.collection("usernames").document(id.lowercased()).delete()
+        }
+
+        // Firebase Authアカウント削除
+        try await user.delete()
+
+        // Googleセッションもサインアウト
+        GIDSignIn.sharedInstance.signOut()
+        clearCachedUID()
+    }
+
+    // Set up Aogaku ID for a new Google Sign-In user.
+    func setupIDForGoogleUser(id rawID: String, name: String, grade: Int, faculty: String, department: String) async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthError.unknown }
+        let id = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isValidID(id) else { throw AuthError.invalidID }
+
+        let usernameRef = db.collection("usernames").document(id.lowercased())
+        let userRef     = db.collection("users").document(user.uid)
+
+        _ = try await db.runTransaction { txn, errorPointer -> Any? in
+            do {
+                let snap = try txn.getDocument(usernameRef)
+                if snap.exists {
+                    errorPointer?.pointee = NSError(
+                        domain: "AogakuAuth", code: 409,
+                        userInfo: [NSLocalizedDescriptionKey: "ID already taken"]
+                    )
+                    return nil
+                }
+                txn.setData(["uid": user.uid, "createdAt": FieldValue.serverTimestamp()], forDocument: usernameRef)
+                txn.setData([
+                    "uid": user.uid,
+                    "id": id,
+                    "name": displayName.isEmpty ? id : displayName,
+                    "grade": grade,
+                    "faculty": faculty,
+                    "department": department,
+                    "createdAt": FieldValue.serverTimestamp()
+                ], forDocument: userRef)
+                return nil
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+        }
+
+        let req = user.createProfileChangeRequest()
+        req.displayName = displayName.isEmpty ? id : displayName
+        try await req.commitChanges()
+    }
 }

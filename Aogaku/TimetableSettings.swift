@@ -24,5 +24,7 @@ struct TimetableSettings: Codable {
 }
 
 extension Notification.Name {
-    static let timetableSettingsChanged = Notification.Name("timetableSettingsChanged")
+    static let timetableSettingsChanged  = Notification.Name("timetableSettingsChanged")
+    /// DEBUG: 指定学期の登録授業をローカル＋Firestore から全削除する
+    static let timetableCoursesDidReset  = Notification.Name("timetableCoursesDidReset")
 }

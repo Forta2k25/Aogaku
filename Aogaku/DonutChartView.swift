@@ -33,9 +33,41 @@ public struct DonutSegment {
 public final class DonutChartView: UIView {
     public var lineWidth: CGFloat = 24
     private var segments: [DonutSegment] = []
+
+    // MARK: - Animation
+    private var animProgress: CGFloat = 0.0          // 0 → 1 でアニメーション倍率
+    private var displayLink: CADisplayLink?
+    private var animStartTime: CFTimeInterval = 0
+    private var animDuration: CFTimeInterval = 1.0
+
     public func configure(segments: [DonutSegment]) {
         self.segments = segments
         setNeedsDisplay()
+    }
+
+    /// earned / planned を 0 から現在値まで伸ばすアニメーションを開始する。
+    public func animateIn(duration: TimeInterval = 1.0) {
+        displayLink?.invalidate()
+        animProgress = 0
+        animDuration = duration
+        animStartTime = CACurrentMediaTime()
+        setNeedsDisplay()
+        let link = CADisplayLink(target: self, selector: #selector(tickAnimation))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    @objc private func tickAnimation() {
+        let elapsed = CACurrentMediaTime() - animStartTime
+        let t = min(elapsed / animDuration, 1.0)
+        // ease-out cubic
+        animProgress = 1 - pow(1 - CGFloat(t), 3)
+        setNeedsDisplay()
+        if t >= 1.0 {
+            displayLink?.invalidate()
+            displayLink = nil
+            animProgress = 1.0
+        }
     }
     // 追加: 透過
     override init(frame: CGRect) {
@@ -65,8 +97,7 @@ public final class DonutChartView: UIView {
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
         let radius = (size - lineWidth) / 2.0
         ctx.setLineWidth(lineWidth)
-        ctx.setLineCap(.round)
-
+        ctx.setLineCap(.butt)
         UIColor.systemGray5.setStroke()
         ctx.addArc(center: center,
                    radius: radius,
@@ -78,15 +109,20 @@ public final class DonutChartView: UIView {
         let totalRequired = segments.reduce(0) { $0 + max($1.required, 0) }
         guard totalRequired > 0 else { return }
 
-        var start: CGFloat = -CGFloat.pi / 2       // ← 明示
+        ctx.setLineCap(.butt)
+        var start: CGFloat = -CGFloat.pi / 2
 
         for seg in segments {
             // required に対する比率
             let sweep = (seg.required / totalRequired) * 2 * .pi
             guard sweep.isFinite, sweep > 0 else { continue }
 
+            // アニメーション倍率を掛けた値で描画
+            let earnedA  = seg.earned  * animProgress
+            let plannedA = seg.planned * animProgress
+
             // 予定（薄）
-            let plannedRatio = seg.required == 0 ? 0 : min(1, (seg.earned + seg.planned) / seg.required)
+            let plannedRatio = seg.required == 0 ? 0 : min(1, (earnedA + plannedA) / seg.required)
             if plannedRatio > 0 {
                 let end = start + sweep * plannedRatio
                 seg.color.withAlphaComponent(0.35).setStroke()
@@ -95,7 +131,7 @@ public final class DonutChartView: UIView {
             }
 
             // 取得済み（濃）
-            let earnedRatio = seg.required == 0 ? 0 : min(1, seg.earned / seg.required)
+            let earnedRatio = seg.required == 0 ? 0 : min(1, earnedA / seg.required)
             if earnedRatio > 0 {
                 let end = start + sweep * earnedRatio
                 seg.color.setStroke()

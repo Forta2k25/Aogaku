@@ -406,6 +406,137 @@ private enum DisplayCategory: CaseIterable {
 }
 
 
+// ======================== 卒業要件詳細セル ========================
+private final class ReqProgressCell: UITableViewCell {
+    private let titleLabel  = UILabel()
+    private let countLabel  = UILabel()
+    private let progressBar = UIProgressView(progressViewStyle: .bar)
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        selectionStyle = .none
+        if #available(iOS 14.0, *) {
+            var bg = UIBackgroundConfiguration.clear()
+            bg.backgroundColor = .cardBG
+            backgroundConfiguration = bg
+        } else {
+            backgroundColor = .cardBG
+        }
+        titleLabel.font = .systemFont(ofSize: 13)
+        titleLabel.numberOfLines = 1
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.8
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        countLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        countLabel.textAlignment = .right
+        countLabel.setContentHuggingPriority(.required, for: .horizontal)
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        progressBar.layer.cornerRadius = 3
+        progressBar.clipsToBounds = true
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+
+        contentView.addSubview(titleLabel)
+        contentView.addSubview(countLabel)
+        contentView.addSubview(progressBar)
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10),
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: countLabel.leadingAnchor, constant: -8),
+
+            countLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            countLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            countLabel.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 8),
+
+            progressBar.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 7),
+            progressBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            progressBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            progressBar.heightAnchor.constraint(equalToConstant: 5),
+            progressBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    // アニメーション用
+    private var targetProgress: Float = 0
+    private var targetEarned: Int = 0
+    private var targetRequired: Int = 0   // 0 = 必要数なし
+
+    func configure(item: CreditSummaryItem) {
+        titleLabel.text = item.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        progressBar.layer.removeAllAnimations()
+        if let e = item.earned, let r = item.required, r > 0 {
+            let done = e >= r
+            let color: UIColor = done ? .systemGreen : .systemIndigo
+            targetEarned = e; targetRequired = r
+            targetProgress = Float(min(e, r)) / Float(r)
+            countLabel.text = "0 / \(r)"       // アニメーション前は 0
+            countLabel.textColor = done ? .systemGreen : .secondaryLabel
+            titleLabel.textColor = done ? .systemGreen : .label
+            progressBar.progressTintColor = color
+            progressBar.trackTintColor = color.withAlphaComponent(0.15)
+            progressBar.setProgress(0, animated: false)
+            progressBar.isHidden = false
+        } else if let e = item.earned {
+            targetEarned = e; targetRequired = 0; targetProgress = 0
+            countLabel.text = "0"              // アニメーション前は 0
+            countLabel.textColor = .secondaryLabel
+            titleLabel.textColor = .label
+            progressBar.isHidden = true
+        } else {
+            targetEarned = 0; targetRequired = 0; targetProgress = 0
+            countLabel.text = nil
+            titleLabel.textColor = .label
+            progressBar.isHidden = true
+        }
+    }
+
+    /// 初期表示アニメーション: バー + 数値を 0 から伸ばす
+    func animateIn(delay: TimeInterval = 0) {
+        guard targetEarned > 0 || targetProgress > 0 else { return }
+        let tp = targetProgress; let te = targetEarned; let tr = targetRequired
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            // バー
+            if tp > 0 {
+                CATransaction.begin()
+                CATransaction.setAnimationDuration(0.65)
+                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+                self.progressBar.setProgress(tp, animated: true)
+                CATransaction.commit()
+            }
+            // 数値カウントアップ
+            guard te > 0 else { return }
+            let dur: TimeInterval = 0.65; let start = CACurrentMediaTime()
+            let timer = Timer.scheduledTimer(withTimeInterval: 1.0/60, repeats: true) { [weak self] t in
+                guard let self else { t.invalidate(); return }
+                let progress = min((CACurrentMediaTime() - start) / dur, 1.0)
+                let eased = 1.0 - pow(1.0 - progress, 3)
+                let cur = Int(round(Double(te) * eased))
+                self.countLabel.text = tr > 0 ? "\(cur) / \(tr)" : "\(cur)"
+                if progress >= 1.0 { t.invalidate() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    /// スクロールで表示される際に使う: アニメーションなしで最終値を即表示
+    func showFinalValue() {
+        progressBar.layer.removeAllAnimations()
+        if !progressBar.isHidden { progressBar.setProgress(targetProgress, animated: false) }
+        if targetEarned > 0 {
+            countLabel.text = targetRequired > 0 ? "\(targetEarned) / \(targetRequired)" : "\(targetEarned)"
+        }
+    }
+}
+
+// ======================== アニメーション付きヘッダービュー ========================
+/// willDisplayHeaderView で onDisplay?() を呼ぶためのラッパー
+private final class AnimatableHeaderView: UIView {
+    var onDisplay: (() -> Void)?
+}
+
 // ======================== 本体 ========================
 final class CreditsFullViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
 
@@ -507,7 +638,9 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         case earned(DisplayCategory)
         case earnedTermGroup(String, [Course])               // (termText, courses)
         case mergedCategory(DisplayCategory, [Course], [Course])  // (category, planned, earned)
-        case portalSummary([CreditSummaryItem])               // ポータル取得の詳細要件
+        case portalSummary([CreditSummaryItem])               // (旧) ポータル取得の詳細要件
+        case portalYear(Int, [GradeRecord])                   // (year, records) 年度別成績一覧
+        case requirementGroup(CreditSummaryItem, [CreditSummaryItem])  // 卒業要件詳細 (header, subItems)
         var title: String {
             switch self {
             case .planned(let d):
@@ -521,6 +654,11 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                 return d.title
             case .portalSummary:
                 return "卒業要件詳細（ポータル取得）"
+            case .portalYear(let year, let records):
+                let credits = records.reduce(0) { $0 + $1.credits }
+                return "\(year)年度　\(credits) 単位"
+            case .requirementGroup(let header, _):
+                return header.label.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
     }
@@ -528,12 +666,12 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
     // 学期別ビュー用
     private var earnedByTerm: [(String, [Course])] = []   // (termText, courses) 新→旧順
-    private var earnedViewMode = 0                        // 0=カテゴリ別 / 1=学期別
+    private var earnedViewMode = 0                        // 0=卒業要件詳細 / 1=年度別
 
     // ポータル成績データ（GradeStore から）
     private var portalGrades: GradesData? = nil
-    /// 科目名 → 成績文字列 のルックアップ（ポータルデータから）
-    private var gradeLookup: [String: String] = [:]
+    /// 科目名 → 成績文字列リスト のルックアップ（同名授業が複数学期ある場合を配列で保持）
+    private var gradeLookup: [String: [String]] = [:]
     /// 科目名 → カテゴリ文字列 のルックアップ（ポータル成績データから）
     private var categoryLookup: [String: String] = [:]
 
@@ -545,6 +683,27 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     private let gpaBannerLabel = UILabel()      // 合格数・取込日サブテキスト
     private let gpaValueLabel  = UILabel()      // 大きいGPA数値
     private var gpaHidden      = false          // 伏せ字フラグ
+    private var gpaTargetDouble: Double? = nil  // アニメーション用ターゲット
+
+    // アニメーション管理
+    private var hasAppeared = false             // viewDidAppear が一度でも呼ばれたか
+    /// requirementGroup ヘッダービューのキャッシュ（section index → view）
+    /// headerView(forSection:) が UITableViewHeaderFooterView を返すため独自管理
+    private var requirementHeaderCache: [Int: AnimatableHeaderView] = [:]
+
+    // 凡例アニメーション用ターゲット
+    private struct LegendAnimTarget {
+        let countLabel: UILabel
+        let progressBar: UIProgressView
+        let earned: Int
+        let ep: Int    // earned + planned (need 未満)
+        let need: Int
+    }
+    private var legendAnimTargets: [LegendAnimTarget] = []
+
+    // ドーナツ中央の数値アニメーション用ターゲット
+    private var centerEarnedTarget = 0
+    private var centerFullTarget = 0
     private let emptyStateView = UIView()       // 成績データなし時の空状態
 
     // MARK: - Life
@@ -583,11 +742,13 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
     private func reloadPortalGrades() {
         portalGrades = GradeStore.load()
-        var lookup: [String: String] = [:]
+        var lookup: [String: [String]] = [:]
         var catLookup: [String: String] = [:]
         for record in portalGrades?.records ?? [] {
-            let key = record.name.trimmingCharacters(in: .whitespaces)
-            lookup[key]    = record.grade.trimmingCharacters(in: .whitespaces)
+            // 全角ASCII→半角変換・ブラケット除去で時間割科目名との表記ゆれを吸収
+            let key = normalizeForGradeLookup(record.name)
+            // 同名授業が複数学期ある場合（通年など）も全件保持する
+            lookup[key, default: []].append(record.grade.trimmingCharacters(in: .whitespaces))
             if !record.category.trimmingCharacters(in: .whitespaces).isEmpty {
                 catLookup[key] = record.category.trimmingCharacters(in: .whitespaces)
             }
@@ -613,18 +774,142 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         updateEmptyState()
     }
 
+    /// CreditSummaryItem の配列を非インデント行ごとにグループ化する。
+    /// ・常に非表示: 総修得単位 / 卒業要件内
+    /// ・earned == 0 のとき非表示: 卒業要件外 / 他学科（サブ項目）
+    /// ・卒業要件単位 を先頭に移動
+    private func groupRequirements(_ items: [CreditSummaryItem]) -> [(CreditSummaryItem, [CreditSummaryItem])] {
+        // 常に非表示にするヘッダーキーワード
+        let alwaysHidden = ["総修得単位", "卒業要件内"]
+        // earned == 0 (or nil) のとき非表示にするヘッダーキーワード
+        let zeroHidden   = ["卒業要件外"]
+
+        var groups: [(CreditSummaryItem, [CreditSummaryItem])] = []
+        var currentHeader: CreditSummaryItem? = nil
+        var currentSubs: [CreditSummaryItem] = []
+
+        func flushGroup() {
+            guard let h = currentHeader else { return }
+            let t = h.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hide = alwaysHidden.contains(where: { t.contains($0) })
+                    || (zeroHidden.contains(where: { t.contains($0) }) && (h.earned ?? 0) == 0)
+            if !hide { groups.append((h, currentSubs)) }
+        }
+
+        for item in items {
+            let trimmed = item.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let isIndented = item.label.hasPrefix("　") || item.label.hasPrefix(" ")
+            if isIndented {
+                // 他学科: earned == 0 のとき非表示
+                if trimmed.contains("他学科") && (item.earned ?? 0) == 0 { continue }
+                currentSubs.append(item)
+            } else {
+                flushGroup()
+                currentHeader = item
+                currentSubs = []
+            }
+        }
+        flushGroup()
+
+        // 卒業要件単位 を先頭に移動
+        if let idx = groups.firstIndex(where: {
+            $0.0.label.trimmingCharacters(in: .whitespacesAndNewlines).contains("卒業要件単位")
+        }) {
+            let g = groups.remove(at: idx)
+            groups.insert(g, at: 0)
+        }
+        return groups
+    }
+
+    /// 要件ラベルから対応する表示カラーを返す。
+    private func colorForRequirementLabel(_ label: String) -> UIColor {
+        let l = label.trimmingCharacters(in: .whitespaces)
+        if l.contains("卒業要件単位")                      { return .systemOrange }
+        if l.contains("スタンダード") || l.contains("青山") { return Seg4.aoyama.color }
+        if l.contains("学") && l.contains("科")            { return Seg4.department.color }
+        if l.contains("外国語")                             { return Seg4.language.color }
+        if l.contains("自由")                              { return Seg4.free.color }
+        return .systemGray3
+    }
+
+    /// ポータル科目名と時間割科目名の表記ゆれを吸収する正規化。
+    /// 全角ASCII→半角変換、末尾の "[英語講義]" 等ブラケットサフィックスを除去。
+    private func normalizeForGradeLookup(_ s: String) -> String {
+        var result = ""
+        for scalar in s.unicodeScalars {
+            let v = scalar.value
+            if v >= 0xFF21, v <= 0xFF3A {
+                // 全角大文字 Ａ-Ｚ → 半角 A-Z
+                result.append(Character(UnicodeScalar(v - 0xFF21 + 0x41)!))
+            } else if v >= 0xFF41, v <= 0xFF5A {
+                // 全角小文字 ａ-ｚ → 半角 a-z
+                result.append(Character(UnicodeScalar(v - 0xFF41 + 0x61)!))
+            } else if v >= 0xFF10, v <= 0xFF19 {
+                // 全角数字 ０-９ → 半角 0-9
+                result.append(Character(UnicodeScalar(v - 0xFF10 + 0x30)!))
+            } else {
+                result.append(Character(scalar))
+            }
+        }
+        // " [英語講義]" "[英語講義]" のようなブラケットサフィックスを除去
+        if let range = result.range(of: " [", options: .literal) {
+            result = String(result[..<range.lowerBound])
+        }
+        return result.trimmingCharacters(in: .whitespaces)
+    }
+
     /// 科目名（Course.title）から対応する成績を返す（完全一致 → 部分一致 → スペース除去一致）
+    /// 複数の成績がある場合（通年など）は最初の1件のみ返す。詳細は年度別タブで確認できる。
     private func gradeForCourse(_ course: Course) -> String? {
-        let title = course.title.trimmingCharacters(in: .whitespaces)
-        if let g = gradeLookup[title] { return g }
+        let title = normalizeForGradeLookup(course.title)
+        if let gs = gradeLookup[title], let first = gs.first { return first }
         // 部分一致フォールバック
-        if let g = gradeLookup.first(where: { title.contains($0.key) || $0.key.contains(title) })?.value { return g }
+        if let gs = gradeLookup.first(where: { title.contains($0.key) || $0.key.contains(title) })?.value,
+           let first = gs.first { return first }
         // スペース除去後に再試行（「英語 I」と「英語I」のような揺れに対応）
         let stripped = title.filter { !$0.isWhitespace }
-        return gradeLookup.first(where: {
+        if let gs = gradeLookup.first(where: {
             let k = $0.key.filter { !$0.isWhitespace }
             return stripped == k || stripped.contains(k) || k.contains(stripped)
-        })?.value
+        })?.value, let first = gs.first { return first }
+        return nil
+    }
+
+    // MARK: - ポータルデータから Seg4 別取得済み単位数を取得
+
+    /// gvw_tani（creditSummary）の大分類行から Seg4 別の修得単位数を返す。
+    ///
+    /// ・先頭が全角/半角スペースのサブ行はスキップ（親行の合計に含まれているため二重計上防止）
+    /// ・学部によって外国語が「学　科」に統合されている場合、ポータル側に外国語行が出ないため
+    ///   `.language` は 0 になり、ドーナツの外国語スライスも自動的に非表示になる
+    /// ・ポータルデータがない場合は nil を返し、呼び出し側が時間割データにフォールバックする
+    private func earnedFromPortalSummary() -> [Seg4: Int]? {
+        guard let summary = portalGrades?.creditSummary, !summary.isEmpty else { return nil }
+        var result: [Seg4: Int] = [:]
+        for item in summary {
+            // インデント行（サブ項目）はスキップ
+            guard !item.label.hasPrefix("　"), !item.label.hasPrefix(" ") else { continue }
+            guard let e = item.earned, e > 0 else { continue }
+            let label = item.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            if label.contains("スタンダード") || label.contains("ｽﾀﾝﾀﾞｰ") {
+                result[.aoyama, default: 0] += e
+            } else if label.contains("外国語") || label.contains("ｶﾞｲｺｸｺﾞ") {
+                // 外国語行が別にある学部はそのまま .language へ
+                // 英米文学科など languageSink=.department の学部では
+                // ポータル側に外国語行が出ず自然に 0 になる
+                result[.language, default: 0] += e
+            } else if label.contains("自由") {
+                // 「自　由　選　択」など → .free
+                // 他学科サブ行は親の自由選択合計に含まれているためスキップ済み
+                result[.free, default: 0] += e
+            } else if label.contains("学") && label.contains("科") {
+                // 「学　科」→ .department（「他学科」はサブ行なので到達しない）
+                result[.department, default: 0] += e
+            }
+            // 「卒業要件単位」「総修得単位」等は Seg4 に対応しないのでスキップ
+        }
+        return result.isEmpty ? nil : result
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -636,6 +921,121 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             compute()
             apply()
         }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        hasAppeared = true
+
+        // ① ドーナツ
+        donut.animateIn(duration: 1.0)
+
+        // ② ドーナツ中央の数値
+        animateCenterValue()
+
+        // ③ 凡例（右側4行）
+        animateLegend()
+
+        // ④ GPA カウントアップ
+        if !gpaHidden { animateGPA() }
+
+        // ⑤ 卒業要件詳細: 現在表示中のヘッダー・セルをアニメーション
+        //    （willDisplay は viewDidAppear より先に呼ばれるため、ここで改めて起動）
+        triggerVisibleRequirementAnimations()
+    }
+
+    /// 卒業要件詳細セクションの可視ヘッダー・セルにアニメーションを適用する
+    /// headerView(forSection:) は UITableViewHeaderFooterView を返すため
+    /// requirementHeaderCache に保持した独自ビューを直接使う
+    /// DispatchQueue.main.async で1ランループ遅らせ、レイアウト確定後に発火する
+    private func triggerVisibleRequirementAnimations() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            for (section, header) in self.requirementHeaderCache {
+                guard section < self.sections.count,
+                      case .requirementGroup = self.sections[section] else { continue }
+                header.onDisplay?()
+            }
+            for ip in self.tableView.indexPathsForVisibleRows ?? [] {
+                guard ip.section < self.sections.count,
+                      case .requirementGroup = self.sections[ip.section],
+                      let cell = self.tableView.cellForRow(at: ip) as? ReqProgressCell else { continue }
+                cell.animateIn(delay: Double(ip.row) * 0.04)
+            }
+        }
+    }
+
+    /// ドーナツ中央の数値を 0 からカウントアップ
+    private func animateCenterValue() {
+        guard centerEarnedTarget > 0 else { return }
+        let te = centerEarnedTarget; let tf = centerFullTarget
+        let dur: TimeInterval = 1.0; let start = CACurrentMediaTime()
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0/60, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            let progress = min((CACurrentMediaTime() - start) / dur, 1.0)
+            let eased = 1.0 - pow(1.0 - progress, 3)
+            let curE = Int(round(Double(te) * eased))
+            let curF = Int(round(Double(tf) * eased))
+            self.centerValueLabel.attributedText = self.makeCenterValue(earned: curE, totalWithPlanned: curF)
+            if progress >= 1.0 { t.invalidate() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// 凡例の数値とバーを 0 から順番にアニメーション（0.08s ずつずらす）
+    private func animateLegend() {
+        for (i, target) in legendAnimTargets.enumerated() {
+            let delay = Double(i) * 0.08
+            let e = target.earned; let ep = target.ep; let need = target.need
+            let barTarget: Float = need > 0 ? Float(ep) / Float(need) : 0
+            let bar = target.progressBar   // UIProgressView（クラス）
+            let cl  = target.countLabel    // UILabel（クラス）
+            // バー
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak bar] in
+                guard let bar else { return }
+                CATransaction.begin()
+                CATransaction.setAnimationDuration(0.8)
+                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+                bar.setProgress(barTarget, animated: true)
+                CATransaction.commit()
+            }
+            // 数値カウントアップ
+            guard e > 0 || ep > 0 else { continue }
+            let dur: TimeInterval = 0.8
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak cl] in
+                guard let cl else { return }
+                let start = CACurrentMediaTime()
+                let timer = Timer.scheduledTimer(withTimeInterval: 1.0/60, repeats: true) { [weak cl] t in
+                    guard let cl else { t.invalidate(); return }
+                    let progress = min((CACurrentMediaTime() - start) / dur, 1.0)
+                    let eased = 1.0 - pow(1.0 - progress, 3)
+                    let curE  = Int(round(Double(e)  * eased))
+                    let curEp = Int(round(Double(ep) * eased))
+                    cl.text = need > 0 ? "\(curE)(\(curEp))/\(need)" : "–"
+                    if progress >= 1.0 { t.invalidate() }
+                }
+                RunLoop.main.add(timer, forMode: .common)
+            }
+        }
+    }
+
+    /// GPA 数値を 0.00 からカウントアップさせる（ease-out cubic）
+    private func animateGPA() {
+        guard let target = gpaTargetDouble, target > 0 else { return }
+        let animDuration: TimeInterval = 1.0
+        let startTime = CACurrentMediaTime()
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] t in
+            guard let self, !self.gpaHidden else { t.invalidate(); return }
+            let elapsed  = CACurrentMediaTime() - startTime
+            let progress = min(elapsed / animDuration, 1.0)
+            let eased    = 1.0 - pow(1.0 - progress, 3)
+            self.gpaValueLabel.text = String(format: "%.2f", target * eased)
+            if progress >= 1.0 {
+                t.invalidate()
+                self.gpaValueLabel.text = String(format: "%.2f", target)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     override func viewDidLayoutSubviews() {
@@ -671,7 +1071,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             return cat
         }
         // 2. 成績データ（tuutisho.aspx）の category 列から科目名で引く（完全一致 → 部分一致）
-        let titleKey = c.title.trimmingCharacters(in: .whitespaces)
+        let titleKey = normalizeForGradeLookup(c.title)
         if let cat = categoryLookup[titleKey], !cat.isEmpty {
             return cat
         }
@@ -951,11 +1351,22 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         let displayPlanned = plannedCourses.filter { classifySeg4($0) != .teacher }
 
         // ドーナツ用の加算
-        displayEarned.forEach  { add($0, to: &totals.earned) }
+        // ポータルの修得済単位表（gvw_tani）が取り込まれていればそちらを優先。
+        // 学校システムが正しい区分で集計済みのため、ヒューリスティック分類より正確。
+        // 今学期の取得予定（planned）はポータルにないため時間割データを継続使用。
+        if let portalEarned = earnedFromPortalSummary() {
+            totals.earned = portalEarned
+            // 中央表示の合計はポータルの総修得単位数（教職・他学科含む全科目）
+            totals.earnedTotal = portalGrades?.totalEarnedCredits
+                ?? displayEarned.reduce(0) { $0 + (($1.credits as Int?) ?? 0) }
+        } else {
+            // ポータルデータなし → 時間割から計算（フォールバック）
+            displayEarned.forEach { add($0, to: &totals.earned) }
+            totals.earnedTotal = displayEarned.reduce(0) { $0 + (($1.credits as Int?) ?? 0) }
+        }
         displayPlanned.forEach { add($0, to: &totals.planned) }
 
-        // 合計（中央表示用）も teacher を含めない
-        totals.earnedTotal  = displayEarned.reduce(0)  { $0 + (( $1.credits as Int?) ?? 0) }
+        // 合計（中央表示用）
         totals.plannedTotal = displayPlanned.reduce(0) { $0 + (( $1.credits as Int?) ?? 0) }
 
         // クリップ：teacher を含まない visibleCases を使用
@@ -999,31 +1410,35 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
         // セクション
         sections.removeAll()
-        if earnedViewMode == 1 {
-            // 学期別: 今学期の取得予定を先頭にまとめ、続けて過去学期
+        if earnedViewMode == 0 {
+            // 卒業要件詳細: ポータルの修得済単位表を要件グループごとに表示
+            for (header, subs) in groupRequirements(portalGrades?.creditSummary ?? []) {
+                sections.append(.requirementGroup(header, subs))
+            }
+        } else {
+            // 年度別: 今学期の取得予定を先頭にまとめ、続けてポータル成績データを年度でグループ化
             let plannedAll = DisplayCategory.allCases
                 .flatMap { plannedByDisplay[$0] ?? [] }
                 .sorted { $0.title < $1.title }
             if !plannedAll.isEmpty {
                 sections.append(.earnedTermGroup("今学期（取得予定）", plannedAll))
             }
-            for (t, arr) in earnedByTerm where !arr.isEmpty {
-                sections.append(.earnedTermGroup(t, arr))
-            }
-        } else {
-            // カテゴリ別: 取得予定と取得済みを同じセクションに統合
-            for d in DisplayCategory.allCases {
-                let p = plannedByDisplay[d] ?? []
-                let e = earnedByDisplay[d]  ?? []
-                if !p.isEmpty || !e.isEmpty {
-                    sections.append(.mergedCategory(d, p, e))
+            if let records = portalGrades?.records, !records.isEmpty {
+                // ポータルデータあり → 年度別で各 GradeRecord を独立表示
+                var byYear: [Int: [GradeRecord]] = [:]
+                for record in records {
+                    byYear[record.year, default: []].append(record)
+                }
+                for year in byYear.keys.sorted(by: >) {
+                    let sorted = byYear[year]!.sorted { $0.name < $1.name }
+                    sections.append(.portalYear(year, sorted))
+                }
+            } else {
+                // ポータルデータなし → 時間割の学期別にフォールバック
+                for (t, arr) in earnedByTerm where !arr.isEmpty {
+                    sections.append(.earnedTermGroup(t, arr))
                 }
             }
-        }
-
-        // ポータルから取得した詳細要件テーブルを末尾に追加（空でなければ）
-        if let summary = portalGrades?.creditSummary, !summary.isEmpty {
-            sections.append(.portalSummary(summary))
         }
     }
 
@@ -1031,7 +1446,12 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     private func apply() {
         let earned = totals.earnedTotal
         let full   = totals.earnedTotal + totals.plannedTotal
-        centerValueLabel.attributedText = makeCenterValue(earned: earned, totalWithPlanned: full)
+        centerEarnedTarget = earned
+        centerFullTarget   = full
+        // 表示済み（タブ切り替えなど）は最終値を即表示。初回開封時は 0 にして viewDidAppear でアニメーション
+        centerValueLabel.attributedText = hasAppeared
+            ? makeCenterValue(earned: earned, totalWithPlanned: full)
+            : makeCenterValue(earned: 0, totalWithPlanned: 0)
 
         let req = requirement4()
         needLabel.text = "合計必要単位数 \(req.total)"
@@ -1059,6 +1479,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
         // 凡例 4行（プログレスバー付き）
         legendStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        legendAnimTargets.removeAll()
         func legendRow(_ seg: Seg4, need: Int) -> UIView {
             let e = totals.earned[seg] ?? 0
             let p = totals.planned[seg] ?? 0
@@ -1079,7 +1500,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
 
             let countLabel = UILabel()
-            countLabel.text = need > 0 ? "\(e)(\(ep))/\(need)" : "–"
+            // 表示済みは最終値、初回は 0（viewDidAppear でアニメーション）
+            countLabel.text = need > 0 ? (hasAppeared ? "\(e)(\(ep))/\(need)" : "0(0)/\(need)") : "–"
             countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
             countLabel.textColor = .secondaryLabel
 
@@ -1090,41 +1512,31 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             let progress = UIProgressView(progressViewStyle: .default)
             progress.progressTintColor = seg.color
             progress.trackTintColor = seg.color.withAlphaComponent(0.18)
-            progress.progress = need > 0 ? Float(ep) / Float(need) : 0
+            // 表示済みは最終値、初回は 0（viewDidAppear でアニメーション）
+            progress.progress = hasAppeared && need > 0 ? Float(ep) / Float(need) : 0
             progress.layer.cornerRadius = 2.5; progress.clipsToBounds = true
             progress.translatesAutoresizingMaskIntoConstraints = false
             progress.heightAnchor.constraint(equalToConstant: 5).isActive = true
 
             outer.addArrangedSubview(topLine)
             outer.addArrangedSubview(progress)
+
+            // アニメーション対象として登録
+            legendAnimTargets.append(LegendAnimTarget(
+                countLabel: countLabel, progressBar: progress,
+                earned: e, ep: ep, need: need))
             return outer
         }
         legendStack.spacing = 10
         legendStack.addArrangedSubview(legendRow(.aoyama,     need: req.aoyama))
-        legendStack.addArrangedSubview(legendRow(.language,   need: req.language))
+        if req.language > 0 {
+            legendStack.addArrangedSubview(legendRow(.language, need: req.language))
+        }
         legendStack.addArrangedSubview(legendRow(.department, need: req.department))
         legendStack.addArrangedSubview(legendRow(.free,       need: req.free))
 
+        requirementHeaderCache.removeAll()
         tableView.reloadData()
-
-        // バナー更新
-        let req2 = requirement4()
-        if selectedFaculty == nil {
-            graduationBannerView.isHidden = true
-        } else {
-            let totalWithPlanned = totals.earnedTotal + totals.plannedTotal
-            let remaining = max(0, req2.total - totalWithPlanned)
-            graduationBannerView.isHidden = false
-            if remaining == 0 {
-                graduationBannerLabel.text = "🎓 卒業要件を満たしています"
-                graduationBannerView.backgroundColor = HackColors.nowAccent.withAlphaComponent(0.15)
-                graduationBannerLabel.textColor = HackColors.nowAccent
-            } else {
-                graduationBannerLabel.text = "卒業まであと \(remaining) 単位"
-                graduationBannerView.backgroundColor = UIColor.tertiarySystemBackground
-                graduationBannerLabel.textColor = .label
-            }
-        }
 
         // GPAカード更新
         if let grades = portalGrades {
@@ -1133,19 +1545,25 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             df.timeStyle = .none
             df.locale = Locale(identifier: "ja_JP")
             let dateStr = df.string(from: grades.importedAt)
-            let passed = grades.records.filter { $0.isPassed }.count
-            let total  = grades.records.count
-            // 小数2桁に丸め（例: "0.92500" → "0.93"）
-            let gpaFormatted: String = {
-                if let v = Double(grades.gpa) {
-                    return String(format: "%.2f", v)
+            if let v = Double(grades.gpa) {
+                gpaTargetDouble = v
+                if gpaHidden {
+                    gpaValueLabel.text = "●●●"
+                } else if hasAppeared {
+                    // 表示済み（タブ切替など）: 最終値を即表示（再アニメーションしない）
+                    gpaValueLabel.text = String(format: "%.2f", v)
+                } else {
+                    // 初回: 0.00 にしておき viewDidAppear でアニメーション
+                    gpaValueLabel.text = "0.00"
                 }
-                return grades.gpa.isEmpty ? "–" : grades.gpa
-            }()
-            gpaValueLabel.text = gpaHidden ? "●●●" : gpaFormatted
-            gpaBannerLabel.text = "合格 \(passed) / \(total) 科目\n取込: \(dateStr)"
+            } else {
+                gpaTargetDouble = nil
+                gpaValueLabel.text = grades.gpa.isEmpty ? "–" : grades.gpa
+            }
+            gpaBannerLabel.text = "取込: \(dateStr)"
             gpaBannerView.isHidden = false
         } else {
+            gpaTargetDouble = nil
             gpaBannerView.isHidden = true
         }
         updateEmptyState()
@@ -1190,6 +1608,7 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         tableView.dataSource = self
         tableView.delegate = self
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+        tableView.register(ReqProgressCell.self, forCellReuseIdentifier: "reqCell")
         tableView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tableView)
         NSLayoutConstraint.activate([
@@ -1265,8 +1684,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         legendStack.axis = .vertical
         legendStack.spacing = 6
 
-        // 学期別 / カテゴリ別 セグメント（取得済みセクション切り替え）
-        let earnedSeg = UISegmentedControl(items: ["カテゴリ別", "学期別"])
+        // 卒業要件詳細 / 年度別 セグメント
+        let earnedSeg = UISegmentedControl(items: ["卒業要件詳細", "年度別"])
         earnedSeg.selectedSegmentIndex = earnedViewMode
         earnedSeg.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
         earnedSeg.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
@@ -1380,8 +1799,6 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
 
         stack.addArrangedSubview(chartRow)
         stack.setCustomSpacing(12, after: chartRow)
-        stack.addArrangedSubview(graduationBannerView)
-        stack.setCustomSpacing(10, after: graduationBannerView)
         stack.addArrangedSubview(earnedSeg)
         
         
@@ -1688,11 +2105,250 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             }
         case .earnedTermGroup:  return .systemGray3
         case .portalSummary:    return .systemTeal
+        case .portalYear:       return .systemGray3
+        case .requirementGroup(let h, _): return colorForRequirementLabel(h.label)
         }
     }
 
     func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         let kind = sections[section]
+
+        // 卒業要件詳細モード: プログレスバー付き専用ヘッダー
+        if case .requirementGroup(let header, _) = kind {
+            let isGraduation = header.label.trimmingCharacters(in: .whitespacesAndNewlines).contains("卒業要件単位")
+
+            // ── 卒業要件単位: 特別カード ──────────────────────────────
+            if isGraduation {
+                let wrapper = AnimatableHeaderView()
+                wrapper.backgroundColor = .clear
+
+                let card = UIView()
+                card.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.09)
+                card.layer.cornerRadius = 14
+                card.layer.borderWidth = 1.5
+                card.layer.borderColor = UIColor.systemOrange.withAlphaComponent(0.35).cgColor
+                card.translatesAutoresizingMaskIntoConstraints = false
+                wrapper.addSubview(card)
+
+                let titleLabel = UILabel()
+                titleLabel.text = "卒業要件単位"
+                titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+                titleLabel.textColor = UIColor.systemOrange.withAlphaComponent(0.85)
+                titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+                let countLabel = UILabel()
+                countLabel.font = .monospacedDigitSystemFont(ofSize: 26, weight: .black)
+                countLabel.textColor = .systemOrange
+                countLabel.textAlignment = .right
+                countLabel.setContentHuggingPriority(.required, for: .horizontal)
+                countLabel.translatesAutoresizingMaskIntoConstraints = false
+
+                let targetEarned   = header.earned   ?? 0
+                let targetRequired = header.required ?? 0
+                // 今学期の取得予定（卒業要件の残り分を上限とする）
+                let targetPlanned  = min(totals.plannedTotal, max(0, targetRequired - targetEarned))
+                let targetFull     = targetEarned + targetPlanned
+
+                // 初期値は 0 表示（アニメーション開始前）
+                countLabel.text = targetPlanned > 0 ? "0(0) / \(targetRequired)" : "0 / \(targetRequired)"
+
+                // 後ろのバー（取得予定まで含む薄い表示）
+                let barBack = UIProgressView(progressViewStyle: .bar)
+                barBack.layer.cornerRadius = 4
+                barBack.clipsToBounds = true
+                barBack.progressTintColor = UIColor.systemOrange.withAlphaComponent(0.4)
+                barBack.trackTintColor    = UIColor.systemOrange.withAlphaComponent(0.15)
+                barBack.translatesAutoresizingMaskIntoConstraints = false
+                barBack.progress = 0
+
+                // 前のバー（取得済みのみ・濃い）
+                let bar = UIProgressView(progressViewStyle: .bar)
+                bar.layer.cornerRadius = 4
+                bar.clipsToBounds = true
+                bar.progressTintColor = .systemOrange
+                bar.trackTintColor    = .clear   // barBack を透かして見せる
+                bar.translatesAutoresizingMaskIntoConstraints = false
+                bar.progress = 0
+
+                let targetBarProgress: Float = targetRequired > 0
+                    ? Float(min(targetEarned, targetRequired)) / Float(targetRequired) : 0
+                let targetBarProgressFull: Float = targetRequired > 0
+                    ? Float(min(targetFull, targetRequired)) / Float(targetRequired) : 0
+
+                let remainLabel = UILabel()
+                remainLabel.font = .systemFont(ofSize: 12)
+                remainLabel.textColor = .secondaryLabel
+                remainLabel.translatesAutoresizingMaskIntoConstraints = false
+                if targetRequired > 0 {
+                    let left = max(0, targetRequired - targetEarned)
+                    remainLabel.text = left > 0 ? "残り \(left) 単位" : "卒業要件達成"
+                    remainLabel.textColor = targetEarned >= targetRequired ? .systemGreen : .secondaryLabel
+                }
+
+                card.addSubview(titleLabel)
+                card.addSubview(countLabel)
+                card.addSubview(barBack)
+                card.addSubview(bar)
+                card.addSubview(remainLabel)
+                NSLayoutConstraint.activate([
+                    card.topAnchor.constraint(equalTo: wrapper.topAnchor, constant: 4),
+                    card.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor, constant: -4),
+                    card.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor, constant: 16),
+                    card.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor, constant: -16),
+
+                    titleLabel.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                    titleLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
+
+                    countLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+                    countLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
+                    countLabel.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 8),
+
+                    // barBack と bar は同じ位置に重ねる
+                    barBack.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10),
+                    barBack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
+                    barBack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
+                    barBack.heightAnchor.constraint(equalToConstant: 8),
+
+                    bar.topAnchor.constraint(equalTo: barBack.topAnchor),
+                    bar.leadingAnchor.constraint(equalTo: barBack.leadingAnchor),
+                    bar.trailingAnchor.constraint(equalTo: barBack.trailingAnchor),
+                    bar.heightAnchor.constraint(equalTo: barBack.heightAnchor),
+
+                    remainLabel.topAnchor.constraint(equalTo: barBack.bottomAnchor, constant: 8),
+                    remainLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
+                    remainLabel.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12),
+                ])
+
+                // アニメーション: 画面に現れたとき発火
+                wrapper.onDisplay = { [weak bar, weak barBack, weak countLabel] in
+                    guard let bar = bar, let barBack = barBack, let countLabel = countLabel else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak bar, weak barBack] in
+                        guard let bar = bar, let barBack = barBack else { return }
+                        CATransaction.begin()
+                        CATransaction.setAnimationDuration(0.9)
+                        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+                        barBack.setProgress(targetBarProgressFull, animated: true)
+                        bar.setProgress(targetBarProgress, animated: true)
+                        CATransaction.commit()
+                    }
+                    guard targetEarned > 0 || targetFull > 0 else { return }
+                    let animDuration: TimeInterval = 0.9
+                    let startTime = CACurrentMediaTime()
+                    let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak countLabel] t in
+                        guard let countLabel = countLabel else { t.invalidate(); return }
+                        let elapsed  = CACurrentMediaTime() - startTime
+                        let progress = min(elapsed / animDuration, 1.0)
+                        let eased    = 1.0 - pow(1.0 - progress, 3)
+                        let curE = Int(round(Double(targetEarned) * eased))
+                        let curF = Int(round(Double(targetFull)   * eased))
+                        countLabel.text = targetPlanned > 0
+                            ? "\(curE)(\(curF)) / \(targetRequired)"
+                            : "\(curE) / \(targetRequired)"
+                        if progress >= 1.0 {
+                            t.invalidate()
+                            countLabel.text = targetPlanned > 0
+                                ? "\(targetEarned)(\(targetFull)) / \(targetRequired)"
+                                : "\(targetEarned) / \(targetRequired)"
+                        }
+                    }
+                    RunLoop.main.add(timer, forMode: .common)
+                }
+
+                requirementHeaderCache[section] = wrapper
+                return wrapper
+            }
+
+            // ── 通常要件ヘッダー ─────────────────────────────────────
+            let wrapper = AnimatableHeaderView()
+            wrapper.backgroundColor = .clear
+
+            let color = colorForRequirementLabel(header.label)
+
+            let dot = UIView()
+            dot.backgroundColor = color
+            dot.layer.cornerRadius = 4
+            dot.translatesAutoresizingMaskIntoConstraints = false
+
+            let titleLabel = UILabel()
+            titleLabel.text = header.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+            titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+            let countLabel = UILabel()
+            countLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+            countLabel.setContentHuggingPriority(.required, for: .horizontal)
+            countLabel.translatesAutoresizingMaskIntoConstraints = false
+
+            if let e = header.earned, let r = header.required, r > 0 {
+                let done = e >= r
+                let c: UIColor = done ? .systemGreen : .secondaryLabel
+                countLabel.text = "\(e) / \(r)"
+                countLabel.textColor = c
+                titleLabel.textColor = done ? .systemGreen : .secondaryLabel
+            } else if let e = header.earned {
+                countLabel.text = "\(e)"
+                countLabel.textColor = .secondaryLabel
+                titleLabel.textColor = .secondaryLabel
+            } else {
+                titleLabel.textColor = .secondaryLabel
+            }
+
+            let bar = UIProgressView(progressViewStyle: .bar)
+            bar.layer.cornerRadius = 3
+            bar.clipsToBounds = true
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            var normalBarTarget: Float = 0
+            if let e = header.earned, let r = header.required, r > 0 {
+                let done = e >= r
+                let c: UIColor = done ? .systemGreen : color
+                bar.progressTintColor = c
+                bar.trackTintColor = c.withAlphaComponent(0.18)
+                normalBarTarget = Float(min(e, r)) / Float(r)
+                bar.progress = 0   // アニメーション前は 0
+            } else {
+                bar.isHidden = true
+            }
+
+            wrapper.addSubview(dot)
+            wrapper.addSubview(titleLabel)
+            wrapper.addSubview(countLabel)
+            wrapper.addSubview(bar)
+            NSLayoutConstraint.activate([
+                dot.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor, constant: 24),
+                dot.widthAnchor.constraint(equalToConstant: 8),
+                dot.heightAnchor.constraint(equalToConstant: 8),
+                dot.topAnchor.constraint(equalTo: wrapper.topAnchor, constant: 13),
+
+                titleLabel.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 7),
+                titleLabel.topAnchor.constraint(equalTo: wrapper.topAnchor, constant: 10),
+                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: countLabel.leadingAnchor, constant: -8),
+
+                countLabel.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor, constant: -24),
+                countLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+                countLabel.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 8),
+
+                bar.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 7),
+                bar.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor, constant: 24),
+                bar.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor, constant: -24),
+                bar.heightAnchor.constraint(equalToConstant: 6),
+                bar.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor, constant: -8),
+            ])
+
+            // アニメーション: バーを 0 から伸ばす
+            let capturedTarget = normalBarTarget
+            wrapper.onDisplay = { [weak bar] in
+                guard let bar = bar, capturedTarget > 0 else { return }
+                CATransaction.begin()
+                CATransaction.setAnimationDuration(0.7)
+                CATransaction.setAnimationTimingFunction(
+                    CAMediaTimingFunction(name: .easeOut))
+                bar.setProgress(capturedTarget, animated: true)
+                CATransaction.commit()
+            }
+            requirementHeaderCache[section] = wrapper
+            return wrapper
+        }
+
         let color = sectionAccentColor(for: kind)
 
         let wrapper = UIView()
@@ -1720,6 +2376,9 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         case .earnedTermGroup(_, let arr):
             let units = arr.reduce(0) { $0 + ($1.credits ?? 0) }
             countLabel.text = "\(arr.count)科目 · \(units)単位"
+        case .portalYear(_, let records):
+            let units = records.reduce(0) { $0 + $1.credits }
+            countLabel.text = "\(records.count)科目 · \(units)単位"
         default:
             countLabel.text = nil
         }
@@ -1745,7 +2404,31 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         return wrapper
     }
 
-    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat { 34 }
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        if case .requirementGroup(let header, _) = sections[section] {
+            if header.label.trimmingCharacters(in: .whitespacesAndNewlines).contains("卒業要件単位") {
+                return 110
+            }
+            return 58
+        }
+        return 34
+    }
+
+    // ヘッダーが画面に表示されたらアニメーション開始
+    // （初期表示はviewDidAppear→triggerVisibleRequirementAnimationsで管理。
+    //   スクロールで新たに出てきたヘッダーのみここで処理）
+    func tableView(_ tableView: UITableView, willDisplayHeaderView view: UIView, forSection section: Int) {
+        guard hasAppeared, case .requirementGroup = sections[section] else { return }
+        (view as? AnimatableHeaderView)?.onDisplay?()
+    }
+
+    // スクロールでセルが表示されるとき: 再アニメーションせず最終値を即表示
+    func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        guard hasAppeared,
+              case .requirementGroup = sections[indexPath.section],
+              let reqCell = cell as? ReqProgressCell else { return }
+        reqCell.showFinalValue()
+    }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch sections[section] {
@@ -1754,6 +2437,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         case .earnedTermGroup(_, let arr):       return arr.count
         case .mergedCategory(_, let p, let e):  return p.count + e.count
         case .portalSummary(let items):          return items.count
+        case .portalYear(_, let records):        return records.count
+        case .requirementGroup(_, let subs):     return subs.count
         }
     }
     // 右から左スワイプのアクション（iOS 11+）
@@ -1761,8 +2446,10 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
                    trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
     -> UISwipeActionsConfiguration? {
 
-        // ポータル要件セクションはスワイプ不可
+        // ポータル要件・年度別・卒業要件詳細セクションはスワイプ不可
         if case .portalSummary = sections[indexPath.section] { return nil }
+        if case .portalYear = sections[indexPath.section] { return nil }
+        if case .requirementGroup = sections[indexPath.section] { return nil }
 
         let course = rows(for: indexPath.section)[indexPath.row]
         guard let mid = manualId(from: course) else {
@@ -1795,6 +2482,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         case .earnedTermGroup(_, let arr):       return arr
         case .mergedCategory(_, let p, let e):  return p + e
         case .portalSummary:                    return []
+        case .portalYear:                        return []
+        case .requirementGroup:                  return []
         }
     }
 
@@ -1834,6 +2523,56 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             return cell
         }
 
+        // ── 卒業要件詳細セル（ReqProgressCell） ────────────────────────
+        if case .requirementGroup(_, let subs) = sections[indexPath.section] {
+            let cell = tableView.dequeueReusableCell(withIdentifier: "reqCell", for: indexPath) as! ReqProgressCell
+            cell.configure(item: subs[indexPath.row])
+            return cell
+        }
+
+        // ── 年度別ポータル成績セル（GradeRecord を直接表示） ─────────────
+        if case .portalYear(_, let records) = sections[indexPath.section] {
+            let record = records[indexPath.row]
+            let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
+            var cfg = cell.defaultContentConfiguration()
+            cfg.text = record.name
+            let teacherPart = record.teacher.trimmingCharacters(in: .whitespaces).isEmpty
+                ? "–" : record.teacher
+            let catPart = record.category.trimmingCharacters(in: .whitespaces)
+            cfg.secondaryText = catPart.isEmpty
+                ? "\(teacherPart) ・ \(record.credits)単位"
+                : "\(teacherPart) ・ \(record.credits)単位 ・ \(catPart)"
+
+            let badgeLabel = UILabel()
+            let g = record.grade.trimmingCharacters(in: .whitespaces)
+            badgeLabel.text = " \(g.isEmpty ? "–" : g) "
+            badgeLabel.font = .systemFont(ofSize: 11, weight: .bold)
+            badgeLabel.textColor = .white
+            badgeLabel.layer.cornerRadius = 5
+            badgeLabel.layer.masksToBounds = true
+            let passed = ["AA", "A", "B", "C", "++", "**"]
+            if passed.contains(g) {
+                badgeLabel.backgroundColor = .systemGreen
+            } else if g.isEmpty {
+                badgeLabel.backgroundColor = .systemGray
+            } else {
+                badgeLabel.backgroundColor = .systemRed
+            }
+            badgeLabel.sizeToFit()
+            cell.accessoryView = badgeLabel
+            cell.selectionStyle = .none
+
+            if #available(iOS 14.0, *) {
+                var bg = UIBackgroundConfiguration.clear()
+                bg.backgroundColor = UIColor.cardBG
+                cell.backgroundConfiguration = bg
+            } else {
+                cell.backgroundColor = UIColor.cardBG
+            }
+            cell.contentConfiguration = cfg
+            return cell
+        }
+
         // ── 通常の科目セル ────────────────────────────────────────
         let c = rows(for: indexPath.section)[indexPath.row]
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
@@ -1867,9 +2606,16 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         } else if case .planned = sections[indexPath.section] {
             isPlannedRow = true
         }
+        // 年度別の今学期セクション: 成績はまだ確定していないのでバッジ自体を非表示
+        let isCurrentTermGroup: Bool
+        if case .earnedTermGroup = sections[indexPath.section] { isCurrentTermGroup = true }
+        else { isCurrentTermGroup = false }
 
         // ポータル成績バッジ（右端に成績文字を accessoryView として表示）
-        if let grade = gradeForCourse(c), !isPlannedRow {
+        // 今学期セクションは成績未確定のため accessoryView なし
+        if isCurrentTermGroup {
+            cell.accessoryView = nil
+        } else if let grade = gradeForCourse(c), !isPlannedRow {
             let badgeLabel = UILabel()
             badgeLabel.text = " \(grade) "
             badgeLabel.font = .systemFont(ofSize: 11, weight: .bold)
@@ -1877,14 +2623,11 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
             badgeLabel.layer.cornerRadius = 5
             badgeLabel.layer.masksToBounds = true
             let passed = ["AA", "A", "B", "C", "++", "**"]
-            let failed = ["XX", "FF", "X", "W"]
-            if passed.contains(grade) {
+            let g = grade.trimmingCharacters(in: .whitespaces)
+            if passed.contains(g) {
                 badgeLabel.backgroundColor = .systemGreen
-            } else if failed.contains(grade) {
-                badgeLabel.backgroundColor = .systemRed
             } else {
-                // "**"等はグレー（既にpassedに含むが念のため）
-                badgeLabel.backgroundColor = .systemGray
+                badgeLabel.backgroundColor = .systemRed
             }
             badgeLabel.sizeToFit()
             cell.accessoryView = badgeLabel
@@ -1943,8 +2686,10 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     //追加
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        // ポータル要件セクションはタップ不可
+        // ポータル要件・年度別・卒業要件詳細セクションはタップ不可
         if case .portalSummary = sections[indexPath.section] { return }
+        if case .portalYear = sections[indexPath.section] { return }
+        if case .requirementGroup = sections[indexPath.section] { return }
         let course = rows(for: indexPath.section)[indexPath.row]
         let key = courseKey(course)
 
@@ -1975,16 +2720,13 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
     @objc private func toggleGPAVisibility() {
         gpaHidden.toggle()
         // gpaValueLabel だけ切り替える（合格数・取込日はそのまま）
-        if let grades = portalGrades {
-            if gpaHidden {
-                gpaValueLabel.text = "●●●"
-            } else {
-                if let v = Double(grades.gpa) {
-                    gpaValueLabel.text = String(format: "%.2f", v)
-                } else {
-                    gpaValueLabel.text = grades.gpa.isEmpty ? "–" : grades.gpa
-                }
-            }
+        if gpaHidden {
+            gpaValueLabel.text = "●●●"
+        } else if let target = gpaTargetDouble {
+            // 伏せ字解除 → 最終値を直接表示（カウントアップは初回表示のみ）
+            gpaValueLabel.text = String(format: "%.2f", target)
+        } else if let grades = portalGrades {
+            gpaValueLabel.text = grades.gpa.isEmpty ? "–" : grades.gpa
         }
         // 軽くバウンスしてフィードバック
         UIView.animate(withDuration: 0.1, animations: {

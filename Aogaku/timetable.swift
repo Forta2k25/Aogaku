@@ -79,6 +79,7 @@ private let headerHighlightAlpha: CGFloat = 0.25  // 0.20〜0.28で好みに調�
 private struct TimetableRemoteStore {
     let uid: String
     let termID: String
+    let term: TermKey
     private let db = Firestore.firestore()
     private var doc: DocumentReference {
         db.collection("users").document(uid).collection("timetable").document(termID)
@@ -241,7 +242,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
                     guard idx < localAssigned.count, let course = localAssigned[idx] else { continue }
                     let key = fieldKey(day: day, period: period) // "cells.dXpY"
                     if !existingKeys.contains(key) {
-                        let color = SlotColorStore.color(for: SlotLocation(day: day, period: period))?.rawValue
+                        let color = SlotColorStore.color(for: SlotLocation(day: day, period: period), term: term)?.rawValue
                         var map = encodeCourseMap(course, colorKey: color)
                         map["h"] = slotHash(course, colorKey: color)  // [FIX] ハッシュを保存
                         payload[key] = map
@@ -288,7 +289,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
                     let idx = (period - 1) * columns + day
                     guard idx < localAssigned.count, let course = localAssigned[idx] else { continue }
                     let key = fieldKey(day: day, period: period)
-                    let color = SlotColorStore.color(for: SlotLocation(day: day, period: period))?.rawValue
+                    let color = SlotColorStore.color(for: SlotLocation(day: day, period: period), term: term)?.rawValue
                     var map = encodeCourseMap(course, colorKey: color)
                     map["h"] = slotHash(course, colorKey: color)
                     payload[key] = map
@@ -328,7 +329,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
                 if let color = m["colorKey"] as? String {
                     let loc = SlotLocation(day: day, period: period)
                     if let key = SlotColorKey(rawValue: color) ?? SlotColorKey.allCases.first(where: { "\($0)" == color }) {
-                        SlotColorStore.set(key, for: loc)
+                        SlotColorStore.set(key, for: loc, term: term)
                     }
                 }
             }
@@ -458,7 +459,12 @@ final class timetable: UIViewController,
 
     // 現在学期
     private var currentTerm: TermKey = timetable.loadInitialTerm()
-    
+
+    // startTermSync() の多重起動を防ぐためのトークン
+    // （Firebase の addStateDidChangeListener は登録直後にも現在の状態で
+    //   即発火するため、viewDidLoad の直接呼び出しと合わせて毎回2回走ってしまう）
+    private var termSyncToken = UUID()
+
     private static let selectedTermYearKey = "timetable.selectedTerm.year"
     private static let selectedTermSemesterKey = "timetable.selectedTerm.semester"
     private static let hasLaunchedTermKey = "timetable.hasLaunchedTerm"
@@ -475,12 +481,8 @@ final class timetable: UIViewController,
             }
         }
 
-        // 初回だけ 2026年前期
-        let initialSemester =
-            Semester.allCases.first(where: { $0.display.contains("前期") })
-            ?? Semester.allCases.first!
-
-        let initial = TermKey(year: 2026, semester: initialSemester)
+        // 初回だけ：現在の日付から前期/後期を自動判定
+        let initial = TermStore.defaultTerm()
 
         defaults.set(true, forKey: hasLaunchedTermKey)
         defaults.set(initial.year, forKey: selectedTermYearKey)
@@ -557,7 +559,7 @@ final class timetable: UIViewController,
         var colorMap: [String:String] = [:]
         for d in 0..<dayLabels.count {
             for p in 1...periodLabels.count {
-                if let key = SlotColorStore.color(for: SlotLocation(day: d, period: p))?.rawValue {
+                if let key = SlotColorStore.color(for: SlotLocation(day: d, period: p), term: currentTerm)?.rawValue {
                     colorMap["cells.d\(d)p\(p)"] = key
                 }
             }
@@ -633,7 +635,7 @@ final class timetable: UIViewController,
             onlineSlots[parsed.day] = arr
 
             if let c = m["colorKey"] as? String, let key = SlotColorKey(rawValue: c) {
-                SlotColorStore.set(key, for: SlotLocation(day: parsed.day, period: 0))
+                SlotColorStore.set(key, for: SlotLocation(day: parsed.day, period: 0), term: currentTerm)
             }
             changedDays.insert(parsed.day)
 
@@ -714,7 +716,7 @@ final class timetable: UIViewController,
     private func makeOnlineChip(for course: Course, day: Int) -> UIView {
         // 1〜5限のセルと同じ「色の作り方」「角丸」「フォント」に寄せる
         let loc = SlotLocation(day: day, period: 0)
-        let colorKey = SlotColorStore.color(for: loc) ?? SlotColorStore.defaultCourseColor
+        let colorKey = SlotColorStore.color(for: loc, term: currentTerm) ?? SlotColorStore.defaultCourseColor
         let isDark = traitCollection.userInterfaceStyle == .dark
         let pastel = isDark
             ? colorKey.uiColor.mixed(with: .white, ratio: 0.12)
@@ -927,11 +929,11 @@ final class timetable: UIViewController,
     // ===== リモートストア（自分 or 友だち） =====
     private var remoteStore: TimetableRemoteStore? {
         if let uid = overrideUID, !uid.isEmpty {
-            return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey)
+            return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey, term: currentTerm)
         }
         let uid = AuthManager.shared.currentUID ?? UserDefaults.standard.string(forKey: "auth.uid")
         guard let uid, !uid.isEmpty else { return nil }
-        return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey)
+        return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey, term: currentTerm)
     }
 
     // MARK: - Persistence
@@ -955,7 +957,7 @@ final class timetable: UIViewController,
             var colorMap: [String:String] = [:]
             for d in 0..<dayLabels.count {
                 for p in 1...periodLabels.count {
-                    if let key = SlotColorStore.color(for: SlotLocation(day: d, period: p))?.rawValue {
+                    if let key = SlotColorStore.color(for: SlotLocation(day: d, period: p), term: currentTerm)?.rawValue {
                         colorMap["cells.d\(d)p\(p)"] = key
                     }
                 }
@@ -1017,7 +1019,7 @@ final class timetable: UIViewController,
             let room  = assigned.indices.contains(idx) ? (assigned[idx]?.room  ?? "") : ""
             let teacher = assigned.indices.contains(idx) ? (assigned[idx]?.teacher  ?? "") : ""
             let loc = SlotLocation(day: dayIndex, period: period)
-            let colorKey = SlotColorStore.color(for: loc)?.rawValue
+            let colorKey = SlotColorStore.color(for: loc, term: currentTerm)?.rawValue
             
             ps.append(WidgetPeriod(index: period,
                                    title: title.isEmpty ? " " : title,
@@ -1043,7 +1045,7 @@ final class timetable: UIViewController,
                 if existingHashes[fKey] != nil { continue }
 
                 let loc = SlotLocation(day: day, period: 0)
-                let color = SlotColorStore.color(for: loc)?.rawValue
+                let color = SlotColorStore.color(for: loc, term: currentTerm)?.rawValue
                 await store.upsert(course: course, colorKey: color, fieldKey: fKey)
             }
         }
@@ -1059,8 +1061,12 @@ final class timetable: UIViewController,
         termListener?.remove(); termListener = nil
         guard let store = remoteStore else { return }
 
+        let token = UUID()
+        termSyncToken = token
+
         Task { [weak self] in
             guard let self else { return }
+            guard self.termSyncToken == token else { return }  // 新しい呼び出しに先を越された
             let cols = self.dayLabels.count
 
             // ローカルコピー
@@ -1085,6 +1091,7 @@ final class timetable: UIViewController,
                 self.remoteHashes = await store.fetchHashes()
             }
 
+            guard self.termSyncToken == token else { return }  // 新しい呼び出しに先を越された
             self.termListener = store.startListener { [weak self] cells in
                 guard let self else { return }
 
@@ -1140,7 +1147,7 @@ final class timetable: UIViewController,
                         let idx = (loc.period - 1) * cols + loc.day
                         if self.assigned.indices.contains(idx) {
                             self.assigned[idx] = nil
-                            SlotColorStore.remove(for: loc)
+                            SlotColorStore.remove(for: loc, term: self.currentTerm)
                             if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
                                 self.configureButton(btn, at: idx)
                             }
@@ -1164,7 +1171,7 @@ final class timetable: UIViewController,
                         if self.assigned.indices.contains(idx) {
                             self.assigned[idx] = p.course
                             if let c = p.color, let key = SlotColorKey(rawValue: c) {
-                                SlotColorStore.set(key, for: SlotLocation(day: p.day, period: p.period))
+                                SlotColorStore.set(key, for: SlotLocation(day: p.day, period: p.period), term: self.currentTerm)
                             }
                             if let btn = self.slotButtons.first(where: { $0.tag == idx }) {
                                 self.configureButton(btn, at: idx)
@@ -1183,7 +1190,7 @@ final class timetable: UIViewController,
                         }
                         self.onlineSlots[p.day] = arr
                         if let c = p.color, let key = SlotColorKey(rawValue: c) {
-                            SlotColorStore.set(key, for: SlotLocation(day: p.day, period: 0))
+                            SlotColorStore.set(key, for: SlotLocation(day: p.day, period: 0), term: self.currentTerm)
                         }
                         changedOnlineDays.insert(p.day)
                     }
@@ -1209,6 +1216,7 @@ final class timetable: UIViewController,
                 }
             }
             await MainActor.run {
+                guard self.termSyncToken == token else { return }  // 新しい呼び出しに先を越された
                 self.assigned = localAssigned
                 self.reloadAllButtons()
                 // pullMerge の結果を UserDefaults にも永続化（自分の時間割のみ）
@@ -1254,7 +1262,7 @@ final class timetable: UIViewController,
                                                name: .timetableSettingsChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(onPortalImport),
                                                name: .portalImportDidComplete, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(onCoursesReset),
+        NotificationCenter.default.addObserver(self, selector: #selector(onCoursesReset(_:)),
                                                name: .timetableCoursesDidReset, object: nil)
 
         bgObserver = NotificationCenter.default.addObserver(
@@ -1290,17 +1298,33 @@ final class timetable: UIViewController,
         }
     }
 
-    @objc private func onCoursesReset() {
-        // ローカルをクリア
-        assigned = Array(repeating: nil, count: dayLabels.count * periodLabels.count)
-        reloadAllButtons()
-        saveAssigned()
-        // Firestore からも全削除（listener が復元しないよう先手を打つ）
-        guard !viewOnly, overrideUID == nil, let store = remoteStore else { return }
-        termListener?.remove(); termListener = nil   // listener を一旦止める
+    @objc private func onCoursesReset(_ note: Notification) {
+        // 通知に対象学期が載っていれば、それに対してのみリセットする
+        // （載っていない場合のみ、今表示中の学期をフォールバックとして扱う）
+        let resetTerm = (note.userInfo?["term"] as? TermKey) ?? currentTerm
+        let isCurrentTerm = (resetTerm == currentTerm)
+
+        // 表示中の学期がリセット対象のときだけ、ローカルの表示もクリア
+        if isCurrentTerm {
+            assigned = Array(repeating: nil, count: dayLabels.count * periodLabels.count)
+            reloadAllButtons()
+            saveAssigned()
+        } else {
+            TermStore.removeAssigned(for: resetTerm)
+        }
+
+        // Firestore からも対象学期分を削除（listener が復元しないよう先手を打つ）
+        guard !viewOnly, overrideUID == nil else { return }
+        let uid = AuthManager.shared.currentUID ?? UserDefaults.standard.string(forKey: "auth.uid")
+        guard let uid, !uid.isEmpty else { return }
+        let store = TimetableRemoteStore(uid: uid, termID: resetTerm.storageKey, term: resetTerm)
+
+        if isCurrentTerm { termListener?.remove(); termListener = nil }   // listener を一旦止める
         Task { [weak self] in
             await store.deleteAllRegularCells()
-            await self?.startTermSyncAsync()         // クリア済み状態で listener を再開
+            if isCurrentTerm {
+                await self?.startTermSyncAsync()   // クリア済み状態で listener を再開
+            }
         }
     }
 
@@ -1462,7 +1486,7 @@ final class timetable: UIViewController,
                 onlineSlots[day] = arr
                 saveOnline(for: day)
                 let loc = SlotLocation(day: day, period: 0)
-                let color = SlotColorStore.color(for: loc)?.rawValue
+                let color = SlotColorStore.color(for: loc, term: currentTerm)?.rawValue
                 let fKey = onlineFieldKey(day: day, course: course)
                 remoteHashes[fKey] = slotHash(course, colorKey: color)
                 Task { await remoteStore?.upsert(course: course, colorKey: color, fieldKey: fKey) }
@@ -1485,7 +1509,7 @@ final class timetable: UIViewController,
     saveAssigned()
 
     let loc = SlotLocation(day: day, period: period)
-    let colorName = SlotColorStore.color(for: loc)?.rawValue
+    let colorName = SlotColorStore.color(for: loc, term: currentTerm)?.rawValue
     let key = cellKey(day: day, period: period)
     remoteHashes[key] = slotHash(course, colorKey: colorName)
 
@@ -2009,7 +2033,7 @@ final class timetable: UIViewController,
         let row  = idx / cols
         let col  = idx % cols
         let loc  = SlotLocation(day: col, period: row + 1)
-        let colorKey = SlotColorStore.color(for: loc) ?? SlotColorStore.defaultCourseColor
+        let colorKey = SlotColorStore.color(for: loc, term: currentTerm) ?? SlotColorStore.defaultCourseColor
 
         // Dark: ごく僅かに暗色と混ぜて彩度を抑える / Light: 白を混ぜてパステルに
         let isDark = traitCollection.userInterfaceStyle == .dark
@@ -2078,7 +2102,7 @@ final class timetable: UIViewController,
             }
             return
         }
-        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm, showsReview: true)
+        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm, showsReview: true, showsLectureNotes: true)
         vc.delegate = self
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController {
@@ -2138,7 +2162,7 @@ final class timetable: UIViewController,
 
             // 既存の色管理（SlotColorStore）が period=0 でも取れるようにする
             let loc = SlotLocation(day: day, period: 0)
-            let key = SlotColorStore.color(for: loc) ?? .teal
+            let key = SlotColorStore.color(for: loc, term: currentTerm) ?? .teal
             chip.backgroundColor = key.uiColor
             chip.setContentCompressionResistancePriority(.required, for: .vertical)
             container.addArrangedSubview(chip)
@@ -2163,6 +2187,7 @@ final class timetable: UIViewController,
         let loc = SlotLocation(day: col, period: row + 1)
 
         if viewOnly { return } // 読み取り専用時は編集不可
+        guard assigned.indices.contains(idx) else { return }  // 設定変更などでグリッドサイズが変わった直後の古いタグ対策
         if let course = assigned[idx] { presentCourseDetail(course, at: loc); return }
         
         // ▼▼▼ ここから変更 ▼▼▼
@@ -2193,7 +2218,7 @@ final class timetable: UIViewController,
                 saveOnline(for: location.day)
 
                 // Firestore にも保存
-                let colorName = SlotColorStore.color(for: location)?.rawValue
+                let colorName = SlotColorStore.color(for: location, term: currentTerm)?.rawValue
                 let fKey = onlineFieldKey(day: location.day, course: course)
                 remoteHashes[fKey] = slotHash(course, colorKey: colorName)
                 Task {
@@ -2211,7 +2236,7 @@ final class timetable: UIViewController,
                 let wasEmpty = assigned[idx] == nil
                 assigned[idx] = course
                 if wasEmpty {
-                    SlotColorStore.set(SlotColorStore.defaultCourseColor, for: location)
+                    SlotColorStore.set(SlotColorStore.defaultCourseColor, for: location, term: currentTerm)
                 }
 
                 if let btn = slotButtons.first(where: { $0.tag == idx }) {
@@ -2223,7 +2248,7 @@ final class timetable: UIViewController,
                 saveAssigned()
 
                 // Firestore にも保存
-                let colorName = SlotColorStore.color(for: location)?.rawValue
+                let colorName = SlotColorStore.color(for: location, term: currentTerm)?.rawValue
                 let key = cellKey(day: location.day, period: location.period)
                 remoteHashes[key] = slotHash(course, colorKey: colorName)
 
@@ -2246,7 +2271,7 @@ final class timetable: UIViewController,
     // 置き換え：courseDetail(_:didChangeColor:at:)
     func courseDetail(_ vc: CourseDetailViewController, didChangeColor key: SlotColorKey, at location: SlotLocation) {
         // 1) ローカルの色とUI
-        SlotColorStore.set(key, for: location)
+        SlotColorStore.set(key, for: location, term: currentTerm)
         let idx = gridIndex(for: location)
         if (0..<slotButtons.count).contains(idx) { configureButton(slotButtons[idx], at: idx) }
         else { rebuildGrid() }
@@ -2315,7 +2340,7 @@ final class timetable: UIViewController,
     private func deleteAssignedCourse(at location: SlotLocation) {
         // 1) ローカルの割当を消す
         assigned[index(for: location)] = nil
-        SlotColorStore.remove(for: location)
+        SlotColorStore.remove(for: location, term: currentTerm)
         reloadAllButtons()
         saveAssigned()
 
@@ -2331,7 +2356,7 @@ final class timetable: UIViewController,
 
     func courseDetail(_ vc: CourseDetailViewController, didDeleteAt location: SlotLocation) {
         assigned[index(for: location)] = nil
-        SlotColorStore.remove(for: location)
+        SlotColorStore.remove(for: location, term: currentTerm)
         reloadAllButtons()
         saveAssigned()
         // ★ 追加：このコマの出席カウンターをリセット
@@ -2345,7 +2370,7 @@ final class timetable: UIViewController,
         reloadAllButtons()
         saveAssigned()
         let day = location.day, period = location.period
-        let colorName = SlotColorStore.color(for: location)?.rawValue
+        let colorName = SlotColorStore.color(for: location, term: currentTerm)?.rawValue
         let key = cellKey(day: day, period: period)
         let localH = slotHash(course, colorKey: colorName)
         if remoteHashes[key] != localH {
@@ -2926,7 +2951,7 @@ extension timetable {
             let c = today[i]
             let slot = PeriodTime.slots[i]
             let loc = SlotLocation(day: dayIndex, period: i+1)
-            let key = SlotColorStore.color(for: loc)?.rawValue
+            let key = SlotColorStore.color(for: loc, term: currentTerm)?.rawValue
             periods.append(.init(index: i+1, title: c.title, room: c.room,
                                  start: slot.start, end: slot.end, teacher: c.teacher, colorKey: key))
         }

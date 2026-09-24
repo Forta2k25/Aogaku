@@ -7,6 +7,7 @@ enum AppAnalytics {
         case syllabus
         case moodle
         case circles
+        case career
         case friends
         case settings
         case other

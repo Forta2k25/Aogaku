@@ -16,9 +16,9 @@ final class FriendTimetableViewController: UIViewController {
     private let friendUid: String
     private let friendName: String?
 
-    // 学年は「3月から次年度」に切り替える（例：2026/03〜は 2026）
+    // 学年・学期は TermStore.defaultTerm() と同じ基準（4〜8月:前期 / 9〜12月:後期 / 1〜3月:前年度後期）
     private var year: Int = FriendTimetableViewController.academicYear(for: Date())
-    private var semester: FriendSemester = .latest()   // 10月〜は後期
+    private var semester: FriendSemester = .latest()   // 9月〜は後期
 
     private var courses: [GridCell] = []
     private var maxDay: Int = 4
@@ -764,12 +764,12 @@ final class FriendTimetableViewController: UIViewController {
 
     // MARK: - Helpers
 
-    /// 3月から次年度として扱う学年
+    /// 1〜3月は前年度の後期として扱う（TermStore.defaultTerm() と同じ基準）
     private static func academicYear(for date: Date) -> Int {
         let cal = Calendar(identifier: .gregorian)
         let y = cal.component(.year, from: date)
         let m = cal.component(.month, from: date)
-        return (m >= 3) ? y : (y - 1)
+        return (m >= 4) ? y : (y - 1)
     }
 
     /// 学期保存キー（友だち＋年度）
@@ -811,9 +811,9 @@ private enum FriendSemester: String, Equatable {
     case first, second
     var jp: String { self == .first ? "前期" : "後期" }
     static func latest(date: Date = Date()) -> FriendSemester {
-        // 10月〜 は後期、それ以外は前期（表示開始の目安）
+        // 9月〜 は後期、それ以外は前期（TermStore.defaultTerm() と同じ基準）
         let m = Calendar(identifier: .gregorian).component(.month, from: date)
-        return (m >= 10) ? .second : .first
+        return (m >= 9 || m <= 3) ? .second : .first
     }
 }
 

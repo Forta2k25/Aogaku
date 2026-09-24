@@ -752,8 +752,29 @@ Action.prototype = {
                         parameters.completionFunction({});
                     });
                 } else {
-                    removeOverlay();
-                    parameters.completionFunction({ payloadJSON: JSON.stringify({ error: '履修科目一覧から授業が見つかりませんでした。' }) });
+                    // 履修登録期間中などで時間割がまだ無い場合でも、成績/単位状況だけは取得して送る
+                    showOverlay('📊 単位状況を取得中...');
+                    var rishuuHrefB = window.location.href;
+                    var rishuuBaseB = rishuuHrefB.replace(/[^\/]+(\?.*)?$/, '');
+                    var tuutishoLinkB = document.querySelector('a[href*="tuutisho"]');
+                    var tuutishoURLB  = tuutishoLinkB
+                        ? absoluteURL(tuutishoLinkB.getAttribute('href'), document)
+                        : (rishuuBaseB + 'tuutisho.aspx');
+                    fetch(tuutishoURLB, { credentials: 'include' })
+                        .then(function(r) { return r.ok ? r.text() : ''; })
+                        .then(function(html) {
+                            removeOverlay();
+                            var gradesDataB = html ? extractGrades(new DOMParser().parseFromString(html, 'text/html')) : null;
+                            if (gradesDataB && (gradesDataB.grades.length > 0 || gradesDataB.gpa)) {
+                                sendGradesToApp(gradesDataB);
+                            } else {
+                                parameters.completionFunction({ payloadJSON: JSON.stringify({ error: '履修科目一覧・単位状況のどちらからもデータが見つかりませんでした。履修登録期間中はまだ時間割が反映されていない可能性があります。' }) });
+                            }
+                        })
+                        .catch(function() {
+                            removeOverlay();
+                            parameters.completionFunction({ payloadJSON: JSON.stringify({ error: '履修科目一覧が見つからず、単位状況の取得にも失敗しました。' }) });
+                        });
                 }
             } catch(e) {
                 removeOverlay();
@@ -826,23 +847,45 @@ Action.prototype = {
                     });
                 }
 
-                showOverlay('📊 時間割を取得中...');
-                return fetch(jikanwariURL, { credentials: 'include' })
-                    .then(function(resp) {
-                        if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
-                        return resp.text();
-                    })
-                    .then(function(html) {
-                        var fallbackDoc = parser.parseFromString(html, 'text/html');
-                        var result = extractTimetable(fallbackDoc);
-                        if (result.subjects.length === 0) {
+                // 履修登録期間中などで時間割がまだ無い場合でも、成績/単位状況だけは取得して送る
+                var tuutishoNavLinkB = doc.querySelector('a[href*="tuutisho"]');
+                var tuutishoURLFinalB = tuutishoNavLinkB
+                    ? absoluteURL(tuutishoNavLinkB.getAttribute('href'), rishuuURL)
+                    : tuutishoURLFallback;
+
+                showOverlay('📊 単位状況を取得中...');
+                return fetch(tuutishoURLFinalB, { credentials: 'include' })
+                    .then(function(r) { return r.ok ? r.text() : ''; })
+                    .then(function(gradesHtml) {
+                        var gradesDataB = gradesHtml ? extractGrades(new DOMParser().parseFromString(gradesHtml, 'text/html')) : null;
+                        if (gradesDataB && (gradesDataB.grades.length > 0 || gradesDataB.gpa)) {
                             removeOverlay();
-                            parameters.completionFunction({ payloadJSON: JSON.stringify({ error: '履修科目一覧・時間割のどちらからも授業が見つかりませんでした。' }) });
+                            sendGradesToApp(gradesDataB);
                             return;
                         }
+
+                        // 成績も見つからなければ、最後に時間割表（jikanwari）を試す
+                        showOverlay('📊 時間割を取得中...');
+                        return fetch(jikanwariURL, { credentials: 'include' })
+                            .then(function(resp) {
+                                if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
+                                return resp.text();
+                            })
+                            .then(function(html) {
+                                var fallbackDoc = parser.parseFromString(html, 'text/html');
+                                var result = extractTimetable(fallbackDoc);
+                                removeOverlay();
+                                if (result.subjects.length === 0) {
+                                    parameters.completionFunction({ payloadJSON: JSON.stringify({ error: '履修科目一覧・時間割・単位状況のいずれからもデータが見つかりませんでした。' }) });
+                                    return;
+                                }
+                                // jikanwari はデータ量が少ないため completionFunction 直渡しで OK（成績なし）
+                                completeWith(result, fallbackDoc);
+                            });
+                    })
+                    .catch(function() {
                         removeOverlay();
-                        // jikanwari はデータ量が少ないため completionFunction 直渡しで OK（成績なし）
-                        completeWith(result, fallbackDoc);
+                        parameters.completionFunction({ payloadJSON: JSON.stringify({ error: '単位状況の取得にも失敗しました。' }) });
                     });
             })
             .catch(function(e) {

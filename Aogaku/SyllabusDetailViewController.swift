@@ -374,13 +374,10 @@ final class SyllabusDetailViewController: UIViewController, WKNavigationDelegate
     }
 
     private func isAlreadyInTimetable() -> Bool {
-        // timetable と同じ保存先（TermStore / Course 型は既存のものを使用）
+        // timetable と同じ保存先（TermStore.loadAssigned が [Course]/[Course?] の両形式を吸収する）
         let term = TermStore.loadSelected()
-        guard let data = UserDefaults.standard.data(forKey: term.storageKey),
-              let assigned = try? JSONDecoder().decode([Course?].self, from: data) else {
-            return false
-        }
-        let ids = Set(assigned.compactMap { $0?.id })
+        let assigned = TermStore.loadAssigned(for: term)
+        let ids = Set(assigned.map { $0.id })
 
         // timetable では Course.id に登録番号（code）を入れて送っています
         let codeFromFetched: String? =

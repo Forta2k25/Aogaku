@@ -228,7 +228,7 @@ enum DeepLinkRouter {
             }
 
             if existingCourse == nil {
-                SlotColorStore.set(SlotColorStore.defaultCourseColor, for: SlotLocation(day: col, period: period))
+                SlotColorStore.set(SlotColorStore.defaultCourseColor, for: SlotLocation(day: col, period: period), term: term)
             }
 
             if let fields = s["syllabusFields"] as? [String: String], !fields.isEmpty {

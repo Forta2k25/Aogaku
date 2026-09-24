@@ -1,0 +1,14 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{uid}/transcriptionUploads/{fileName} {
+      allow create, update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.size <= 100 * 1024 * 1024
+        && request.resource.contentType == 'audio/mp4'
+        && fileName.matches('^[A-Za-z0-9-]+\\.m4a$');
+      allow delete: if request.auth != null && request.auth.uid == uid;
+      allow read: if false;
+    }
+  }
+}

@@ -1208,8 +1208,8 @@ final class CreditsFullViewController: UIViewController, UITableViewDataSource, 
         // 表示文字列で返す（アプリ内の表記に合わせて）
         var out: [String] = []
         for y in minY...maxY {
-            out.append("\(y) 年前期")
-            out.append("\(y) 年後期")
+            out.append("\(y)年前期")
+            out.append("\(y)年後期")
         }
         return out
     }

@@ -938,12 +938,9 @@ final class FriendListViewController: UITableViewController, UISearchBarDelegate
 
     private func loadGridTimetables() {
         guard Auth.auth().currentUser != nil, !allFriends.isEmpty else { return }
-        let cal = Calendar.current
-        let now = Date()
-        let month = cal.component(.month, from: now)
-        let yr = cal.component(.year, from: now)
-        let year = month >= 3 ? yr : yr - 1
-        let sem = month >= 10 ? "後期" : "前期"
+        let term = TermStore.defaultTerm()
+        let year = term.year
+        let sem = term.semester.display
         let idA = "assignedCourses.\(year)_\(sem)"
         let idB = "assignedCourses.\(year).\(sem)"
 

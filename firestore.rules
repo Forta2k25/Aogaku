@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /classes/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ===== 授業レビュー（collectionGroup対応）=====
+    match /{path=**}/entries/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null
+                   && request.auth.uid == userId;
+    }
+
+    match /circle/{docId} {
+      allow read: if true;
+      allow update: if request.resource.data.diff(resource.data).changedKeys().hasOnly(['popularity'])
+                && request.resource.data.popularity == resource.data.popularity + 1;
+      allow create, delete: if false;
+    }
+
+    match /careerListings/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /usernames/{idLower} {
+      allow read: if true;
+      allow create, update: if request.auth != null;
+      allow delete: if request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.idLower == idLower;
+    }
+
+    match /analytics_events/{doc} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    match /users/{uid} {
+      allow read: if true;
+      allow create: if request.auth != null && request.auth.uid == uid;
+      allow update, delete: if request.auth != null && request.auth.uid == uid;
+
+      match /fcmTokens/{token} {
+        allow read, create, update, delete: if request.auth != null && request.auth.uid == uid;
+      }
+      match /lectureNotes/{noteId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+      match /courseChats/{courseKey} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+        match /messages/{messageId} {
+          allow read, write: if request.auth != null && request.auth.uid == uid;
+        }
+      }
+      match /timetable/{term} {
+        allow read: if request.auth != null
+                    && (request.auth.uid == uid
+                        || exists(/databases/$(database)/documents/users/$(uid)/friends/$(request.auth.uid)));
+        allow write: if request.auth != null && request.auth.uid == uid;
+      }
+      match /requestsOutgoing/{toUid} {
+        allow create: if request.auth != null
+                      && request.auth.uid == uid
+                      && request.resource.data.targetUid == toUid
+                      && request.resource.data.status == "pending"
+                      && request.resource.data.createdAt == request.time;
+        allow delete: if request.auth != null
+                      && (request.auth.uid == uid
+                          || (request.method == 'delete' && request.auth.uid == toUid));
+        allow read: if request.auth != null && request.auth.uid == uid;
+      }
+      match /requestsIncoming/{fromUid} {
+        allow create: if request.auth != null
+                      && request.auth.uid == fromUid
+                      && request.resource.data.senderUid == fromUid
+                      && request.resource.data.status == "pending"
+                      && request.resource.data.createdAt == request.time;
+        allow read, update, delete: if request.auth != null && request.auth.uid == uid;
+      }
+      match /friends/{friendUid} {
+        allow create: if request.auth != null
+                      && request.resource.data.friendUid == friendUid
+                      && (
+                           request.auth.uid == uid
+                           || (
+                                request.auth.uid == friendUid
+                                && exists(/databases/$(database)/documents/users/$(friendUid)/requestsIncoming/$(uid))
+                                && get(/databases/$(database)/documents/users/$(friendUid)/requestsIncoming/$(uid)).data.status == "pending"
+                              )
+                         );
+        allow delete: if request.auth != null
+                      && (request.auth.uid == uid || request.auth.uid == friendUid);
+        allow read: if request.auth != null && request.auth.uid == uid;
+      }
+      match /{sub=**}/{docId} {
+        allow read, delete: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+
+    match /users/{otherUid}/{coll}/{docId} {
+      allow read, delete: if request.auth != null
+        && (coll in [
+          'Friends','friends',
+          'requestsIncoming','requestIncoming','incomingRequests',
+          'requestsOutgoing','requestOutgoing','outgoingRequests'
+        ])
+        && (
+          docId == request.auth.uid ||
+          (
+            request.method == 'delete' &&
+            (
+              resource.data.uid == request.auth.uid ||
+              resource.data.friendUid == request.auth.uid ||
+              resource.data.fromUid == request.auth.uid ||
+              resource.data.toUid == request.auth.uid ||
+              resource.data.ownerUid == request.auth.uid ||
+              resource.data.targetUid == request.auth.uid
+            )
+          )
+        );
+    }
+  }
+}

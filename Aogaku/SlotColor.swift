@@ -33,28 +33,29 @@ struct SlotColorStore {
     private static let storeKey = "slotColors_v2"             // ← 文字列キー名
     static let defaultCourseColor: SlotColorKey = .green
 
-    static func storageKey(for loc: SlotLocation) -> String { // "day-period" 例: "3-2"
-        "\(loc.day)-\(loc.period)"
+    /// 学期＋(曜日,時限) ごとにキーを分ける（学期をまたいで色が引っ越さないように）
+    static func storageKey(for loc: SlotLocation, term: TermKey) -> String { // 例: "2026_前期|3-2"
+        "\(term.storageKey)|\(loc.day)-\(loc.period)"
     }
 
     /// 現在の色（未設定なら nil）
-    static func color(for loc: SlotLocation) -> SlotColorKey? {
+    static func color(for loc: SlotLocation, term: TermKey) -> SlotColorKey? {
         guard let dict = UserDefaults.standard.dictionary(forKey: storeKey) as? [String:String],
-              let raw  = dict[storageKey(for: loc)]
+              let raw  = dict[storageKey(for: loc, term: term)]
         else { return nil }
         return SlotColorKey(rawValue: raw)
     }
 
     /// 色を保存（即時永続化）
-    static func set(_ color: SlotColorKey, for loc: SlotLocation) {
+    static func set(_ color: SlotColorKey, for loc: SlotLocation, term: TermKey) {
         var dict = (UserDefaults.standard.dictionary(forKey: storeKey) as? [String:String]) ?? [:]
-        dict[storageKey(for: loc)] = color.rawValue
+        dict[storageKey(for: loc, term: term)] = color.rawValue
         UserDefaults.standard.set(dict, forKey: storeKey)
     }
 
-    static func remove(for loc: SlotLocation) {
+    static func remove(for loc: SlotLocation, term: TermKey) {
         var dict = (UserDefaults.standard.dictionary(forKey: storeKey) as? [String:String]) ?? [:]
-        dict.removeValue(forKey: storageKey(for: loc))
+        dict.removeValue(forKey: storageKey(for: loc, term: term))
         UserDefaults.standard.set(dict, forKey: storeKey)
     }
 

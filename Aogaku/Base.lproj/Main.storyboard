@@ -669,7 +669,7 @@
         <scene sceneID="usA-QH-2t0">
             <objects>
                 <navigationController id="gfZ-Fw-sJx" sceneMemberID="viewController">
-                    <tabBarItem key="tabBarItem" title="サークル" image="figure.archery" catalog="system" id="ZEZ-J8-ziG"/>
+                    <tabBarItem key="tabBarItem" title="インターン" image="briefcase.fill" catalog="system" id="ZEZ-J8-ziG"/>
                     <navigationBar key="navigationBar" contentMode="scaleToFill" id="4SI-Z8-FdQ">
                         <rect key="frame" x="0.0" y="124" width="440" height="54"/>
                         <autoresizingMask key="autoresizingMask"/>
@@ -682,10 +682,10 @@
             </objects>
             <point key="canvasLocation" x="-1571" y="3067"/>
         </scene>
-        <!--Circles View Controller-->
+        <!--Career List View Controller-->
         <scene sceneID="CrI-RH-aXq">
             <objects>
-                <viewController id="MMU-xx-MNz" customClass="CirclesViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
+                <viewController id="MMU-xx-MNz" customClass="CareerListViewController" customModule="Aogaku" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="OUJ-gW-NGN">
                         <rect key="frame" x="0.0" y="0.0" width="440" height="956"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>

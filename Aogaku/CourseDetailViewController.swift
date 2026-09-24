@@ -1,6 +1,7 @@
 
 import UIKit
 import WebKit
+import PhotosUI
 import FirebaseFirestore
 import FirebaseAuth
 import GoogleMobileAds
@@ -31,7 +32,7 @@ protocol CourseDetailViewControllerDelegate: AnyObject {
                       at location: SlotLocation) // [ADDED] 教室編集の反映に使う
 }
 
-final class CourseDetailViewController: UIViewController {
+final class CourseDetailViewController: UIViewController, UITextViewDelegate {
 
     // MARK: - Inputs
     weak var delegate: CourseDetailViewControllerDelegate?
@@ -42,6 +43,19 @@ final class CourseDetailViewController: UIViewController {
     private let allowsCourseManagement: Bool
     private let showsEnrolledFriends: Bool
     private let showsMoodleAssignments: Bool
+    private let showsLectureNotes: Bool
+    private let lectureNoteContainer = UIStackView()
+    private let lectureNotePreviewLabel = UILabel()
+    private let lectureNoteRecentLabel = UILabel()
+    private let lectureAIMessageStack = UIStackView()
+    private let lectureAIPromptView = UITextView()
+    private let lectureAIPromptPlaceholder = UILabel()
+    private let lectureAIComposer = UIView()
+    private let lectureAIAttachButton = UIButton(type: .system)
+    private let lectureAISendButton = UIButton(type: .system)
+    private let lectureAIActivity = UIActivityIndicatorView(style: .medium)
+    private var lectureAINotes: [LectureNote] = []
+    private var isLectureAISending = false
 
     // MARK: - Color Picker
     private let colorKeys: [SlotColorKey] = [.blue, .green, .orange, .red, .teal, .gray, .purple]
@@ -80,10 +94,13 @@ final class CourseDetailViewController: UIViewController {
     private let syllabusDetailStack  = UIStackView()
     private var isSyllabusDetailOpen = false
     private var syllabusPageURL: URL?
-    private let syllabusViewToggle = UISegmentedControl(items: ["独自UI", "ポータル"])
+    private let syllabusViewToggle = UISegmentedControl(items: ["ポータル"])
     private var syllabusDisplayMode: Int {
-        get { UserDefaults.standard.integer(forKey: "syllabus.displayMode") }
-        set { UserDefaults.standard.set(newValue, forKey: "syllabus.displayMode") }
+        get {
+            UserDefaults.standard.object(forKey: "syllabus.displayMode.v2") as? Int
+                ?? (showsLectureNotes ? 1 : 0)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "syllabus.displayMode.v2") }
     }
     private var syllabusWebPageLoaded = false
     private var didRetryLocalSyllabusIndex = false
@@ -107,6 +124,7 @@ final class CourseDetailViewController: UIViewController {
     private let colorRow = UIStackView()
     private var isColorRowOpen = false
     private let actionsRow = UIStackView()
+    private let courseManagementSpacer = UIView()
 
     // MARK: - Friends in Course
     private let friendsCourseSection = UIStackView()
@@ -161,7 +179,8 @@ final class CourseDetailViewController: UIViewController {
          showsMoodleAssignments: Bool = true,
          showsSyllabusActions: Bool = false,
          syllabusDocID: String? = nil,
-         showsReview: Bool = false) {
+         showsReview: Bool = false,
+         showsLectureNotes: Bool = false) {
         self.course = course
         self.location = location
         self.term = term
@@ -172,6 +191,7 @@ final class CourseDetailViewController: UIViewController {
         self.showsSyllabusActions = showsSyllabusActions
         self.syllabusDocID = syllabusDocID
         self.showsReview = showsReview
+        self.showsLectureNotes = showsLectureNotes
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .pageSheet
     }
@@ -211,6 +231,20 @@ final class CourseDetailViewController: UIViewController {
         setupAdBanner()
         NotificationCenter.default.addObserver(self, selector: #selector(onAdMobReady),
                                                name: .adMobReady, object: nil)
+        if showsLectureNotes {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(lectureAIKeyboardWillChangeFrame),
+                name: UIResponder.keyboardWillChangeFrameNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(lectureAIKeyboardWillHide),
+                name: UIResponder.keyboardWillHideNotification,
+                object: nil
+            )
+        }
         if showsReview {
             resolveReviewDocIDThenBuild()   // 常に先頭に表示（firestoreDocID未設定時はクエリで解決）
             if showsSyllabusActions {
@@ -221,6 +255,7 @@ final class CourseDetailViewController: UIViewController {
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        if showsLectureNotes { loadLatestLectureNotePreview() }
         if #available(iOS 16.0, *),
            let sheet = sheetPresentationController {
             sheet.animateChanges { sheet.selectedDetentIdentifier = .large }
@@ -353,11 +388,35 @@ final class CourseDetailViewController: UIViewController {
         }
 
         // ──── シラバス表示切り替えトグル（Moodle課題の直下）────
-        syllabusViewToggle.selectedSegmentIndex = syllabusDisplayMode
         syllabusViewToggle.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
         syllabusViewToggle.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
         syllabusViewToggle.addTarget(self, action: #selector(syllabusViewModeChanged), for: .valueChanged)
-        syllabusViewToggle.isHidden = true   // シラバスURLが判明してから表示
+        if showsLectureNotes {
+            syllabusViewToggle.insertSegment(withTitle: "AI", at: syllabusViewToggle.numberOfSegments, animated: false)
+        }
+        syllabusViewToggle.accessibilityLabel = "授業内容の表示"
+        syllabusViewToggle.accessibilityHint = showsLectureNotes
+            ? "ポータルとAIを切り替えます"
+            : "ポータルを表示します"
+        var displayActions = [
+            UIAccessibilityCustomAction(
+                name: "ポータルを表示",
+                target: self,
+                selector: #selector(showPortalAccessibilityAction)
+            )
+        ]
+        if showsLectureNotes {
+            displayActions.append(
+                UIAccessibilityCustomAction(
+                    name: "AIを表示",
+                    target: self,
+                    selector: #selector(showLectureAIAccessibilityAction)
+                )
+            )
+        }
+        syllabusViewToggle.accessibilityCustomActions = displayActions
+        syllabusViewToggle.selectedSegmentIndex = min(syllabusDisplayMode, syllabusViewToggle.numberOfSegments - 1)
+        syllabusViewToggle.isHidden = !showsLectureNotes   // 授業ノートが無ければシラバスURLが判明してから表示
         stack.addArrangedSubview(syllabusViewToggle)
 
         // ──── シラバスセクション（JS抽出のネイティブカード） ────
@@ -406,6 +465,11 @@ final class CourseDetailViewController: UIViewController {
         webHeightConstraint.isActive = true
         stack.addArrangedSubview(webContainer)
         webContainer.isHidden = true   // ポータルモード時のみ表示
+
+        // ──── 授業ノート（独自UI／ポータルと同じトグルの3番目のセグメント）────
+        if showsLectureNotes {
+            buildLectureNoteContainer()
+        }
 
         if allowsCourseManagement {
             // 編集・削除ボタン（スクロール末尾）
@@ -516,6 +580,535 @@ final class CourseDetailViewController: UIViewController {
             self.friendsCourseContentContainer?.isHidden = !self.isFriendsCourseSectionExpanded
             self.friendsCourseSection.superview?.layoutIfNeeded()
         }
+    }
+
+    // MARK: - 授業AI
+
+    private func buildLectureNoteContainer() {
+        lectureNoteContainer.axis = .vertical
+        lectureNoteContainer.spacing = 12
+        lectureNoteContainer.isHidden = true
+        stack.addArrangedSubview(lectureNoteContainer)
+
+        lectureNotePreviewLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        lectureNotePreviewLabel.textColor = .secondaryLabel
+        lectureNotePreviewLabel.numberOfLines = 0
+        lectureNotePreviewLabel.text = "記録を読み込んでいます"
+
+        lectureNoteRecentLabel.font = .systemFont(ofSize: 12)
+        lectureNoteRecentLabel.textColor = .tertiaryLabel
+        lectureNoteRecentLabel.isHidden = true
+
+        let historyButton = UIButton(type: .system)
+        historyButton.setImage(UIImage(systemName: "clock.arrow.circlepath"), for: .normal)
+        historyButton.accessibilityLabel = "授業の記録を見る"
+        historyButton.addTarget(self, action: #selector(lectureNoteSeeAllTapped), for: .touchUpInside)
+        historyButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        historyButton.heightAnchor.constraint(equalToConstant: 36).isActive = true
+
+        let statusLabels = UIStackView(arrangedSubviews: [lectureNotePreviewLabel, lectureNoteRecentLabel])
+        statusLabels.axis = .vertical
+        statusLabels.spacing = 2
+        let statusRow = UIStackView(arrangedSubviews: [statusLabels, historyButton])
+        statusRow.axis = .horizontal
+        statusRow.alignment = .center
+        statusRow.spacing = 8
+
+        let recordTile = makeLectureNoteTile(systemImage: "waveform", title: "授業を聞かせる", filled: true, action: #selector(lectureNoteRecordTapped))
+        let photoTile = makeLectureNoteTile(systemImage: "doc.badge.plus", title: "資料を追加", filled: false, action: #selector(lectureNotePhotoTapped))
+        let tileRow = UIStackView(arrangedSubviews: [recordTile, photoTile])
+        tileRow.axis = .horizontal
+        tileRow.spacing = 10
+        tileRow.distribution = .fillEqually
+
+        lectureAIMessageStack.axis = .vertical
+        lectureAIMessageStack.spacing = 14
+
+        lectureAIPromptView.font = .systemFont(ofSize: 15)
+        lectureAIPromptView.backgroundColor = .clear
+        lectureAIPromptView.delegate = self
+        lectureAIPromptView.returnKeyType = .default
+        lectureAIPromptView.textContainerInset = UIEdgeInsets(top: 11, left: 4, bottom: 9, right: 4)
+
+        let keyboardToolbar = UIToolbar()
+        keyboardToolbar.sizeToFit()
+        keyboardToolbar.items = [
+            UIBarButtonItem(systemItem: .flexibleSpace),
+            UIBarButtonItem(
+                title: "完了",
+                style: .done,
+                target: self,
+                action: #selector(dismissLectureAIKeyboard)
+            )
+        ]
+        lectureAIPromptView.inputAccessoryView = keyboardToolbar
+
+        lectureAIPromptPlaceholder.text = "この授業について聞く"
+        lectureAIPromptPlaceholder.font = .systemFont(ofSize: 15)
+        lectureAIPromptPlaceholder.textColor = .placeholderText
+        lectureAIPromptPlaceholder.translatesAutoresizingMaskIntoConstraints = false
+        lectureAIPromptView.addSubview(lectureAIPromptPlaceholder)
+
+        var attachConfig = UIButton.Configuration.plain()
+        attachConfig.image = UIImage(systemName: "plus")
+        attachConfig.baseForegroundColor = .label
+        attachConfig.cornerStyle = .capsule
+        lectureAIAttachButton.configuration = attachConfig
+        lectureAIAttachButton.accessibilityLabel = "資料を追加"
+        lectureAIAttachButton.addTarget(self, action: #selector(lectureAIAttachTapped), for: .touchUpInside)
+
+        var sendConfig = UIButton.Configuration.filled()
+        sendConfig.image = UIImage(systemName: "arrow.up")
+        sendConfig.baseBackgroundColor = HackColors.accent
+        sendConfig.baseForegroundColor = .white
+        sendConfig.cornerStyle = .capsule
+        lectureAISendButton.configuration = sendConfig
+        lectureAISendButton.accessibilityLabel = "送信"
+        lectureAISendButton.addTarget(self, action: #selector(lectureAISendTapped), for: .touchUpInside)
+
+        lectureAIComposer.backgroundColor = .secondarySystemBackground
+        lectureAIComposer.layer.cornerRadius = 24
+        lectureAIComposer.layer.borderWidth = 0.5
+        lectureAIComposer.layer.borderColor = UIColor.separator.cgColor
+        lectureAIComposer.layer.shadowColor = UIColor.black.cgColor
+        lectureAIComposer.layer.shadowOpacity = 0.08
+        lectureAIComposer.layer.shadowRadius = 8
+        lectureAIComposer.layer.shadowOffset = CGSize(width: 0, height: 2)
+        lectureAIComposer.isHidden = true
+        lectureAIComposer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(lectureAIComposer)
+        lectureAIComposer.addSubview(lectureAIAttachButton)
+        lectureAIComposer.addSubview(lectureAIPromptView)
+        lectureAIComposer.addSubview(lectureAISendButton)
+        lectureAIAttachButton.translatesAutoresizingMaskIntoConstraints = false
+        lectureAIPromptView.translatesAutoresizingMaskIntoConstraints = false
+        lectureAISendButton.translatesAutoresizingMaskIntoConstraints = false
+        let composerBottom = lectureAIComposer.bottomAnchor.constraint(equalTo: adContainer.topAnchor, constant: -8)
+        composerBottom.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            lectureAIPromptPlaceholder.leadingAnchor.constraint(equalTo: lectureAIPromptView.leadingAnchor, constant: 9),
+            lectureAIPromptPlaceholder.topAnchor.constraint(equalTo: lectureAIPromptView.topAnchor, constant: 11),
+            lectureAIComposer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            lectureAIComposer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            lectureAIComposer.heightAnchor.constraint(equalToConstant: 52),
+            composerBottom,
+            lectureAIComposer.bottomAnchor.constraint(lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
+            lectureAIAttachButton.leadingAnchor.constraint(equalTo: lectureAIComposer.leadingAnchor, constant: 6),
+            lectureAIAttachButton.centerYAnchor.constraint(equalTo: lectureAIComposer.centerYAnchor),
+            lectureAIAttachButton.widthAnchor.constraint(equalToConstant: 40),
+            lectureAIAttachButton.heightAnchor.constraint(equalToConstant: 40),
+            lectureAIPromptView.topAnchor.constraint(equalTo: lectureAIComposer.topAnchor),
+            lectureAIPromptView.leadingAnchor.constraint(equalTo: lectureAIAttachButton.trailingAnchor),
+            lectureAIPromptView.bottomAnchor.constraint(equalTo: lectureAIComposer.bottomAnchor),
+            lectureAIPromptView.trailingAnchor.constraint(equalTo: lectureAISendButton.leadingAnchor, constant: -4),
+            lectureAISendButton.trailingAnchor.constraint(equalTo: lectureAIComposer.trailingAnchor, constant: -6),
+            lectureAISendButton.centerYAnchor.constraint(equalTo: lectureAIComposer.centerYAnchor),
+            lectureAISendButton.widthAnchor.constraint(equalToConstant: 40),
+            lectureAISendButton.heightAnchor.constraint(equalToConstant: 40)
+        ])
+
+        lectureAIActivity.hidesWhenStopped = true
+
+        lectureNoteContainer.addArrangedSubview(statusRow)
+        lectureNoteContainer.addArrangedSubview(tileRow)
+        lectureNoteContainer.addArrangedSubview(lectureAIMessageStack)
+        lectureNoteContainer.addArrangedSubview(lectureAIActivity)
+
+        loadLatestLectureNotePreview()
+        loadLectureAIChatHistory()
+    }
+
+    /// 過去の授業AIチャット履歴をFirestoreから読み込み、吹き出しとして事前に流し込む
+    private func loadLectureAIChatHistory() {
+        Task {
+            let key = LectureNote.courseKey(course: course, term: term)
+            let messages = (try? await CourseChatStore.shared.fetchMessages(courseKey: key)) ?? []
+            guard !messages.isEmpty else { return }
+            await MainActor.run {
+                for message in messages {
+                    self.appendLectureAIMessage(message.content, fromUser: message.role == .user)
+                }
+            }
+        }
+    }
+
+    /// 「録音する」「撮影する」用の正方形タイルボタンを作る
+    private func makeLectureNoteTile(systemImage: String, title: String, filled: Bool, action: Selector) -> UIButton {
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: systemImage)
+        config.title = title
+        config.imagePlacement = .top
+        config.imagePadding = 8
+        config.baseForegroundColor = filled ? .white : HackColors.accent
+        config.background.backgroundColor = filled ? HackColors.accent : .secondarySystemBackground
+        config.background.cornerRadius = 12
+        config.contentInsets = NSDirectionalEdgeInsets(top: 18, leading: 8, bottom: 18, trailing: 8)
+        let button = UIButton(configuration: config)
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
+
+    private func loadLatestLectureNotePreview() {
+        Task {
+            let key = LectureNote.courseKey(course: course, term: term)
+            let notes = (try? await LectureNoteStore.shared.fetchNotes(courseKey: key)) ?? []
+            await MainActor.run {
+                self.lectureAINotes = notes
+                guard let latest = notes.first else {
+                    self.lectureNotePreviewLabel.text = "まだ授業の記録がありません"
+                    self.lectureNoteRecentLabel.isHidden = true
+                    return
+                }
+                let formatter = DateFormatter()
+                formatter.dateFormat = "M月d日"
+                formatter.locale = Locale(identifier: "ja_JP")
+                let dateStr = formatter.string(from: latest.lectureDate)
+                let latestSessionNumber = notes.compactMap(\.sessionNumber).max()
+                if let latestSessionNumber {
+                    self.lectureNotePreviewLabel.text = "第\(latestSessionNumber)回まで記憶しています"
+                } else {
+                    self.lectureNotePreviewLabel.text = "\(notes.count)件の授業内容を記憶しています"
+                }
+                self.lectureNoteRecentLabel.text = "最終更新 \(dateStr)"
+                self.lectureNoteRecentLabel.isHidden = false
+            }
+        }
+    }
+
+    @objc private func lectureAISendTapped() {
+        sendLectureAIMessage(lectureAIPromptView.text)
+    }
+
+    private func sendLectureAIMessage(_ rawPrompt: String) {
+        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !isLectureAISending else { return }
+
+        lectureAIPromptView.text = ""
+        lectureAIPromptPlaceholder.isHidden = false
+        appendLectureAIMessage(prompt, fromUser: true)
+        setLectureAISending(true)
+
+        Task {
+            do {
+                let key = LectureNote.courseKey(course: course, term: term)
+                let notes = try await LectureNoteStore.shared.fetchNotes(courseKey: key)
+                guard !notes.isEmpty else {
+                    await MainActor.run {
+                        self.appendLectureAIMessage("まだ授業内容がありません。先に授業を聞かせるか、資料を追加してください。", fromUser: false)
+                        self.setLectureAISending(false)
+                    }
+                    return
+                }
+
+                let selectedNotes = notesForLectureAI(prompt: prompt, notes: notes)
+                let context = lectureAIContext(from: selectedNotes)
+                let answer = try await CourseAIService.shared.ask(
+                    prompt: prompt,
+                    transcript: context.transcript,
+                    photoText: context.photoText,
+                    syllabusOverview: SyllabusOverviewProvider.overviewText(for: course),
+                    courseKey: key
+                )
+                await MainActor.run {
+                    self.lectureAINotes = notes
+                    self.appendLectureAIMessage(answer, fromUser: false)
+                    self.setLectureAISending(false)
+                }
+            } catch {
+                await MainActor.run {
+                    self.appendLectureAIMessage("回答を作れませんでした。少し待ってからもう一度試してください。", fromUser: false)
+                    self.setLectureAISending(false)
+                }
+            }
+        }
+    }
+
+    private func notesForLectureAI(prompt: String, notes: [LectureNote]) -> [LectureNote] {
+        let broadKeywords = ["今まで", "これまで", "全授業", "全体", "試験", "期末", "中間", "小テスト", "何回も", "共通"]
+        if broadKeywords.contains(where: prompt.contains) { return notes }
+
+        guard let latestDate = notes.first?.lectureDate else { return notes }
+        return notes.filter { Calendar.current.isDate($0.lectureDate, inSameDayAs: latestDate) }
+    }
+
+    private func lectureAIContext(from notes: [LectureNote]) -> (transcript: String, photoText: String) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M月d日"
+        formatter.locale = Locale(identifier: "ja_JP")
+
+        let chronological = notes.sorted { $0.lectureDate < $1.lectureDate }
+        let transcript = chronological.compactMap { note -> String? in
+            guard !note.transcriptText.isEmpty else { return nil }
+            let session = note.sessionNumber.map { "第\($0)回" } ?? formatter.string(from: note.lectureDate)
+            return "[\(session)]\n\(note.transcriptText)"
+        }.joined(separator: "\n\n")
+        let photoText = chronological.compactMap { note -> String? in
+            guard !note.photoText.isEmpty else { return nil }
+            let session = note.sessionNumber.map { "第\($0)回" } ?? formatter.string(from: note.lectureDate)
+            return "[\(session)の資料]\n\(note.photoText)"
+        }.joined(separator: "\n\n")
+        // Keep the newest material when a course has more history than one request needs.
+        return (
+            String(transcript.suffix(32_000)),
+            String(photoText.suffix(12_000))
+        )
+    }
+
+    private func setLectureAISending(_ sending: Bool) {
+        isLectureAISending = sending
+        lectureAIAttachButton.isEnabled = !sending
+        lectureAISendButton.isEnabled = !sending
+        lectureAIPromptView.isEditable = !sending
+        sending ? lectureAIActivity.startAnimating() : lectureAIActivity.stopAnimating()
+    }
+
+    private func appendLectureAIMessage(_ text: String, fromUser: Bool) {
+        let row = UIView()
+        let bubble = UIView()
+        bubble.backgroundColor = fromUser ? HackColors.accent : .secondarySystemBackground
+        bubble.layer.cornerRadius = 8
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(bubble)
+
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 15)
+        label.textColor = fromUser ? .white : .label
+        label.numberOfLines = 0
+
+        let content = UIStackView(arrangedSubviews: [label])
+        content.axis = .vertical
+        content.spacing = 6
+        content.translatesAutoresizingMaskIntoConstraints = false
+        bubble.addSubview(content)
+
+        if !fromUser {
+            let copyButton = UIButton(type: .system)
+            copyButton.setImage(UIImage(systemName: "doc.on.doc"), for: .normal)
+            copyButton.accessibilityLabel = "回答をコピー"
+            copyButton.contentHorizontalAlignment = .leading
+            copyButton.addAction(UIAction { _ in UIPasteboard.general.string = text }, for: .touchUpInside)
+            content.addArrangedSubview(copyButton)
+        }
+
+        let sideConstraint = fromUser
+            ? bubble.trailingAnchor.constraint(equalTo: row.trailingAnchor)
+            : bubble.leadingAnchor.constraint(equalTo: row.leadingAnchor)
+        NSLayoutConstraint.activate([
+            bubble.topAnchor.constraint(equalTo: row.topAnchor),
+            bubble.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            sideConstraint,
+            bubble.widthAnchor.constraint(lessThanOrEqualTo: row.widthAnchor, multiplier: 0.88),
+            content.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
+            content.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
+            content.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -10)
+        ])
+        lectureAIMessageStack.addArrangedSubview(row)
+        view.layoutIfNeeded()
+        scroll.scrollRectToVisible(row.convert(row.bounds, to: scroll), animated: true)
+    }
+
+    func textViewDidChange(_ textView: UITextView) {
+        guard textView === lectureAIPromptView else { return }
+        lectureAIPromptPlaceholder.isHidden = !textView.text.isEmpty
+    }
+
+    func textViewDidBeginEditing(_ textView: UITextView) {
+        guard textView === lectureAIPromptView else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.scrollLectureAIPromptIntoView(animated: true)
+        }
+    }
+
+    @objc private func dismissLectureAIKeyboard() {
+        lectureAIPromptView.resignFirstResponder()
+    }
+
+    @objc private func lectureAIKeyboardWillChangeFrame(_ notification: Notification) {
+        guard lectureAIPromptView.isFirstResponder,
+              let keyboardFrameValue = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
+            return
+        }
+
+        let keyboardFrame = view.convert(keyboardFrameValue.cgRectValue, from: nil)
+        let overlap = max(0, scroll.frame.maxY - keyboardFrame.minY)
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        let curveValue = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 7
+        let options = UIView.AnimationOptions(rawValue: curveValue << 16)
+
+        UIView.animate(withDuration: duration, delay: 0, options: options) {
+            let bottomInset = overlap + 68
+            self.scroll.contentInset.bottom = bottomInset
+            self.scroll.verticalScrollIndicatorInsets.bottom = bottomInset
+            self.scrollLectureAIPromptIntoView(animated: false)
+        }
+    }
+
+    @objc private func lectureAIKeyboardWillHide(_ notification: Notification) {
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        let curveValue = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 7
+        let options = UIView.AnimationOptions(rawValue: curveValue << 16)
+        UIView.animate(withDuration: duration, delay: 0, options: options) {
+            let bottomInset = self.lectureAIComposer.isHidden
+                ? (self.adContainerHeight?.constant ?? 0)
+                : 76
+            self.scroll.contentInset.bottom = bottomInset
+            self.scroll.verticalScrollIndicatorInsets.bottom = bottomInset
+        }
+    }
+
+    private func scrollLectureAIPromptIntoView(animated: Bool) {
+        let promptRect = lectureAIComposer.convert(lectureAIComposer.bounds, to: scroll)
+            .insetBy(dx: 0, dy: -16)
+        scroll.scrollRectToVisible(promptRect, animated: animated)
+    }
+
+    func textView(
+        _ textView: UITextView,
+        shouldChangeTextIn range: NSRange,
+        replacementText text: String
+    ) -> Bool {
+        guard textView === lectureAIPromptView,
+              let stringRange = Range(range, in: textView.text) else { return true }
+        return textView.text.replacingCharacters(in: stringRange, with: text).count <= 200
+    }
+
+    private var lectureNoteDayPeriod: String { "\(location.dayName)\(location.period)" }
+
+    @objc private func lectureNoteSeeAllTapped() {
+        let vc = LectureNoteListViewController(course: course, term: term, dayPeriod: lectureNoteDayPeriod, weekday: location.day)
+        let nav = UINavigationController(rootViewController: vc)
+        present(nav, animated: true)
+    }
+
+    @objc private func lectureNoteRecordTapped() {
+        let vc = LectureRecordingViewController(course: course, term: term, dayPeriod: lectureNoteDayPeriod, weekday: location.day)
+        let nav = UINavigationController(rootViewController: vc)
+        present(nav, animated: true)
+    }
+
+    @objc private func lectureNotePhotoTapped() {
+        lectureAIAttachTapped()
+    }
+
+    @objc private func lectureAIAttachTapped() {
+        let sheet = UIAlertController(title: "資料を追加", message: nil, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "カメラで撮る", style: .default) { [weak self] _ in
+            self?.presentLectureCamera()
+        })
+        sheet.addAction(UIAlertAction(title: "写真から選ぶ", style: .default) { [weak self] _ in
+            self?.presentLecturePhotoLibrary()
+        })
+        sheet.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = lectureAIAttachButton.isHidden ? view : lectureAIAttachButton
+            popover.sourceRect = popover.sourceView?.bounds ?? .zero
+        }
+        present(sheet, animated: true)
+    }
+
+    private func presentLectureCamera() {
+        let vc = LecturePhotoCaptureViewController()
+        vc.onFinish = { [weak self] texts in
+            guard let self, !texts.isEmpty else { return }
+            self.saveLecturePhotoTexts(texts, imageCount: texts.count)
+        }
+        present(vc, animated: true)
+    }
+
+    private func presentLecturePhotoLibrary() {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .images
+        configuration.selectionLimit = 10
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+
+    private func importLecturePhotos(_ results: [PHPickerResult]) {
+        guard !results.isEmpty else { return }
+        lectureAIAttachButton.isEnabled = false
+        lectureAIActivity.startAnimating()
+
+        let group = DispatchGroup()
+        let recognizedTexts = NSMutableArray(array: Array(repeating: "", count: results.count))
+        for (index, result) in results.enumerated() {
+            let provider = result.itemProvider
+            guard provider.canLoadObject(ofClass: UIImage.self) else { continue }
+            group.enter()
+            provider.loadObject(ofClass: UIImage.self) { object, _ in
+                guard let image = object as? UIImage else {
+                    group.leave()
+                    return
+                }
+                LecturePhotoOCR.recognizeText(in: image) { text in
+                    objc_sync_enter(recognizedTexts)
+                    recognizedTexts[index] = text
+                    objc_sync_exit(recognizedTexts)
+                    group.leave()
+                }
+            }
+        }
+
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.lectureAIAttachButton.isEnabled = true
+            self.lectureAIActivity.stopAnimating()
+            let texts = recognizedTexts.compactMap { $0 as? String }.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            guard !texts.isEmpty else {
+                self.presentLecturePhotoAlert(
+                    title: "文字を読み取れませんでした",
+                    message: "文字がはっきり写っている画像を選んでください。"
+                )
+                return
+            }
+            self.saveLecturePhotoTexts(texts, imageCount: results.count)
+        }
+    }
+
+    private func saveLecturePhotoTexts(_ texts: [String], imageCount: Int) {
+        let lectureDate = Date()
+        let sessionNumber = LectureSessionNumbering.sessionNumber(
+            for: lectureDate, weekday: location.day, term: term,
+            campus: LectureSessionNumbering.campus(for: course)
+        )
+        let note = LectureNote(
+            courseKey: LectureNote.courseKey(course: course, term: term),
+            courseTitle: course.title,
+            term: term.displayTitle,
+            dayPeriod: lectureNoteDayPeriod,
+            lectureDate: lectureDate,
+            durationSec: 0,
+            transcriptText: "",
+            photoText: texts.joined(separator: "\n\n"),
+            sessionNumber: sessionNumber,
+            status: .completed
+        )
+        Task {
+            do {
+                try await LectureNoteStore.shared.save(note)
+                await MainActor.run {
+                    self.appendLectureAIMessage("資料を\(imageCount)枚追加しました", fromUser: true)
+                    self.loadLatestLectureNotePreview()
+                }
+            } catch {
+                await MainActor.run {
+                    self.presentLecturePhotoAlert(
+                        title: "資料を追加できませんでした",
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    private func presentLecturePhotoAlert(title: String, message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     private func loadFriendsInCourse() {
@@ -744,7 +1337,7 @@ final class CourseDetailViewController: UIViewController {
         }
 
         // 現在色の選択状態を反映
-        if let current = SlotColorStore.color(for: location) {
+        if let current = SlotColorStore.color(for: location, term: term) {
             updateSelectedColorUI(selected: current)
         }
     }
@@ -1337,7 +1930,7 @@ final class CourseDetailViewController: UIViewController {
         addOpenInBrowserButton()
 
         // トグルを表示して現在のモードを適用
-        syllabusViewToggle.isHidden = syllabusPageURL == nil
+        syllabusViewToggle.isHidden = (syllabusPageURL == nil && !showsLectureNotes)
         applySyllabusDisplayMode()
     }
 
@@ -1754,7 +2347,7 @@ final class CourseDetailViewController: UIViewController {
         syllabusLoadingRow.isHidden = true
         addOpenInBrowserButton()
         // ポータルには表示できるかもしれないのでトグルを出す
-        syllabusViewToggle.isHidden = syllabusPageURL == nil
+        syllabusViewToggle.isHidden = (syllabusPageURL == nil && !showsLectureNotes)
         applySyllabusDisplayMode()
     }
 
@@ -1765,21 +2358,57 @@ final class CourseDetailViewController: UIViewController {
         UIView.animate(withDuration: 0.2) { self.applySyllabusDisplayMode() }
     }
 
+    @objc private func showNativeSyllabusAccessibilityAction() -> Bool {
+        false
+    }
+
+    @objc private func showPortalAccessibilityAction() -> Bool {
+        selectSyllabusDisplayMode(0)
+    }
+
+    @objc private func showLectureAIAccessibilityAction() -> Bool {
+        selectSyllabusDisplayMode(syllabusViewToggle.numberOfSegments - 1)
+    }
+
+    private func selectSyllabusDisplayMode(_ index: Int) -> Bool {
+        guard syllabusViewToggle.selectedSegmentIndex != index else { return true }
+        syllabusViewToggle.selectedSegmentIndex = index
+        syllabusViewModeChanged()
+        UIAccessibility.post(notification: .layoutChanged, argument: syllabusViewToggle)
+        return true
+    }
+
     private func applySyllabusDisplayMode() {
-        guard syllabusPageURL != nil else { return }
-        let isNative = syllabusDisplayMode == 0
-        syllabusSection.isHidden = !isNative
-        if isNative {
-            webContainer.isHidden = true
-        } else {
-            // ポータルモード: キャッシュから表示した場合は初めてここでWebViewをロード
-            if !syllabusWebPageLoaded, let url = syllabusPageURL {
-                webView.navigationDelegate = self
-                webView.load(URLRequest(url: url))
-                syllabusWebPageLoaded = true
-            }
-            webContainer.isHidden = false
+        let mode = syllabusViewToggle.selectedSegmentIndex
+        if showsAttendanceControls {
+            countersRow.isHidden = (mode != 0)
         }
+        if showsLectureNotes && mode == 1 {
+            syllabusSection.isHidden = true
+            webContainer.isHidden = true
+            lectureNoteContainer.isHidden = false
+            lectureAIComposer.isHidden = false
+            actionsRow.isHidden = true
+            courseManagementSpacer.isHidden = true
+            updateScrollInsetForBanner(height: adContainerHeight?.constant ?? 0)
+            return
+        }
+        lectureNoteContainer.isHidden = true
+        lectureAIComposer.isHidden = true
+        actionsRow.isHidden = !allowsCourseManagement
+        courseManagementSpacer.isHidden = !allowsCourseManagement
+        updateScrollInsetForBanner(height: adContainerHeight?.constant ?? 0)
+        syllabusSection.isHidden = true
+        guard let url = syllabusPageURL else {
+            webContainer.isHidden = true
+            return
+        }
+        if !syllabusWebPageLoaded {
+            webView.navigationDelegate = self
+            webView.load(URLRequest(url: url))
+            syllabusWebPageLoaded = true
+        }
+        webContainer.isHidden = false
     }
 
     @objc private func toggleSyllabusDetail() {
@@ -1831,18 +2460,18 @@ final class CourseDetailViewController: UIViewController {
         editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
         deleteButton.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
 
-        let hStack = UIStackView(arrangedSubviews: [editButton, deleteButton])
-        hStack.axis         = .horizontal
-        hStack.distribution = .fillEqually
-        hStack.spacing      = 12
+        actionsRow.addArrangedSubview(editButton)
+        actionsRow.addArrangedSubview(deleteButton)
+        actionsRow.axis         = .horizontal
+        actionsRow.distribution = .fillEqually
+        actionsRow.spacing      = 12
 
-        stack.addArrangedSubview(hStack)
+        stack.addArrangedSubview(actionsRow)
 
         // ボタン下の余白
-        let spacer = UIView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.heightAnchor.constraint(equalToConstant: 10).isActive = true
-        stack.addArrangedSubview(spacer)
+        courseManagementSpacer.translatesAutoresizingMaskIntoConstraints = false
+        courseManagementSpacer.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        stack.addArrangedSubview(courseManagementSpacer)
     }
 
 
@@ -2052,13 +2681,8 @@ final class CourseDetailViewController: UIViewController {
     private func currentSyllabusWeek() -> Int? {
 
         // ── 学事暦に基づく学期開始日（月曜日）一覧 ──
-        // 年度を追加するときはここに (前期月, 前期日, 後期月, 後期日) を追記する。
-        // 2025: 前期 4/7（月）、後期 9/22（月）
-        // 2026: AcademicCalendar2026 より 前期 4/6（月）、後期 9/14（月）
-        let termStartDays: [Int: (fm: Int, fd: Int, bm: Int, bd: Int)] = [
-            2025: (fm: 4, fd:  7, bm: 9, bd: 22),
-            2026: (fm: 4, fd:  6, bm: 9, bd: 14),
-        ]
+        // TermStore.knownTermStartDays が唯一のソース（年度を追加するときはそちらに追記する）。
+        let termStartDays = TermStore.knownTermStartDays
 
         let termInfo = TermStore.loadSelected()
         let title = termInfo.displayTitle   // e.g. "2026年前期"
@@ -2073,8 +2697,8 @@ final class CourseDetailViewController: UIViewController {
 
         if let k = termStartDays[year] {
             // 既知の開始日を直接使用
-            startComps.month = isFront ? k.fm : k.bm
-            startComps.day   = isFront ? k.fd : k.bd
+            startComps.month = isFront ? k.springMonth : k.fallMonth
+            startComps.day   = isFront ? k.springDay   : k.fallDay
         } else {
             // 未登録年度: 4月1日 / 9月7日 以降の最初の月曜を推計
             startComps.month = isFront ? 4 : 9
@@ -2714,12 +3338,21 @@ final class CourseDetailViewController: UIViewController {
 
     private func updateScrollInsetForBanner(height: CGFloat) {
         var inset = scroll.contentInset
-        inset.bottom = height
+        inset.bottom = height + (lectureAIComposer.isHidden ? 0 : 76)
         scroll.contentInset = inset
-        scroll.verticalScrollIndicatorInsets.bottom = height
+        scroll.verticalScrollIndicatorInsets.bottom = inset.bottom
     }
 
     @objc private func onAdMobReady() { loadBannerIfNeeded() }
+}
+
+// MARK: - PHPickerViewControllerDelegate
+extension CourseDetailViewController: PHPickerViewControllerDelegate {
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true) { [weak self] in
+            self?.importLecturePhotos(results)
+        }
+    }
 }
 
 // MARK: - BannerViewDelegate

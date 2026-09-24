@@ -40,13 +40,39 @@ enum TermStore {
     // 現在選択中の学期を保存するキー
     private static let selectedKey = "selectedTerm.v1"
 
-    // 既定の学期（4〜9月: 前期 / 10〜12月: 後期 / 1〜3月: 前年の後期）
+    /// 年度ごとの実際の学期開始日（AcademicCalendar2025.swift / AcademicCalendar2026.swift 参照）。
+    /// 分かっている年度はここに追記する。他のファイル（CourseDetailViewController など）で
+    /// 学期開始日が必要なときも、独自のテーブルを作らずこれを参照すること。
+    static let knownTermStartDays: [Int: (springMonth: Int, springDay: Int, fallMonth: Int, fallDay: Int)] = [
+        2025: (4, 7, 9, 22),
+        2026: (4, 6, 9, 14),
+    ]
+
+    // 既定の学期。knownTermStartDays に載っている年度は実際の開始日で厳密に判定し、
+    // 載っていない年度は「4〜8月: 前期 / 9〜12月: 後期 / 1〜3月: 前年の後期」の概算にフォールバックする
+    // （青学の後期開始は例年9月中旬なので、10月ではなく9月を境にする）。
     static func defaultTerm(now: Date = Date()) -> TermKey {
         let cal = Calendar(identifier: .gregorian)
         let y = cal.component(.year, from: now)
         let m = cal.component(.month, from: now)
-        if (4...9).contains(m) { return TermKey(year: y, semester: .spring) }
-        if (10...12).contains(m) { return TermKey(year: y, semester: .fall) }
+
+        func date(year: Int, month: Int, day: Int) -> Date? {
+            cal.date(from: DateComponents(year: year, month: month, day: day))
+        }
+
+        if let known = knownTermStartDays[y],
+           let fallStart = date(year: y, month: known.fallMonth, day: known.fallDay) {
+            if now >= fallStart { return TermKey(year: y, semester: .fall) }
+            if let springStart = date(year: y, month: known.springMonth, day: known.springDay),
+               now >= springStart {
+                return TermKey(year: y, semester: .spring)
+            }
+            // その年のデータはあるが春学期開始日より前 → 前年度の後期
+            return TermKey(year: y - 1, semester: .fall)
+        }
+
+        if (4...8).contains(m) { return TermKey(year: y, semester: .spring) }
+        if (9...12).contains(m) { return TermKey(year: y, semester: .fall) }
         return TermKey(year: y - 1, semester: .fall)
     }
 

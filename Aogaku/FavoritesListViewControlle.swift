@@ -117,7 +117,14 @@ final class FavoritesListViewController: UITableViewController {
                     let campus   = data["campus"]   as? String
                     let category = data["category"] as? String
                     let term     = data["term"]     as? String
-                    let credits  = data["credit"]   as? Int
+                    let credits: Int?
+                    if let i = data["credit"] as? Int {
+                        credits = i
+                    } else if let s = data["credit"] as? String, let i = Int(s) {
+                        credits = i
+                    } else {
+                        credits = nil
+                    }
 
                     pool.append(FavoriteItem(docID: id,
                                              name: name,

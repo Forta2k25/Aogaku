@@ -1151,6 +1151,7 @@ struct AogakuWidgetBundle: WidgetBundle {
         AogakuWidgets()          // 既存（ホーム画面ほか）
         AogakuLockNowWidget()    // ロック画面：進行中
         AogakuLockNextWidget()   // ロック画面：次の授業
+        LectureRecordingLiveActivity() // 授業ノート(AI)の録音中インジケータ
     }
 }
 

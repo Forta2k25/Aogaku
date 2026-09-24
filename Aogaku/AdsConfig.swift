@@ -39,13 +39,18 @@ extension Notification.Name {
 /// 本番IDを使う場合は Info.plist に `ADMOB_BANNER_UNIT_ID` を追加して埋めてください。
 enum AdsConfig {
 
-    /// 広告を出すか（UserDefaults "ads_enabled" があれば最優先）
+    /// 広告を出すか（UserDefaults "ads_enabled" があれば最優先。DEBUGビルドのみ）
     static var enabled: Bool {
 
+        #if DEBUG
         // UserDefaults に "ads_enabled" があればそれを優先（テストでOFFに便利）
+        // ※ このキーを書き込む/消すコードは AdsDebugState（DEBUGのみ）にしかないため、
+        //   読み取り側もDEBUGに限定する。Releaseビルドが古いDEBUGビルドの値を
+        //   引き継いで広告を消してしまうのを防ぐ。
         if UserDefaults.standard.object(forKey: "ads_enabled") != nil {
             return UserDefaults.standard.bool(forKey: "ads_enabled")
         }
+        #endif
         return AdsSwitchboard.shared.enabled
 
     }

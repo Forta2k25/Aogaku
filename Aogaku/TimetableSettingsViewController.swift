@@ -343,11 +343,12 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
         alert.addAction(UIAlertAction(title: "削除する", style: .destructive) { _ in
             TermStore.removeAssigned(for: term)
             // timetableCoursesDidReset → timetable VC が
-            //   ① メモリ上の assigned をクリア
+            //   ① メモリ上の assigned をクリア（今表示中の学期がこの term のときのみ）
             //   ② UserDefaults に空配列を保存
             //   ③ Firestore からも全削除（listener による復元を防ぐ）
-            // の3ステップを行う
-            NotificationCenter.default.post(name: .timetableCoursesDidReset, object: nil)
+            // の3ステップを行う。userInfo で対象学期を明示し、今表示中の学期を
+            // 誤って削除してしまわないようにする。
+            NotificationCenter.default.post(name: .timetableCoursesDidReset, object: nil, userInfo: ["term": term])
             let done = UIAlertController(
                 title: "削除完了",
                 message: "2026年度前期の登録授業を削除しました",

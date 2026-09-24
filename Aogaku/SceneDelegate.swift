@@ -115,6 +115,9 @@ private extension SceneDelegate {
         if typeName.contains("Assignment") || typeName.contains("Moodle") || title.contains("課題") || title.contains("Moodle") {
             return .moodle
         }
+        if typeName.contains("Career") || title.contains("インターン") {
+            return .career
+        }
         if typeName.contains("Circle") || title.contains("サークル") {
             return .circles
         }

@@ -5,3 +5,7 @@ build/
 **/*.xcuserstate
 **/xcschemes/xcschememanagement.plist
 status*/xcshareddata/
+
+# シラバススクレイピング用ログインセッション・出力（機密/生成物のためコミットしない）
+scripts/.aguinfo_state.json
+scripts/output/

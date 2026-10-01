@@ -66,6 +66,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
         DispatchQueue.main.async {
             DeepLinkRouter.processPendingPortalImport(window: win)
             DeepLinkRouter.processPendingGradesImport(window: win)
+            DeepLinkRouter.processPendingLectureMaterial(window: win)
         }
     }
     func sceneWillResignActive(_ scene: UIScene) {

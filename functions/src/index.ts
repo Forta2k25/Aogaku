@@ -1105,3 +1105,51 @@ ${photoText || "(なし)"}`;
       throw new functions.https.HttpsError("internal", "回答の生成に失敗しました");
     }
   });
+
+/**
+ * 【調査用・一時関数】全ユーザーのtimetableを走査し、指定した授業名+教室に一致する
+ * cellを持つユーザーを列挙する。用が済んだらこの関数はコードごと削除しデプロイし直すこと。
+ */
+export const debugFindTimetableMatches = functions
+  .region(region)
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .https.onRequest(async (req, res) => {
+    if (req.query.secret !== "aogaku-debug-2026") {
+      res.status(403).send("forbidden");
+      return;
+    }
+    const titleQuery = String(req.query.title ?? "").toLowerCase();
+    const roomQuery = String(req.query.room ?? "");
+
+    const snap = await db.collectionGroup("timetable").get();
+    type Match = { uid: string; name: string; docId: string; cellKey: string; title: string; room: string; teacher: string };
+    const matches: Match[] = [];
+
+    for (const doc of snap.docs) {
+      const uid = doc.ref.parent.parent?.id ?? "";
+      const cells = doc.data().cells as Record<string, any> | undefined;
+      if (!cells) continue;
+      for (const [cellKey, cell] of Object.entries(cells)) {
+        const title = String(cell?.title ?? "");
+        const room = String(cell?.room ?? "");
+        if (
+          (!titleQuery || title.toLowerCase().includes(titleQuery)) &&
+          (!roomQuery || room.includes(roomQuery))
+        ) {
+          matches.push({ uid, name: "", docId: doc.id, cellKey, title, room, teacher: String(cell?.teacher ?? "") });
+        }
+      }
+    }
+
+    const uniqueUids = Array.from(new Set(matches.map((m) => m.uid)));
+    const nameByUid = new Map<string, string>();
+    await Promise.all(
+      uniqueUids.map(async (uid) => {
+        const userDoc = await db.collection("users").doc(uid).get();
+        nameByUid.set(uid, String(userDoc.get("name") ?? ""));
+      })
+    );
+    matches.forEach((m) => { m.name = nameByUid.get(m.uid) ?? ""; });
+
+    res.json({ count: matches.length, matches });
+  });

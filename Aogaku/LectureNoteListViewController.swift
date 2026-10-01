@@ -2,12 +2,15 @@
 //  LectureNoteListViewController.swift
 //  Aogaku
 //
-//  授業AI: この授業が覚えている講義内容の一覧
+//  授業ノート: この授業に保存した写真・PDF・メモの一覧
 //
 
 import UIKit
+import PhotosUI
+import PDFKit
+import UniformTypeIdentifiers
 
-final class LectureNoteListViewController: UIViewController {
+final class LectureNoteListViewController: UIViewController, UIDocumentPickerDelegate {
 
     private let course: Course
     private let term: TermKey
@@ -31,15 +34,15 @@ final class LectureNoteListViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "\(dayPeriod)のAI"
+        title = "\(dayPeriod)のノート"
         view.backgroundColor = .systemBackground
-        let recordItem = UIBarButtonItem(
-            image: UIImage(systemName: "waveform"),
+        let addItem = UIBarButtonItem(
+            image: UIImage(systemName: "plus"),
             style: .plain,
             target: self,
-            action: #selector(recordTapped)
+            action: #selector(addTapped)
         )
-        recordItem.accessibilityLabel = "授業を聞かせる"
+        addItem.accessibilityLabel = "授業ノートを追加"
         let generateItem = UIBarButtonItem(
             image: UIImage(systemName: "sparkles"),
             style: .plain,
@@ -47,7 +50,7 @@ final class LectureNoteListViewController: UIViewController {
             action: #selector(generateTapped)
         )
         generateItem.accessibilityLabel = "リアペを作る"
-        navigationItem.rightBarButtonItems = [recordItem, generateItem]
+        navigationItem.rightBarButtonItems = [addItem, generateItem]
 
         tableView.translatesAutoresizingMaskIntoConstraints = false
         tableView.dataSource = self
@@ -56,7 +59,7 @@ final class LectureNoteListViewController: UIViewController {
         tableView.tableHeaderView = makeHeaderView()
         view.addSubview(tableView)
 
-        emptyLabel.text = "このAIはまだ授業を知りません。\n右上の波形ボタンから、最初の授業を聞かせてください。"
+        emptyLabel.text = "まだ授業ノートがありません。\n右上の＋から写真・PDF・メモを追加できます。"
         emptyLabel.font = .systemFont(ofSize: 14)
         emptyLabel.textColor = .secondaryLabel
         emptyLabel.numberOfLines = 0
@@ -84,7 +87,7 @@ final class LectureNoteListViewController: UIViewController {
         titleLabel.numberOfLines = 2
 
         let detailLabel = UILabel()
-        detailLabel.text = "このAIが覚えている授業"
+        detailLabel.text = "保存した写真・PDF・メモ"
         detailLabel.font = .systemFont(ofSize: 13, weight: .medium)
         detailLabel.textColor = .secondaryLabel
 
@@ -125,10 +128,25 @@ final class LectureNoteListViewController: UIViewController {
         }
     }
 
-    @objc private func recordTapped() {
-        let vc = LectureRecordingViewController(course: course, term: term, dayPeriod: dayPeriod, weekday: weekday)
-        let nav = UINavigationController(rootViewController: vc)
-        present(nav, animated: true)
+    @objc private func addTapped() {
+        let sheet = UIAlertController(title: "授業ノートを追加", message: nil, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "カメラで撮る", style: .default) { [weak self] _ in
+            self?.presentLectureCamera()
+        })
+        sheet.addAction(UIAlertAction(title: "写真から選ぶ", style: .default) { [weak self] _ in
+            self?.presentLecturePhotoLibrary()
+        })
+        sheet.addAction(UIAlertAction(title: "PDF / ファイルを選ぶ", style: .default) { [weak self] _ in
+            self?.presentDocumentPicker()
+        })
+        sheet.addAction(UIAlertAction(title: "メモを書く", style: .default) { [weak self] _ in
+            self?.presentMemoInput()
+        })
+        sheet.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            popover.barButtonItem = navigationItem.rightBarButtonItems?.first
+        }
+        present(sheet, animated: true)
     }
 
     // MARK: - 日付ごとの生成
@@ -155,20 +173,20 @@ final class LectureNoteListViewController: UIViewController {
     @objc private func generateTapped() {
         let groups = notesGroupedByDate()
         guard !groups.isEmpty else {
-            let alert = UIAlertController(title: "使える授業内容がありません", message: "先に授業を聞かせるか、資料を追加してください。", preferredStyle: .alert)
+            let alert = UIAlertController(title: "使える授業ノートがありません", message: "先に写真・PDF・メモを追加してください。", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             present(alert, animated: true)
             return
         }
 
-        let sheet = UIAlertController(title: "リアペを作る授業を選択", message: "その日の音声と資料をまとめて使います。", preferredStyle: .actionSheet)
+        let sheet = UIAlertController(title: "リアペを作る授業を選択", message: "その日の資料とメモをまとめて使います。", preferredStyle: .actionSheet)
         for group in groups {
             let dateStr = LectureNoteListViewController.dayFormatter.string(from: group.date)
             let hasAudio = group.notes.contains { !$0.transcriptText.isEmpty }
             let photoCount = group.notes.reduce(0) { $0 + ($1.photoText.isEmpty ? 0 : $1.photoText.components(separatedBy: "\n\n").count) }
             var detail: [String] = []
             if hasAudio { detail.append("録音あり") }
-            if photoCount > 0 { detail.append("撮影\(photoCount)枚") }
+            if photoCount > 0 { detail.append("資料\(photoCount)件") }
             let title = detail.isEmpty ? dateStr : "\(dateStr)(\(detail.joined(separator: "・")))"
             sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
                 self?.presentGeneration(for: group.notes)
@@ -189,12 +207,177 @@ final class LectureNoteListViewController: UIViewController {
         navigationController?.pushViewController(vc, animated: true)
     }
 
+    private func presentLectureCamera() {
+        let vc = LecturePhotoCaptureViewController()
+        vc.onFinish = { [weak self] texts in
+            guard let self, !texts.isEmpty else { return }
+            self.saveLectureMaterialText(texts.joined(separator: "\n\n"), successMessage: "写真を\(texts.count)枚追加しました")
+        }
+        present(vc, animated: true)
+    }
+
+    private func presentLecturePhotoLibrary() {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .images
+        configuration.selectionLimit = 10
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+
+    private func presentDocumentPicker() {
+        var types: [UTType] = [.pdf]
+        if #available(iOS 14.0, *) {
+            types.append(.plainText)
+        }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.delegate = self
+        picker.allowsMultipleSelection = false
+        present(picker, animated: true)
+    }
+
+    private func presentMemoInput() {
+        let alert = UIAlertController(title: "メモを書く", message: "この授業回のノートとして保存します。", preferredStyle: .alert)
+        alert.addTextField { textField in
+            textField.placeholder = "先生が強調していたこと、感想など"
+            textField.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        alert.addAction(UIAlertAction(title: "保存", style: .default) { [weak self, weak alert] _ in
+            guard let self,
+                  let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { return }
+            self.saveLectureMaterialText("[メモ]\n\(text)", successMessage: "メモを保存しました")
+        })
+        present(alert, animated: true)
+    }
+
+    private func saveLectureMaterialText(_ text: String, successMessage: String) {
+        let lectureDate = Date()
+        let sessionNumber = LectureSessionNumbering.sessionNumber(
+            for: lectureDate,
+            weekday: weekday,
+            term: term,
+            campus: LectureSessionNumbering.campus(for: course)
+        )
+        let note = LectureNote(
+            courseKey: LectureNote.courseKey(course: course, term: term),
+            courseTitle: course.title,
+            term: term.displayTitle,
+            dayPeriod: dayPeriod,
+            lectureDate: lectureDate,
+            durationSec: 0,
+            transcriptText: "",
+            photoText: text,
+            sessionNumber: sessionNumber,
+            status: .completed
+        )
+        Task {
+            do {
+                try await LectureNoteStore.shared.save(note)
+                await MainActor.run {
+                    self.reload()
+                    let alert = UIAlertController(title: successMessage, message: nil, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    self.present(alert, animated: true)
+                }
+            } catch {
+                await MainActor.run {
+                    let alert = UIAlertController(title: "授業ノートを保存できませんでした", message: error.localizedDescription, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    self.present(alert, animated: true)
+                }
+            }
+        }
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+        }
+
+        let text: String
+        if url.pathExtension.lowercased() == "pdf" {
+            text = extractPDFText(from: url)
+        } else {
+            text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            let alert = UIAlertController(title: "文字を読み取れませんでした", message: "テキストを含むPDFまたはテキストファイルを選んでください。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
+            return
+        }
+        saveLectureMaterialText("[\(url.lastPathComponent)]\n\(trimmed)", successMessage: "\(url.lastPathComponent)を追加しました")
+    }
+
+    private func extractPDFText(from url: URL) -> String {
+        guard let document = PDFDocument(url: url) else { return "" }
+        var pages: [String] = []
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index),
+                  let pageText = page.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !pageText.isEmpty else { continue }
+            pages.append(pageText)
+        }
+        return pages.joined(separator: "\n\n")
+    }
+
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "M月d日(E) HH:mm"
         f.locale = Locale(identifier: "ja_JP")
         return f
     }()
+}
+
+extension LectureNoteListViewController: PHPickerViewControllerDelegate {
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true) { [weak self] in
+            self?.importLecturePhotos(results)
+        }
+    }
+
+    private func importLecturePhotos(_ results: [PHPickerResult]) {
+        guard !results.isEmpty else { return }
+        let group = DispatchGroup()
+        let recognizedTexts = NSMutableArray(array: Array(repeating: "", count: results.count))
+        for (index, result) in results.enumerated() {
+            let provider = result.itemProvider
+            guard provider.canLoadObject(ofClass: UIImage.self) else { continue }
+            group.enter()
+            provider.loadObject(ofClass: UIImage.self) { object, _ in
+                guard let image = object as? UIImage else {
+                    group.leave()
+                    return
+                }
+                LecturePhotoOCR.recognizeText(in: image) { text in
+                    objc_sync_enter(recognizedTexts)
+                    recognizedTexts[index] = text
+                    objc_sync_exit(recognizedTexts)
+                    group.leave()
+                }
+            }
+        }
+
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            let texts = recognizedTexts.compactMap { $0 as? String }.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            guard !texts.isEmpty else {
+                let alert = UIAlertController(title: "文字を読み取れませんでした", message: "文字がはっきり写っている画像を選んでください。", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                self.present(alert, animated: true)
+                return
+            }
+            self.saveLectureMaterialText(texts.joined(separator: "\n\n"), successMessage: "写真を\(results.count)枚追加しました")
+        }
+    }
 }
 
 extension LectureNoteListViewController: UITableViewDataSource, UITableViewDelegate {

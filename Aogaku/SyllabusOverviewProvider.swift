@@ -8,9 +8,14 @@
 import Foundation
 
 enum SyllabusOverviewProvider {
+    private static var includesSyllabusContext = false
+
     /// SyllabusDataCache(CourseDetailViewControllerのシラバス表示が保存したもの)から
     /// 概要テキストを組み立てる。キャッシュが無ければ空文字を返す。
     static func overviewText(for course: Course, maxLength: Int = 4000) -> String {
+        // 写真/PDF/メモだけで生成品質を検証するため、一時的にシラバス文脈を渡さない。
+        guard includesSyllabusContext else { return "" }
+
         let rawURL = course.syllabusURL?.trimmingCharacters(in: .whitespacesAndNewlines)
         let cacheKey = (rawURL?.isEmpty == false) ? rawURL! : course.id
         guard let fields = SyllabusDataCache.shared.load(for: cacheKey), !fields.isEmpty else { return "" }

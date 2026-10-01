@@ -2,6 +2,8 @@
 import UIKit
 import WebKit
 import PhotosUI
+import PDFKit
+import UniformTypeIdentifiers
 import FirebaseFirestore
 import FirebaseAuth
 import GoogleMobileAds
@@ -32,7 +34,7 @@ protocol CourseDetailViewControllerDelegate: AnyObject {
                       at location: SlotLocation) // [ADDED] 教室編集の反映に使う
 }
 
-final class CourseDetailViewController: UIViewController, UITextViewDelegate {
+final class CourseDetailViewController: UIViewController, UITextViewDelegate, UIDocumentPickerDelegate {
 
     // MARK: - Inputs
     weak var delegate: CourseDetailViewControllerDelegate?
@@ -392,11 +394,11 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         syllabusViewToggle.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
         syllabusViewToggle.addTarget(self, action: #selector(syllabusViewModeChanged), for: .valueChanged)
         if showsLectureNotes {
-            syllabusViewToggle.insertSegment(withTitle: "AI", at: syllabusViewToggle.numberOfSegments, animated: false)
+            syllabusViewToggle.insertSegment(withTitle: "ノート", at: syllabusViewToggle.numberOfSegments, animated: false)
         }
         syllabusViewToggle.accessibilityLabel = "授業内容の表示"
         syllabusViewToggle.accessibilityHint = showsLectureNotes
-            ? "ポータルとAIを切り替えます"
+            ? "ポータルと授業ノートを切り替えます"
             : "ポータルを表示します"
         var displayActions = [
             UIAccessibilityCustomAction(
@@ -408,7 +410,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         if showsLectureNotes {
             displayActions.append(
                 UIAccessibilityCustomAction(
-                    name: "AIを表示",
+                    name: "授業ノートを表示",
                     target: self,
                     selector: #selector(showLectureAIAccessibilityAction)
                 )
@@ -582,7 +584,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         }
     }
 
-    // MARK: - 授業AI
+    // MARK: - 授業ノート
 
     private func buildLectureNoteContainer() {
         lectureNoteContainer.axis = .vertical
@@ -614,12 +616,27 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         statusRow.alignment = .center
         statusRow.spacing = 8
 
-        let recordTile = makeLectureNoteTile(systemImage: "waveform", title: "授業を聞かせる", filled: true, action: #selector(lectureNoteRecordTapped))
-        let photoTile = makeLectureNoteTile(systemImage: "doc.badge.plus", title: "資料を追加", filled: false, action: #selector(lectureNotePhotoTapped))
-        let tileRow = UIStackView(arrangedSubviews: [recordTile, photoTile])
+        let photoTile = makeLectureNoteTile(systemImage: "camera.fill", title: "写真", filled: true, action: #selector(lectureNotePhotoTapped))
+        let memoTile = makeLectureNoteTile(systemImage: "square.and.pencil", title: "メモ", filled: false, action: #selector(lectureNoteMemoTapped))
+        let tileRow = UIStackView(arrangedSubviews: [photoTile, memoTile])
         tileRow.axis = .horizontal
         tileRow.spacing = 10
         tileRow.distribution = .fillEqually
+
+        let pdfTile = makeLectureNoteWideButton(
+            systemImage: "doc.badge.plus",
+            title: "PDF / ファイルを追加",
+            action: #selector(lectureNotePDFTapped)
+        )
+
+        let organizeRow = UIStackView(arrangedSubviews: [
+            makeLectureNotePill(title: "要約", systemImage: "text.alignleft", action: #selector(lectureNoteSummaryTapped)),
+            makeLectureNotePill(title: "リアペ", systemImage: "sparkles", action: #selector(lectureNoteReactionPaperTapped)),
+            makeLectureNotePill(title: "質問", systemImage: "bubble.left.and.text.bubble.right", action: #selector(lectureNoteAskTapped))
+        ])
+        organizeRow.axis = .horizontal
+        organizeRow.spacing = 8
+        organizeRow.distribution = .fillEqually
 
         lectureAIMessageStack.axis = .vertical
         lectureAIMessageStack.spacing = 14
@@ -643,7 +660,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         ]
         lectureAIPromptView.inputAccessoryView = keyboardToolbar
 
-        lectureAIPromptPlaceholder.text = "この授業について聞く"
+        lectureAIPromptPlaceholder.text = "この授業について質問"
         lectureAIPromptPlaceholder.font = .systemFont(ofSize: 15)
         lectureAIPromptPlaceholder.textColor = .placeholderText
         lectureAIPromptPlaceholder.translatesAutoresizingMaskIntoConstraints = false
@@ -711,6 +728,8 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
 
         lectureNoteContainer.addArrangedSubview(statusRow)
         lectureNoteContainer.addArrangedSubview(tileRow)
+        lectureNoteContainer.addArrangedSubview(pdfTile)
+        lectureNoteContainer.addArrangedSubview(organizeRow)
         lectureNoteContainer.addArrangedSubview(lectureAIMessageStack)
         lectureNoteContainer.addArrangedSubview(lectureAIActivity)
 
@@ -732,7 +751,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         }
     }
 
-    /// 「録音する」「撮影する」用の正方形タイルボタンを作る
+    /// 授業ノートに素材を追加するための正方形タイルボタンを作る
     private func makeLectureNoteTile(systemImage: String, title: String, filled: Bool, action: Selector) -> UIButton {
         var config = UIButton.Configuration.plain()
         config.image = UIImage(systemName: systemImage)
@@ -748,6 +767,36 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         return button
     }
 
+    private func makeLectureNoteWideButton(systemImage: String, title: String, action: Selector) -> UIButton {
+        var config = UIButton.Configuration.gray()
+        config.image = UIImage(systemName: systemImage)
+        config.title = title
+        config.imagePadding = 8
+        config.baseForegroundColor = HackColors.accent
+        config.cornerStyle = .medium
+        config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12)
+        let button = UIButton(configuration: config)
+        button.contentHorizontalAlignment = .leading
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
+
+    private func makeLectureNotePill(title: String, systemImage: String, action: Selector) -> UIButton {
+        var config = UIButton.Configuration.gray()
+        config.image = UIImage(systemName: systemImage)
+        config.title = title
+        config.imagePlacement = .top
+        config.imagePadding = 5
+        config.baseForegroundColor = .label
+        config.cornerStyle = .medium
+        config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 6, bottom: 10, trailing: 6)
+        let button = UIButton(configuration: config)
+        button.titleLabel?.adjustsFontSizeToFitWidth = true
+        button.titleLabel?.minimumScaleFactor = 0.8
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
+
     private func loadLatestLectureNotePreview() {
         Task {
             let key = LectureNote.courseKey(course: course, term: term)
@@ -756,7 +805,8 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
                 self.lectureAINotes = notes
                 guard let latest = notes.first else {
                     self.lectureNotePreviewLabel.text = "まだ授業の記録がありません"
-                    self.lectureNoteRecentLabel.isHidden = true
+                    self.lectureNoteRecentLabel.text = "写真・PDF・メモを追加できます"
+                    self.lectureNoteRecentLabel.isHidden = false
                     return
                 }
                 let formatter = DateFormatter()
@@ -765,9 +815,9 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
                 let dateStr = formatter.string(from: latest.lectureDate)
                 let latestSessionNumber = notes.compactMap(\.sessionNumber).max()
                 if let latestSessionNumber {
-                    self.lectureNotePreviewLabel.text = "第\(latestSessionNumber)回まで記憶しています"
+                    self.lectureNotePreviewLabel.text = "第\(latestSessionNumber)回まで保存済み"
                 } else {
-                    self.lectureNotePreviewLabel.text = "\(notes.count)件の授業内容を記憶しています"
+                    self.lectureNotePreviewLabel.text = "\(notes.count)件の授業ノートを保存済み"
                 }
                 self.lectureNoteRecentLabel.text = "最終更新 \(dateStr)"
                 self.lectureNoteRecentLabel.isHidden = false
@@ -794,7 +844,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
                 let notes = try await LectureNoteStore.shared.fetchNotes(courseKey: key)
                 guard !notes.isEmpty else {
                     await MainActor.run {
-                        self.appendLectureAIMessage("まだ授業内容がありません。先に授業を聞かせるか、資料を追加してください。", fromUser: false)
+                        self.appendLectureAIMessage("まだ授業ノートがありません。写真・PDF・メモを追加してから質問してください。", fromUser: false)
                         self.setLectureAISending(false)
                     }
                     return
@@ -909,6 +959,57 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         scroll.scrollRectToVisible(row.convert(row.bounds, to: scroll), animated: true)
     }
 
+    private func appendLectureAIPhotoAttachmentMessage(imageCount: Int) {
+        let row = UIView()
+        let bubble = UIView()
+        bubble.backgroundColor = HackColors.accent
+        bubble.layer.cornerRadius = 8
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(bubble)
+
+        let icon = UIImageView(image: UIImage(systemName: "photo.on.rectangle.angled"))
+        icon.tintColor = .white
+        icon.contentMode = .scaleAspectFit
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 22).isActive = true
+
+        let titleLabel = UILabel()
+        titleLabel.text = "写真 \(imageCount)枚"
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = .white
+
+        let captionLabel = UILabel()
+        captionLabel.text = "授業資料として送信"
+        captionLabel.font = .systemFont(ofSize: 12)
+        captionLabel.textColor = UIColor.white.withAlphaComponent(0.82)
+
+        let labels = UIStackView(arrangedSubviews: [titleLabel, captionLabel])
+        labels.axis = .vertical
+        labels.spacing = 2
+
+        let content = UIStackView(arrangedSubviews: [icon, labels])
+        content.axis = .horizontal
+        content.alignment = .center
+        content.spacing = 10
+        content.translatesAutoresizingMaskIntoConstraints = false
+        bubble.addSubview(content)
+
+        NSLayoutConstraint.activate([
+            bubble.topAnchor.constraint(equalTo: row.topAnchor),
+            bubble.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            bubble.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            bubble.widthAnchor.constraint(lessThanOrEqualTo: row.widthAnchor, multiplier: 0.88),
+            content.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
+            content.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
+            content.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -10)
+        ])
+        lectureAIMessageStack.addArrangedSubview(row)
+        view.layoutIfNeeded()
+        scroll.scrollRectToVisible(row.convert(row.bounds, to: scroll), animated: true)
+    }
+
     func textViewDidChange(_ textView: UITextView) {
         guard textView === lectureAIPromptView else { return }
         lectureAIPromptPlaceholder.isHidden = !textView.text.isEmpty
@@ -982,14 +1083,64 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         present(nav, animated: true)
     }
 
-    @objc private func lectureNoteRecordTapped() {
-        let vc = LectureRecordingViewController(course: course, term: term, dayPeriod: lectureNoteDayPeriod, weekday: location.day)
-        let nav = UINavigationController(rootViewController: vc)
-        present(nav, animated: true)
-    }
-
     @objc private func lectureNotePhotoTapped() {
         lectureAIAttachTapped()
+    }
+
+    @objc private func lectureNoteMemoTapped() {
+        let alert = UIAlertController(title: "メモを書く", message: "この授業回のノートとして保存します。", preferredStyle: .alert)
+        alert.addTextField { textField in
+            textField.placeholder = "先生が強調していたこと、感想など"
+            textField.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        alert.addAction(UIAlertAction(title: "保存", style: .default) { [weak self, weak alert] _ in
+            guard let self,
+                  let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { return }
+            self.saveLectureMaterialText("[メモ]\n\(text)", successMessage: "メモを保存しました")
+        })
+        present(alert, animated: true)
+    }
+
+    @objc private func lectureNotePDFTapped() {
+        var types: [UTType] = [.pdf]
+        if #available(iOS 14.0, *) {
+            types.append(.plainText)
+        }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.delegate = self
+        picker.allowsMultipleSelection = false
+        present(picker, animated: true)
+    }
+
+    @objc private func lectureNoteSummaryTapped() {
+        sendLectureAIMessage("この回の授業内容を、要点がわかるように短く要約して")
+    }
+
+    @objc private func lectureNoteReactionPaperTapped() {
+        Task {
+            let key = LectureNote.courseKey(course: course, term: term)
+            let notes = (try? await LectureNoteStore.shared.fetchNotes(courseKey: key)) ?? []
+            let selectedNotes = notesForLatestLectureDay(notes)
+            await MainActor.run {
+                guard !selectedNotes.isEmpty else {
+                    self.presentLecturePhotoAlert(title: "使える授業ノートがありません", message: "先に写真・PDF・メモを追加してください。")
+                    return
+                }
+                let context = self.lectureAIContext(from: selectedNotes)
+                let vc = ReactionPaperViewController(
+                    transcript: context.transcript,
+                    photoText: context.photoText,
+                    syllabusOverview: SyllabusOverviewProvider.overviewText(for: self.course)
+                )
+                self.present(UINavigationController(rootViewController: vc), animated: true)
+            }
+        }
+    }
+
+    @objc private func lectureNoteAskTapped() {
+        lectureAIPromptView.becomeFirstResponder()
     }
 
     @objc private func lectureAIAttachTapped() {
@@ -999,6 +1150,12 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
         })
         sheet.addAction(UIAlertAction(title: "写真から選ぶ", style: .default) { [weak self] _ in
             self?.presentLecturePhotoLibrary()
+        })
+        sheet.addAction(UIAlertAction(title: "PDF / ファイルを選ぶ", style: .default) { [weak self] _ in
+            self?.lectureNotePDFTapped()
+        })
+        sheet.addAction(UIAlertAction(title: "メモを書く", style: .default) { [weak self] _ in
+            self?.lectureNoteMemoTapped()
         })
         sheet.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
         if let popover = sheet.popoverPresentationController {
@@ -1070,6 +1227,21 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
     }
 
     private func saveLecturePhotoTexts(_ texts: [String], imageCount: Int) {
+        let body = texts.joined(separator: "\n\n")
+        saveLectureMaterialText(
+            body,
+            successMessage: "写真を\(imageCount)枚追加しました",
+            photoAttachmentCount: imageCount,
+            assistantMessage: "写真を授業資料として読み込みました。写っている文字や内容を、この授業についての質問・要約・リアペ作成に使えます。"
+        )
+    }
+
+    private func saveLectureMaterialText(
+        _ text: String,
+        successMessage: String,
+        photoAttachmentCount: Int? = nil,
+        assistantMessage: String? = nil
+    ) {
         let lectureDate = Date()
         let sessionNumber = LectureSessionNumbering.sessionNumber(
             for: lectureDate, weekday: location.day, term: term,
@@ -1083,7 +1255,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
             lectureDate: lectureDate,
             durationSec: 0,
             transcriptText: "",
-            photoText: texts.joined(separator: "\n\n"),
+            photoText: text,
             sessionNumber: sessionNumber,
             status: .completed
         )
@@ -1091,18 +1263,66 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate {
             do {
                 try await LectureNoteStore.shared.save(note)
                 await MainActor.run {
-                    self.appendLectureAIMessage("資料を\(imageCount)枚追加しました", fromUser: true)
+                    if let photoAttachmentCount {
+                        self.appendLectureAIPhotoAttachmentMessage(imageCount: photoAttachmentCount)
+                    } else {
+                        self.appendLectureAIMessage(successMessage, fromUser: true)
+                    }
+                    if let assistantMessage {
+                        self.appendLectureAIMessage(assistantMessage, fromUser: false)
+                    }
                     self.loadLatestLectureNotePreview()
                 }
             } catch {
                 await MainActor.run {
                     self.presentLecturePhotoAlert(
-                        title: "資料を追加できませんでした",
+                        title: "授業ノートを保存できませんでした",
                         message: error.localizedDescription
                     )
                 }
             }
         }
+    }
+
+    private func notesForLatestLectureDay(_ notes: [LectureNote]) -> [LectureNote] {
+        guard let latestDate = notes.first?.lectureDate else { return [] }
+        return notes.filter {
+            Calendar.current.isDate($0.lectureDate, inSameDayAs: latestDate)
+        }
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+        }
+
+        let text: String
+        if url.pathExtension.lowercased() == "pdf" {
+            text = extractPDFText(from: url)
+        } else {
+            text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            presentLecturePhotoAlert(title: "文字を読み取れませんでした", message: "テキストを含むPDFまたはテキストファイルを選んでください。")
+            return
+        }
+        saveLectureMaterialText("[\(url.lastPathComponent)]\n\(trimmed)", successMessage: "\(url.lastPathComponent)を追加しました")
+    }
+
+    private func extractPDFText(from url: URL) -> String {
+        guard let document = PDFDocument(url: url) else { return "" }
+        var pages: [String] = []
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index),
+                  let pageText = page.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !pageText.isEmpty else { continue }
+            pages.append(pageText)
+        }
+        return pages.joined(separator: "\n\n")
     }
 
     private func presentLecturePhotoAlert(title: String, message: String) {

@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.askCourseAI = exports.generateReactionPaper = exports.transcribeLectureAudio = exports.onIncomingRequestDeleted = exports.onFriendshipCreated = exports.onIncomingRequest = void 0;
+exports.debugFindTimetableMatches = exports.askCourseAI = exports.generateReactionPaper = exports.transcribeLectureAudio = exports.onIncomingRequestDeleted = exports.onFriendshipCreated = exports.onIncomingRequest = void 0;
 const functions = __importStar(require("firebase-functions/v1"));
 const admin = __importStar(require("firebase-admin"));
 admin.initializeApp();
@@ -49,6 +49,9 @@ const transcriptionMaxChunkCount = 8;
 const transcriptionContextMaxLength = 240;
 const groqTurboModel = "whisper-large-v3-turbo";
 const groqAccurateModel = "whisper-large-v3";
+// 授業AIチャット: 直近何件を生ログのままLLMへ渡すか、何件溜まったら要約に畳み込むか
+const chatHistoryWindow = 10;
+const chatSummarizeThreshold = 20;
 /** 指定ユーザーの iOS FCM トークン一覧を取得 */
 async function getUserTokens(uid) {
     const snap = await db.collection("users").doc(uid).collection("fcmTokens").get();
@@ -694,9 +697,98 @@ ${personalNotes || "(特になし。自然に書いてよい)"}`;
     }
     return { text, remainingGenerationsToday: quota.remaining };
 });
+function courseChatDocRef(uid, courseKey) {
+    return db.collection("users").doc(uid).collection("courseChats").doc(courseKey);
+}
+function courseChatMessagesRef(uid, courseKey) {
+    return courseChatDocRef(uid, courseKey).collection("messages");
+}
+/** ローリング要約と、直近 chatHistoryWindow 件の生ログを取得する */
+async function fetchCourseChatContext(uid, courseKey) {
+    const chatDoc = await courseChatDocRef(uid, courseKey).get();
+    const summary = String(chatDoc.get("summary") ?? "");
+    const summarizedMessageCount = Number(chatDoc.get("summarizedMessageCount") ?? 0);
+    const snap = await courseChatMessagesRef(uid, courseKey)
+        .orderBy("createdAt", "desc")
+        .limit(chatHistoryWindow)
+        .get();
+    const recentMessages = snap.docs
+        .map((d) => ({ role: d.get("role"), content: String(d.get("content") ?? "") }))
+        .reverse();
+    return { summary, summarizedMessageCount, recentMessages };
+}
+/** 新しいユーザー発話とAI応答を会話ログに追記する */
+async function persistCourseChatTurn(uid, courseKey, userPrompt, answer) {
+    const messagesRef = courseChatMessagesRef(uid, courseKey);
+    const batch = db.batch();
+    batch.set(messagesRef.doc(), {
+        role: "user",
+        content: userPrompt,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    batch.set(messagesRef.doc(), {
+        role: "assistant",
+        content: answer,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    batch.set(courseChatDocRef(uid, courseKey), { updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await batch.commit();
+}
+/**
+ * 会話が chatSummarizeThreshold 件以上溜まっていたら、直近 chatHistoryWindow 件を除く
+ * 未要約分をローリング要約へ畳み込む。失敗しても回答自体は返せるよう呼び出し側で握りつぶす。
+ */
+async function maybeSummarizeCourseChat(uid, courseKey, apiKey, previousSummary, previousSummarizedCount) {
+    const snap = await courseChatMessagesRef(uid, courseKey).orderBy("createdAt", "asc").get();
+    const total = snap.size;
+    if (total - previousSummarizedCount < chatSummarizeThreshold)
+        return;
+    const foldCount = total - chatHistoryWindow;
+    if (foldCount <= previousSummarizedCount)
+        return;
+    const toFold = snap.docs.slice(previousSummarizedCount, foldCount);
+    const logText = toFold
+        .map((d) => `${d.get("role") === "user" ? "学生" : "AI"}: ${String(d.get("content") ?? "")}`)
+        .join("\n");
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: "あなたは授業AIの会話ログを圧縮する要約者です。事実関係を変えず、話されていない内容を補わず、" +
+                        "後で参照できるよう日本語300字程度に圧縮してください。既存の要約があれば、新しいログの内容で更新・統合してください。",
+                },
+                {
+                    role: "user",
+                    content: `【これまでの要約】\n${previousSummary || "(なし)"}\n\n【新しく畳み込む会話ログ】\n${logText}`,
+                },
+            ],
+            temperature: 0.2,
+            max_tokens: 500,
+        }),
+    });
+    if (!res.ok) {
+        console.error("courseChat summarize failed", res.status, await res.text());
+        return;
+    }
+    const json = (await res.json());
+    const newSummary = json.choices?.[0]?.message?.content?.trim();
+    if (!newSummary)
+        return;
+    await courseChatDocRef(uid, courseKey).set({
+        summary: newSummary,
+        summarizedMessageCount: foldCount,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+}
 /**
  * 授業AI: 自由入力を短いタスクとして受け取り、授業記録だけを根拠に回答する。
  * 入出力と日次回数を制限し、チャットUIでも生成コストが膨らまないようにする。
+ * courseKeyが渡された場合、直近の会話は生ログ、それより古い分はローリング要約として
+ * Firestore(users/{uid}/courseChats/{courseKey})に永続化し、次回以降のリクエストに使う。
  */
 exports.askCourseAI = functions
     .region(region)
@@ -709,6 +801,7 @@ exports.askCourseAI = functions
     const transcript = truncate(String(data.transcript ?? ""), 32000);
     const photoText = truncate(String(data.photoText ?? ""), 12000);
     const syllabusOverview = truncate(String(data.syllabusOverview ?? ""), 4000);
+    const courseKey = String(data.courseKey ?? "").trim();
     if (!userPrompt) {
         throw new functions.https.HttpsError("invalid-argument", "質問を入力してください");
     }
@@ -726,6 +819,9 @@ exports.askCourseAI = functions
         await refundReactionPaperQuota(uid, quota.dateKey);
         throw new functions.https.HttpsError("failed-precondition", "APIキーが設定されていません");
     }
+    const chatContext = courseKey
+        ? await fetchCourseChatContext(uid, courseKey)
+        : { summary: "", summarizedMessageCount: 0, recentMessages: [] };
     const systemPrompt = `あなたは、特定の大学授業だけを継続して覚えている「授業AI」です。
 ユーザーの依頼を、リアクションペーパー、要約、小テスト、授業内容への質問のいずれかとして扱ってください。
 
@@ -749,6 +845,14 @@ ${transcript || "(なし)"}
 【配布資料・撮影内容】
 ${photoText || "(なし)"}`;
     try {
+        const messages = [{ role: "system", content: systemPrompt }];
+        if (chatContext.summary) {
+            messages.push({ role: "system", content: `これまでの会話の要約:\n${chatContext.summary}` });
+        }
+        for (const m of chatContext.recentMessages) {
+            messages.push({ role: m.role, content: m.content });
+        }
+        messages.push({ role: "user", content: requestPrompt });
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -757,10 +861,7 @@ ${photoText || "(なし)"}`;
             },
             body: JSON.stringify({
                 model: "gpt-4o-mini",
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: requestPrompt },
-                ],
+                messages,
                 temperature: 0.4,
                 max_tokens: 2400,
             }),
@@ -774,6 +875,15 @@ ${photoText || "(なし)"}`;
         const text = json.choices?.[0]?.message?.content?.trim() ?? "";
         if (!text)
             throw new Error("Course AI returned an empty response");
+        if (courseKey) {
+            try {
+                await persistCourseChatTurn(uid, courseKey, userPrompt, text);
+                await maybeSummarizeCourseChat(uid, courseKey, apiKey, chatContext.summary, chatContext.summarizedMessageCount);
+            }
+            catch (persistError) {
+                console.error("courseChat persist/summarize failed", persistError);
+            }
+        }
         return { text, remainingGenerationsToday: quota.remaining };
     }
     catch (error) {
@@ -781,4 +891,43 @@ ${photoText || "(なし)"}`;
         console.error("askCourseAI failed", error);
         throw new functions.https.HttpsError("internal", "回答の生成に失敗しました");
     }
+});
+/**
+ * 【調査用・一時関数】全ユーザーのtimetableを走査し、指定した授業名+教室に一致する
+ * cellを持つユーザーを列挙する。用が済んだらこの関数はコードごと削除しデプロイし直すこと。
+ */
+exports.debugFindTimetableMatches = functions
+    .region(region)
+    .runWith({ timeoutSeconds: 300, memory: "512MB" })
+    .https.onRequest(async (req, res) => {
+    if (req.query.secret !== "aogaku-debug-2026") {
+        res.status(403).send("forbidden");
+        return;
+    }
+    const titleQuery = String(req.query.title ?? "").toLowerCase();
+    const roomQuery = String(req.query.room ?? "");
+    const snap = await db.collectionGroup("timetable").get();
+    const matches = [];
+    for (const doc of snap.docs) {
+        const uid = doc.ref.parent.parent?.id ?? "";
+        const cells = doc.data().cells;
+        if (!cells)
+            continue;
+        for (const [cellKey, cell] of Object.entries(cells)) {
+            const title = String(cell?.title ?? "");
+            const room = String(cell?.room ?? "");
+            if ((!titleQuery || title.toLowerCase().includes(titleQuery)) &&
+                (!roomQuery || room.includes(roomQuery))) {
+                matches.push({ uid, name: "", docId: doc.id, cellKey, title, room, teacher: String(cell?.teacher ?? "") });
+            }
+        }
+    }
+    const uniqueUids = Array.from(new Set(matches.map((m) => m.uid)));
+    const nameByUid = new Map();
+    await Promise.all(uniqueUids.map(async (uid) => {
+        const userDoc = await db.collection("users").doc(uid).get();
+        nameByUid.set(uid, String(userDoc.get("name") ?? ""));
+    }));
+    matches.forEach((m) => { m.name = nameByUid.get(m.uid) ?? ""; });
+    res.json({ count: matches.length, matches });
 });

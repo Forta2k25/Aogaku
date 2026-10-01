@@ -9,15 +9,26 @@
 //
 
 import UIKit
+import PDFKit
 import UniformTypeIdentifiers
 
-final class ActionViewController: UIViewController {
+final class ActionViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
 
     // MARK: - UI
 
     private let indicator = UIActivityIndicatorView(style: .large)
     private let statusLabel  = UILabel()   // メインステータス（大きめ）
     private let detailLabel  = UILabel()   // サブ説明（小さめ・グレー）
+    private let tableView = UITableView(frame: .zero, style: .insetGrouped)
+    private let sessionStepper = UIStepper()
+    private let sessionLabel = UILabel()
+    private let saveButton = UIButton(type: .system)
+    private var stackCenterYConstraint: NSLayoutConstraint?
+
+    private var sharedPDF: SharedLectureMaterial?
+    private var timetableCourses: [ShareCourseOption] = []
+    private var selectedCourseIndex: Int?
+    private var selectedSessionNumber = 1
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -52,9 +63,11 @@ final class ActionViewController: UIViewController {
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
 
+        let centerY = stack.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+        stackCenterYConstraint = centerY
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            centerY,
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 28),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -28),
         ])
@@ -63,6 +76,10 @@ final class ActionViewController: UIViewController {
     // MARK: - Data Processing
 
     private func processExtensionData() {
+        if processPDFIfAvailable() {
+            return
+        }
+
         guard
             let item     = extensionContext?.inputItems.first as? NSExtensionItem,
             let provider = item.attachments?.first,
@@ -132,6 +149,325 @@ final class ActionViewController: UIViewController {
                 self.openMainApp(with: resolvedPayload)
             }
         }
+    }
+
+    // MARK: - PDF / File Sharing
+
+    private func processPDFIfAvailable() -> Bool {
+        guard
+            let item = extensionContext?.inputItems.first as? NSExtensionItem,
+            let providers = item.attachments
+        else {
+            return false
+        }
+
+        if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) }) {
+            statusLabel.text = "PDFを読み込んでいます..."
+            detailLabel.text = "保存先の授業を選べるように準備しています"
+            provider.loadFileRepresentation(forTypeIdentifier: UTType.pdf.identifier) { [weak self] url, error in
+                let material = url.flatMap { self?.sharedMaterial(from: $0) }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if let error {
+                        self.finishWithError(error.localizedDescription)
+                        return
+                    }
+                    guard url != nil else {
+                        self.finishWithError("PDFを受け取れませんでした")
+                        return
+                    }
+                    guard let material else {
+                        self.finishWithError("PDFを読み込めませんでした")
+                        return
+                    }
+                    self.prepareSharedPDF(material)
+                }
+            }
+            return true
+        }
+
+        if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) {
+            statusLabel.text = "ファイルを読み込んでいます..."
+            detailLabel.text = "保存先の授業を選べるように準備しています"
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, error in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if let error {
+                        self.finishWithError(error.localizedDescription)
+                        return
+                    }
+                    guard let url = item as? URL, url.pathExtension.lowercased() == "pdf" else {
+                        self.finishWithError("PDFファイルを選んでください")
+                        return
+                    }
+                    self.prepareSharedPDF(self.sharedMaterial(from: url))
+                }
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private func sharedMaterial(from url: URL) -> SharedLectureMaterial {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess { url.stopAccessingSecurityScopedResource() }
+        }
+        return SharedLectureMaterial(fileName: url.lastPathComponent, text: extractPDFText(from: url))
+    }
+
+    private func prepareSharedPDF(_ material: SharedLectureMaterial) {
+        let text = material.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            finishWithError("PDFから文字を読み取れませんでした")
+            return
+        }
+
+        sharedPDF = SharedLectureMaterial(fileName: material.fileName, text: text)
+        timetableCourses = loadShareCourseOptions()
+        guard !timetableCourses.isEmpty else {
+            finishWithError("時間割の授業が見つかりませんでした\n一度アプリを開いて時間割を表示してください")
+            return
+        }
+        selectedCourseIndex = 0
+        selectedSessionNumber = defaultSessionNumber()
+        showPDFSaveUI()
+    }
+
+    private func extractPDFText(from url: URL) -> String {
+        guard let document = PDFDocument(url: url) else { return "" }
+        var pages: [String] = []
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index),
+                  let text = page.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { continue }
+            pages.append(text)
+        }
+        return pages.joined(separator: "\n\n")
+    }
+
+    private func showPDFSaveUI() {
+        indicator.stopAnimating()
+        indicator.isHidden = true
+        statusLabel.text = "授業ノートに保存"
+        detailLabel.text = sharedPDF?.fileName ?? "PDF"
+        stackCenterYConstraint?.isActive = false
+
+        sessionLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        sessionLabel.textColor = .label
+        sessionLabel.textAlignment = .center
+        sessionLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        sessionStepper.minimumValue = 1
+        sessionStepper.maximumValue = 30
+        sessionStepper.value = Double(selectedSessionNumber)
+        sessionStepper.addTarget(self, action: #selector(sessionStepperChanged), for: .valueChanged)
+        sessionStepper.translatesAutoresizingMaskIntoConstraints = false
+
+        saveButton.configuration = .filled()
+        saveButton.configuration?.title = "この授業に保存"
+        saveButton.configuration?.cornerStyle = .medium
+        saveButton.addTarget(self, action: #selector(saveSharedPDFTapped), for: .touchUpInside)
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(tableView)
+        view.addSubview(sessionLabel)
+        view.addSubview(sessionStepper)
+        view.addSubview(saveButton)
+
+        updateSessionLabel()
+        updateSaveButton()
+
+        NSLayoutConstraint.activate([
+            tableView.topAnchor.constraint(equalTo: detailLabel.bottomAnchor, constant: 12),
+            statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 18),
+            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableView.bottomAnchor.constraint(equalTo: sessionLabel.topAnchor, constant: -12),
+
+            sessionLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            sessionLabel.centerYAnchor.constraint(equalTo: sessionStepper.centerYAnchor),
+
+            sessionStepper.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            sessionStepper.bottomAnchor.constraint(equalTo: saveButton.topAnchor, constant: -14),
+
+            saveButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            saveButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            saveButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            saveButton.heightAnchor.constraint(equalToConstant: 48)
+        ])
+    }
+
+    @objc private func sessionStepperChanged() {
+        selectedSessionNumber = Int(sessionStepper.value)
+        updateSessionLabel()
+    }
+
+    private func updateSessionLabel() {
+        sessionLabel.text = "第\(selectedSessionNumber)回として保存"
+    }
+
+    private func updateSaveButton() {
+        saveButton.isEnabled = selectedCourseIndex != nil
+    }
+
+    private func defaultSessionNumber() -> Int {
+        let calendar = Calendar(identifier: .gregorian)
+        let month = calendar.component(.month, from: Date())
+        if (4...8).contains(month) {
+            return max(1, min(15, calendar.component(.weekOfYear, from: Date()) - 14))
+        }
+        return max(1, min(15, calendar.component(.weekOfYear, from: Date()) - 37))
+    }
+
+    @objc private func saveSharedPDFTapped() {
+        guard
+            let material = sharedPDF,
+            let selectedCourseIndex,
+            timetableCourses.indices.contains(selectedCourseIndex)
+        else {
+            return
+        }
+
+        let selected = timetableCourses[selectedCourseIndex]
+        let payload = PendingLectureMaterialPayload(
+            fileName: material.fileName,
+            text: material.text,
+            courseID: selected.course.id,
+            courseFirestoreDocID: selected.course.firestoreDocID,
+            courseTitle: selected.course.title,
+            courseCampus: selected.course.campus,
+            dayPeriod: selected.dayPeriod,
+            weekday: selected.weekday,
+            termYear: selected.termYear,
+            termSemester: selected.termSemester,
+            termDisplayTitle: selected.termDisplayTitle,
+            sessionNumber: selectedSessionNumber
+        )
+
+        guard let data = try? JSONEncoder().encode(payload) else {
+            finishWithError("保存データの作成に失敗しました")
+            return
+        }
+
+        let defaults = UserDefaults(suiteName: "group.jp.forta.Aogaku")
+        defaults?.set(data, forKey: "pendingLectureMaterial")
+        defaults?.synchronize()
+
+        statusLabel.text = "保存中..."
+        detailLabel.text = "\(selected.course.title) 第\(selectedSessionNumber)回"
+        tableView.isHidden = true
+        saveButton.isHidden = true
+        sessionStepper.isHidden = true
+        sessionLabel.isHidden = true
+        indicator.isHidden = false
+        indicator.startAnimating()
+
+        let url = URL(string: "aogaku://lecture-material")!
+        extensionContext?.open(url) { [weak self] success in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.indicator.stopAnimating()
+                if success {
+                    self.extensionContext?.completeRequest(returningItems: nil)
+                } else {
+                    self.statusLabel.text = "保存準備ができました"
+                    self.detailLabel.text = "青山ハックを開くと授業ノートに保存されます"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                        self?.extensionContext?.completeRequest(returningItems: nil)
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadShareCourseOptions() -> [ShareCourseOption] {
+        guard let defaults = UserDefaults(suiteName: "group.jp.forta.Aogaku") else { return [] }
+        let selectedTermKey = defaults.string(forKey: "tt.term") ?? defaultTermStorageKey()
+        let term = parseTerm(from: selectedTermKey)
+        let dayCount = max(defaults.integer(forKey: "tt.days"), 5)
+        let periodCount = max(defaults.integer(forKey: "tt.periods"), 5)
+        let key = "tt.assigned.\(selectedTermKey)"
+        guard let data = defaults.data(forKey: key) else { return [] }
+
+        let coursesWithSlots: [(Int, ActionCourse)]
+        if let decoded = try? JSONDecoder().decode([ActionCourse?].self, from: data) {
+            coursesWithSlots = decoded.enumerated().compactMap { index, course in
+                course.map { (index, $0) }
+            }
+        } else if let decoded = try? JSONDecoder().decode([ActionCourse].self, from: data) {
+            coursesWithSlots = decoded.enumerated().map { ($0.offset, $0.element) }
+        } else {
+            return []
+        }
+
+        return coursesWithSlots.compactMap { index, course in
+            let day = index % dayCount
+            let period = index / dayCount + 1
+            guard period <= periodCount else { return nil }
+            let dayName = ["月", "火", "水", "木", "金", "土"].indices.contains(day)
+                ? ["月", "火", "水", "木", "金", "土"][day]
+                : "?"
+            return ShareCourseOption(
+                course: course,
+                dayPeriod: "\(dayName)\(period)",
+                weekday: day,
+                termYear: term.year,
+                termSemester: term.semester,
+                termDisplayTitle: "\(term.year)年\(term.semester)"
+            )
+        }
+        .filter { !$0.course.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        .sorted { lhs, rhs in
+            if lhs.weekday != rhs.weekday { return lhs.weekday < rhs.weekday }
+            return lhs.dayPeriod < rhs.dayPeriod
+        }
+    }
+
+    private func parseTerm(from storageKey: String) -> (year: Int, semester: String) {
+        let fallback = defaultTermParts()
+        let tail = storageKey.replacingOccurrences(of: "assignedCourses.", with: "")
+        let parts = tail.split(separator: "_", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let year = Int(parts[0]) else { return fallback }
+        return (year, parts[1])
+    }
+
+    private func defaultTermStorageKey() -> String {
+        let parts = defaultTermParts()
+        return "assignedCourses.\(parts.year)_\(parts.semester)"
+    }
+
+    private func defaultTermParts() -> (year: Int, semester: String) {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date()
+        let year = calendar.component(.year, from: now)
+        let month = calendar.component(.month, from: now)
+        if (4...8).contains(month) { return (year, "前期") }
+        if (9...12).contains(month) { return (year, "後期") }
+        return (year - 1, "後期")
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        timetableCourses.count
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        let option = timetableCourses[indexPath.row]
+        cell.textLabel?.text = option.course.title
+        cell.detailTextLabel?.text = "\(option.dayPeriod)・\(option.course.teacher)"
+        cell.accessoryType = indexPath.row == selectedCourseIndex ? .checkmark : .none
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        selectedCourseIndex = indexPath.row
+        tableView.reloadData()
+        updateSaveButton()
     }
 
     private func resolvePayload(from result: Any?) -> [String: Any]? {
@@ -493,4 +829,48 @@ final class ActionViewController: UIViewController {
             self?.extensionContext?.completeRequest(returningItems: nil)
         }
     }
+}
+
+private struct SharedLectureMaterial {
+    let fileName: String
+    let text: String
+}
+
+private struct ActionCourse: Codable {
+    let id: String
+    let title: String
+    let room: String
+    let teacher: String
+    let credits: Int?
+    let campus: String?
+    let category: String?
+    let syllabusURL: String?
+    let term: String?
+    let timeDay: String?
+    let periods: [Int]?
+    let firestoreDocID: String?
+}
+
+private struct ShareCourseOption {
+    let course: ActionCourse
+    let dayPeriod: String
+    let weekday: Int
+    let termYear: Int
+    let termSemester: String
+    let termDisplayTitle: String
+}
+
+private struct PendingLectureMaterialPayload: Codable {
+    let fileName: String
+    let text: String
+    let courseID: String
+    let courseFirestoreDocID: String?
+    let courseTitle: String
+    let courseCampus: String?
+    let dayPeriod: String
+    let weekday: Int
+    let termYear: Int
+    let termSemester: String
+    let termDisplayTitle: String
+    let sessionNumber: Int
 }

@@ -69,14 +69,6 @@ enum DeepLinkRouter {
             return true
         }
 
-        // ── 授業ノート資料取り込み ───────────────────────────────
-        if path.contains("lecture-material") {
-            DispatchQueue.main.async {
-                processPendingLectureMaterial(window: window)
-            }
-            return true
-        }
-
         // パス/ホストが timetable のときに反応
         guard path.contains("timetable") else { return false }
 
@@ -478,61 +470,6 @@ enum DeepLinkRouter {
         importGradesData(json, window: window)
     }
 
-    /// 共有シートから送られたPDF/ファイル資料を授業ノートとして保存する。
-    static func processPendingLectureMaterial(window: UIWindow?) {
-        let defaults = UserDefaults(suiteName: "group.jp.forta.Aogaku")
-        guard let data = defaults?.data(forKey: "pendingLectureMaterial") else { return }
-        defaults?.removeObject(forKey: "pendingLectureMaterial")
-        defaults?.synchronize()
-
-        guard let payload = try? JSONDecoder().decode(PendingLectureMaterialPayload.self, from: data) else {
-            presentSimpleAlert(
-                title: "授業ノートを保存できませんでした",
-                message: "共有された資料データを読み取れませんでした。",
-                window: window
-            )
-            return
-        }
-
-        let courseKeyBase = payload.courseFirestoreDocID ?? payload.courseID
-        let note = LectureNote(
-            courseKey: "\(courseKeyBase)_\(payload.termYear)_\(payload.termSemester)",
-            courseTitle: payload.courseTitle,
-            term: payload.termDisplayTitle,
-            dayPeriod: payload.dayPeriod,
-            lectureDate: Date(),
-            durationSec: 0,
-            transcriptText: "",
-            photoText: "[\(payload.fileName)]\n\(payload.text)",
-            sessionNumber: payload.sessionNumber,
-            status: .completed
-        )
-
-        Task {
-            do {
-                try await LectureNoteStore.shared.save(note)
-                await MainActor.run {
-                    if let tab = window?.rootViewController as? UITabBarController {
-                        tab.selectedIndex = 0
-                    }
-                    presentSimpleAlert(
-                        title: "授業ノートに保存しました",
-                        message: "\(payload.courseTitle)\n第\(payload.sessionNumber)回に \(payload.fileName) を追加しました。",
-                        window: window
-                    )
-                }
-            } catch {
-                await MainActor.run {
-                    presentSimpleAlert(
-                        title: "授業ノートを保存できませんでした",
-                        message: error.localizedDescription,
-                        window: window
-                    )
-                }
-            }
-        }
-    }
-
     private static func importGradesData(_ json: [String: Any], window: UIWindow?, showAlert: Bool = true) {
         let recordsRaw = json["grades"] as? [[String: Any]] ?? []
 
@@ -621,19 +558,4 @@ enum DeepLinkRouter {
         // 将来、曜日にスクロール等をしたい場合に備えて hook を用意
         // 例）tt.scrollTo(day: dayIndex) を用意して呼ぶ
     }
-}
-
-private struct PendingLectureMaterialPayload: Codable {
-    let fileName: String
-    let text: String
-    let courseID: String
-    let courseFirestoreDocID: String?
-    let courseTitle: String
-    let courseCampus: String?
-    let dayPeriod: String
-    let weekday: Int
-    let termYear: Int
-    let termSemester: String
-    let termDisplayTitle: String
-    let sessionNumber: Int
 }

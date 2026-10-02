@@ -44,6 +44,37 @@ enum LectureSessionNumbering {
         return count > 0 ? count : nil
     }
 
+    /// 指定した曜日・学期・キャンパスにおいて、date(前日など)までに実施された授業日を
+    /// 第1回から順に返す。「ノート」タブの授業回カードを自動生成するために使う。
+    static func sessionDates(upTo date: Date, weekday: Int, term: TermKey, campus: Campus) -> [Date] {
+        guard let termStart = termStartDate(for: term) else { return [] }
+
+        let cal = Calendar(identifier: .gregorian)
+        let tz = TimeZone(identifier: "Asia/Tokyo")!
+        var calWithTZ = cal
+        calWithTZ.timeZone = tz
+
+        let targetWeekday = weekday + 2
+        let startWeekday = calWithTZ.component(.weekday, from: termStart)
+        let offset = (targetWeekday - startWeekday + 7) % 7
+        guard var cursor = calWithTZ.date(byAdding: .day, value: offset, to: termStart) else { return [] }
+
+        let targetDay = calWithTZ.startOfDay(for: date)
+        let router = AcademicCalendarRouter()
+        var dates: [Date] = []
+
+        for _ in 0..<30 {
+            let day = calWithTZ.startOfDay(for: cursor)
+            if day > targetDay { break }
+            if router.category(of: day, campus: campus) == .classDay {
+                dates.append(day)
+            }
+            guard let next = calWithTZ.date(byAdding: .day, value: 7, to: cursor) else { break }
+            cursor = next
+        }
+        return dates
+    }
+
     static func campus(for course: Course) -> Campus {
         (course.campus?.contains("相模") == true) ? .sagamihara : .aoyama
     }

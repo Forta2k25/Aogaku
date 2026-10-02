@@ -63,6 +63,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
     
     //通知ボタンの消去
+    /// 基本は縦固定。無音カメラの表示中だけ横向きを許可する。
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        SilentCameraViewController.isActive ? .allButUpsideDown : .portrait
+    }
+
     func applicationDidBecomeActive(_ application: UIApplication) {
         application.applicationIconBadgeNumber = 0
         if #available(iOS 16.0, *) {

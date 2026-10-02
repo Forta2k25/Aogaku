@@ -35,6 +35,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
         }
 
         FirstLaunchAlertService.maybeShow()
+
+        // シラバス検索インデックスをここで先読みしておき、授業詳細画面を開いた時点では
+        // 既に準備完了(isReady)になっているようにして、ポータル表示の初回遅延を減らす。
+        if !LocalSyllabusIndex.shared.isReady {
+            LocalSyllabusIndex.shared.prepare()
+        }
     }
 
     func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
@@ -66,7 +72,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
         DispatchQueue.main.async {
             DeepLinkRouter.processPendingPortalImport(window: win)
             DeepLinkRouter.processPendingGradesImport(window: win)
-            DeepLinkRouter.processPendingLectureMaterial(window: win)
         }
     }
     func sceneWillResignActive(_ scene: UIScene) {

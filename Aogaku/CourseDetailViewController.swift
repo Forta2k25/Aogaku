@@ -1,9 +1,6 @@
 
 import UIKit
 import WebKit
-import PhotosUI
-import PDFKit
-import UniformTypeIdentifiers
 import FirebaseFirestore
 import FirebaseAuth
 import GoogleMobileAds
@@ -13,6 +10,23 @@ struct AttendanceCounts: Codable {
     var attended: Int
     var late: Int
     var absent: Int
+}
+
+/// 「ノート」タブの授業回カード(チャット内容は未実装のため回数と日付のみ保持)
+private struct NoteSessionCard {
+    /// チャットなどの保存キー。授業日(日本時間)を「1970年からの日数」にしたもの。休講・補講で番号が変わっても動かない。
+    let dayID: Int
+    /// 表示用の「第N回」。休講の日はnil。毎回、休講の印を除いて数え直す。
+    let number: Int?
+    let date: Date
+    let isCancelled: Bool
+    let isExtra: Bool
+}
+
+private enum NoteSortMode: String {
+    case session   // 授業が新しい順(新しい回が上)。保存値は従来どおり "session"
+    case oldest    // 授業が古い順(古い回が上)
+    case chat      // チャット順(最後に送信した順。チャットが無いものは下。同率は授業回順)
 }
 
 protocol CourseDetailViewControllerDelegate: AnyObject {
@@ -34,30 +48,141 @@ protocol CourseDetailViewControllerDelegate: AnyObject {
                       at location: SlotLocation) // [ADDED] 教室編集の反映に使う
 }
 
-final class CourseDetailViewController: UIViewController, UITextViewDelegate, UIDocumentPickerDelegate {
+final class CourseDetailViewController: UIViewController {
 
     // MARK: - Inputs
     weak var delegate: CourseDetailViewControllerDelegate?
     private let course: Course
     private let location: SlotLocation
     private let titleHeader = UIView()   // 緑の帯コンテナ
+    private let titleSubLabel = UILabel()   // チャット表示中だけ「第N回授業 · 9/29 火」を出す
+    private var titleLabelBottomConstraint: NSLayoutConstraint?
+    private var noteChatHeader: UIView?
+    private var noteChatEditingIndex: Int?
+    private let noteChatSendButton = UIButton(type: .system)
+    private weak var noteChatGuideLabel: UILabel?
+
+    /// ガイド文を、ゆっくり上下にふわふわ浮かせる。
+    private func startGuideFloating() {
+        guard let layer = noteChatGuideLabel?.layer else { return }
+        layer.removeAnimation(forKey: "float")
+        let float = CABasicAnimation(keyPath: "transform.translation.y")
+        float.fromValue = -5
+        float.toValue = 5
+        float.duration = 2.6
+        float.autoreverses = true
+        float.repeatCount = .infinity
+        float.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(float, forKey: "float")
+    }
+    /// 大きなカードが省略版(ヘッダーのボタン)に畳まれている状態か
+    private var noteChatActionsCompact = false
+    private var noteChatMorphing = false
+    private var noteLastSentAt: [Int: Date] = [:]
+    private let noteBackdrop = NoteBackdropView()
+    private var noteSchedule: [NoteSessionCard] = []
+    private var noteRecordingSession = 0
+
+    /// 録音ボタン(大きいカード/ヘッダーの省略版)ごとの、更新が必要な部品
+    private final class NoteUsageParts {
+        let remainingLabel = UILabel()
+        let bar = UsageBarView()
+        let waveform = WaveformView()
+        var idleViews: [UIView] = []
+        var recordingViews: [UIView] = []
+        var isCompact = false
+    }
+    private var noteUsageParts: [NoteUsageParts] = []
+
+    private static let noteBubbleBackground = UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0.16, green: 0.27, blue: 0.19, alpha: 1)
+            : UIColor(red: 0.79, green: 0.86, blue: 0.80, alpha: 1)
+    }
+    private static let noteBubbleText = UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0.74, green: 0.90, blue: 0.77, alpha: 1)
+            : UIColor(red: 0.16, green: 0.40, blue: 0.20, alpha: 1)
+    }
+
+    fileprivate static func timeText(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+    private let noteChatEditBanner = UIView()
+    private var noteChatEditBannerHeight: NSLayoutConstraint?
+    private let noteChatHeaderFade = NoteHeaderFadeView()
     private let showsAttendanceControls: Bool
     private let allowsCourseManagement: Bool
     private let showsEnrolledFriends: Bool
     private let showsMoodleAssignments: Bool
     private let showsLectureNotes: Bool
-    private let lectureNoteContainer = UIStackView()
-    private let lectureNotePreviewLabel = UILabel()
-    private let lectureNoteRecentLabel = UILabel()
-    private let lectureAIMessageStack = UIStackView()
-    private let lectureAIPromptView = UITextView()
-    private let lectureAIPromptPlaceholder = UILabel()
-    private let lectureAIComposer = UIView()
-    private let lectureAIAttachButton = UIButton(type: .system)
-    private let lectureAISendButton = UIButton(type: .system)
-    private let lectureAIActivity = UIActivityIndicatorView(style: .medium)
-    private var lectureAINotes: [LectureNote] = []
-    private var isLectureAISending = false
+    // セグメント直下の共有ヘッダー行: 「授業レビューを書く」(左) + ノート用の並び替え/資料ボタン(右)を同じ行に並べる
+    private let actionHeaderRow = UIStackView()
+
+    // MARK: - 授業ノート(タブの土台。チャット内容は未実装)
+    private let noteSection = UIStackView()
+    private let noteListContainer = UIStackView()
+    private let noteChatContainer = NoteChatStackView()
+    private let noteCardStack = UIStackView()
+    private let noteEmptyLabel = UILabel()
+    private let noteSortButton = UIButton(type: .system)
+    private let noteMoreButton = UIButton(type: .system)
+    private let noteAttachmentsButton = UIButton(type: .system)
+    private let noteChatBackButton = UIButton(type: .system)
+    private let noteChatAttachmentsButton = UIButton(type: .system)
+    private let noteMutedGreen = UIColor(red: 0x93/255.0, green: 0xbf/255.0, blue: 0xa0/255.0, alpha: 1)
+    private let noteDeepGreen = UIColor(red: 0/255, green: 120/255, blue: 87/255, alpha: 1)
+    private var noteShowsChatDetail = false
+    // 個別チャット画面: AIはまだ未実装。送信したメッセージをその場で吹き出し表示するだけの土台。
+    private let noteChatActionRow = UIStackView()
+    private let noteChatGuideContainer = UIView()
+    private let noteChatMessageStack = UIStackView()
+    private let noteChatTextField = UITextField()
+    /// チャットの1メッセージ。写真は表示用の縮小版と、送信用の高画質JPEGを両方持つ。
+    private enum NoteChatMessage {
+        case text(String)
+        case photos([CapturedPhoto])
+        case recording(url: URL, duration: TimeInterval)
+
+        var previewSymbol: String {
+            switch self {
+            case .text: return "text.bubble"
+            case .photos: return "photo"
+            case .recording: return "waveform"
+            }
+        }
+
+        var previewText: String {
+            switch self {
+            case .text(let t): return t
+            case .photos(let items): return "写真 \(items.count)枚"
+            case .recording(_, let duration): return "録音 \(CourseDetailViewController.timeText(duration))"
+            }
+        }
+    }
+    private var noteChatMessagesBySession: [Int: [NoteChatMessage]] = [:]
+    private var noteChatCurrentSession: Int = 0
+    private let noteChatCompactActions = UIStackView()
+    private var noteChatInputBar: UIView?
+    private var noteKeyboardOverlap: CGFloat = 0
+    private static let noteInputBarMinHeight: CGFloat = 46
+    private static let noteAttachmentThumb: CGFloat = 76
+    /// 送信前にメッセージ欄へ追加した写真(授業回ごと)
+    private var noteChatPendingBySession: [Int: CapturedPhotoSet] = [:]
+    /// 録音を止めたあと、送信前にメッセージ欄へ追加してある録音(授業回ごと)
+    private var noteChatPendingRecordingsBySession: [Int: [NoteRecordingResult]] = [:]
+    private let noteChatAttachmentScroll = UIScrollView()
+    private let noteChatAttachmentStack = UIStackView()
+    private var noteChatAttachmentHeight: NSLayoutConstraint?
+    private var noteChatAttachmentTopPad: NSLayoutConstraint?
+    private var noteSortMode: NoteSortMode {
+        get {
+            UserDefaults.standard.string(forKey: "note.sortMode.\(course.id)").flatMap(NoteSortMode.init(rawValue:)) ?? .session
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "note.sortMode.\(course.id)") }
+    }
 
     // MARK: - Color Picker
     private let colorKeys: [SlotColorKey] = [.blue, .green, .orange, .red, .teal, .gray, .purple]
@@ -96,12 +221,9 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
     private let syllabusDetailStack  = UIStackView()
     private var isSyllabusDetailOpen = false
     private var syllabusPageURL: URL?
-    private let syllabusViewToggle = UISegmentedControl(items: ["ポータル"])
+    private let syllabusViewToggle = PixelToggleControl(items: ["ポータル"])
     private var syllabusDisplayMode: Int {
-        get {
-            UserDefaults.standard.object(forKey: "syllabus.displayMode.v2") as? Int
-                ?? (showsLectureNotes ? 1 : 0)
-        }
+        get { UserDefaults.standard.object(forKey: "syllabus.displayMode.v2") as? Int ?? 0 }
         set { UserDefaults.standard.set(newValue, forKey: "syllabus.displayMode.v2") }
     }
     private var syllabusWebPageLoaded = false
@@ -230,34 +352,38 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         if showsMoodleAssignments {
             loadMoodleAssignments() // Moodle 課題
         }
+        scroll.keyboardDismissMode = .onDrag
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.startGuideFloating()   // バックグラウンドから戻ると、アニメーションが止まっていることがあるため
+        }
+        scroll.delegate = self
+        NotificationCenter.default.addObserver(self, selector: #selector(noteKeyboardWillChangeFrame(_:)),
+                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(noteKeyboardWillHide(_:)),
+                                               name: UIResponder.keyboardWillHideNotification, object: nil)
         setupAdBanner()
         NotificationCenter.default.addObserver(self, selector: #selector(onAdMobReady),
                                                name: .adMobReady, object: nil)
-        if showsLectureNotes {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(lectureAIKeyboardWillChangeFrame),
-                name: UIResponder.keyboardWillChangeFrameNotification,
-                object: nil
-            )
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(lectureAIKeyboardWillHide),
-                name: UIResponder.keyboardWillHideNotification,
-                object: nil
-            )
-        }
         if showsReview {
-            resolveReviewDocIDThenBuild()   // 常に先頭に表示（firestoreDocID未設定時はクエリで解決）
+            resolveReviewDocIDThenBuild()   // セグメント直下に表示（firestoreDocID未設定時はクエリで解決）
             if showsSyllabusActions {
                 loadAndBuildReviewSummary() // 公開後にサマリー追加
             }
         }
     }
     
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        view.endEditing(true)
+        if isBeingDismissed || isMovingFromParent {
+            // 授業詳細を閉じたら、録音と再生も止める(使用時間は加算される)
+            NoteRecorder.shared.stop()
+            NoteAudioPlayer.shared.stop()
+        }
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        if showsLectureNotes { loadLatestLectureNotePreview() }
         if #available(iOS 16.0, *),
            let sheet = sheetPresentationController {
             sheet.animateChanges { sheet.selectedDetentIdentifier = .large }
@@ -268,6 +394,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         loadBannerIfNeeded()
+        updateStickyNoteChatHeader()
     }
 
     // MARK: - Layout
@@ -279,6 +406,16 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         stack.translatesAutoresizingMaskIntoConstraints = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.contentInsetAdjustmentBehavior = .never
+        noteBackdrop.alpha = 0
+        noteBackdrop.isUserInteractionEnabled = false
+        noteBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(noteBackdrop)
+        NSLayoutConstraint.activate([
+            noteBackdrop.topAnchor.constraint(equalTo: view.topAnchor),
+            noteBackdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            noteBackdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            noteBackdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
         view.addSubview(scroll)
         scroll.addSubview(stack)
         
@@ -324,17 +461,34 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         titleLabel.text = course.title
         titleLabel.textColor = .white
         titleLabel.textAlignment = .center
-        titleLabel.font = .systemFont(ofSize: 28, weight: .bold)
-        titleLabel.numberOfLines = 2
+        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        titleLabel.numberOfLines = 1
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.75
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleHeader.addSubview(titleLabel)
-
+        titleSubLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        titleSubLabel.textColor = UIColor.white.withAlphaComponent(0.8)
+        titleSubLabel.textAlignment = .center
+        titleSubLabel.alpha = 0
+        titleSubLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleHeader.addSubview(titleSubLabel)
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: titleHeader.topAnchor, constant: 16),
-            titleLabel.leadingAnchor.constraint(equalTo: titleHeader.leadingAnchor, constant: 16),
-            titleLabel.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -16),
-            titleLabel.bottomAnchor.constraint(equalTo: titleHeader.bottomAnchor, constant: -16),
-            titleHeader.heightAnchor.constraint(greaterThanOrEqualToConstant: 72),
+            titleSubLabel.leadingAnchor.constraint(equalTo: titleHeader.leadingAnchor, constant: 52),
+            titleSubLabel.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -52),
+            titleSubLabel.bottomAnchor.constraint(equalTo: titleHeader.bottomAnchor, constant: -9)
+        ])
+
+        let titleLabelTopC = titleLabel.topAnchor.constraint(equalTo: titleHeader.topAnchor, constant: 12)
+        let titleLabelBottomC = titleLabel.bottomAnchor.constraint(equalTo: titleHeader.bottomAnchor, constant: -12)
+        titleLabelBottomConstraint = titleLabelBottomC
+        let titleHeaderMinHeightC = titleHeader.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        NSLayoutConstraint.activate([
+            titleLabelTopC,
+            titleLabel.leadingAnchor.constraint(equalTo: titleHeader.leadingAnchor, constant: 52),
+            titleLabel.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -52),
+            titleLabelBottomC,
+            titleHeaderMinHeightC,
             titleHeader.topAnchor.constraint(equalTo: headerContainer.topAnchor),
             titleHeader.leadingAnchor.constraint(equalTo: headerContainer.leadingAnchor),
             titleHeader.trailingAnchor.constraint(equalTo: headerContainer.trailingAnchor),
@@ -363,13 +517,12 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         }
 
         if showsAttendanceControls {
-            // 出欠カウンター
+            // 出欠カウンター（セグメントの直下に配置するため、stackへの追加はトグル構築後に行う）
             countersRow.axis         = .horizontal
             countersRow.alignment    = .fill
             countersRow.distribution = .fillEqually
             countersRow.spacing      = 8
             countersRow.translatesAutoresizingMaskIntoConstraints = false
-            stack.addArrangedSubview(countersRow)
 
             setupCounterButton(attendBtn, tag: 0, label: "出席")
             setupCounterButton(lateBtn,   tag: 1, label: "遅刻")
@@ -398,7 +551,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         }
         syllabusViewToggle.accessibilityLabel = "授業内容の表示"
         syllabusViewToggle.accessibilityHint = showsLectureNotes
-            ? "ポータルと授業ノートを切り替えます"
+            ? "ポータルとAIハックを切り替えます"
             : "ポータルを表示します"
         var displayActions = [
             UIAccessibilityCustomAction(
@@ -410,16 +563,31 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         if showsLectureNotes {
             displayActions.append(
                 UIAccessibilityCustomAction(
-                    name: "授業ノートを表示",
+                    name: "AIハックを表示",
                     target: self,
-                    selector: #selector(showLectureAIAccessibilityAction)
+                    selector: #selector(showNoteAccessibilityAction)
                 )
             )
         }
         syllabusViewToggle.accessibilityCustomActions = displayActions
         syllabusViewToggle.selectedSegmentIndex = min(syllabusDisplayMode, syllabusViewToggle.numberOfSegments - 1)
-        syllabusViewToggle.isHidden = !showsLectureNotes   // 授業ノートが無ければシラバスURLが判明してから表示
+        // ノートタブがあるときは常にトグルを即表示する(シラバス解決を待たせると
+        // 他のボタン群に対してだけ遅れて出現し、見た目のノイズになるため)。
+        // ノートタブが無い場合は、ポータル単体のセグメントが無意味にならないよう
+        // 従来通りシラバスURLが判明するまで隠す。
+        syllabusViewToggle.isHidden = !showsLectureNotes
         stack.addArrangedSubview(syllabusViewToggle)
+
+        // 「授業レビューを書く」(resolveReviewDocIDThenBuildで左端に非同期挿入)と、
+        // ノートの並び替え/資料ボタン(buildNoteSectionで右端に追加)を同じ行に並べる
+        actionHeaderRow.axis = .horizontal
+        actionHeaderRow.alignment = .center
+        actionHeaderRow.spacing = 8
+        stack.addArrangedSubview(actionHeaderRow)
+
+        if showsAttendanceControls {
+            stack.addArrangedSubview(countersRow)
+        }
 
         // ──── シラバスセクション（JS抽出のネイティブカード） ────
         syllabusSection.axis = .vertical
@@ -450,6 +618,12 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
             syllabusLoadingHint.bottomAnchor.constraint(equalTo: syllabusLoadingRow.bottomAnchor, constant: -14)
         ])
         syllabusSection.addArrangedSubview(syllabusLoadingRow)
+        if showsLectureNotes {
+            // トグルと同じタイミングで即表示する。loadSyllabus()が終わるまでの間、
+            // 空白ではなくスピナーが出ている状態にして「一瞬何も無い」フラッシュを防ぐ。
+            syllabusSection.isHidden = false
+            syllabusSpinner.startAnimating()
+        }
 
         // WebView（プロパティの webContainer を使用）
         webContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -468,9 +642,9 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         stack.addArrangedSubview(webContainer)
         webContainer.isHidden = true   // ポータルモード時のみ表示
 
-        // ──── 授業ノート（独自UI／ポータルと同じトグルの3番目のセグメント）────
+        // ──── ノート（授業回カード一覧の土台。チャット内容は未実装）────
         if showsLectureNotes {
-            buildLectureNoteContainer()
+            buildNoteSection()
         }
 
         if allowsCourseManagement {
@@ -584,752 +758,6 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         }
     }
 
-    // MARK: - 授業ノート
-
-    private func buildLectureNoteContainer() {
-        lectureNoteContainer.axis = .vertical
-        lectureNoteContainer.spacing = 12
-        lectureNoteContainer.isHidden = true
-        stack.addArrangedSubview(lectureNoteContainer)
-
-        lectureNotePreviewLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        lectureNotePreviewLabel.textColor = .secondaryLabel
-        lectureNotePreviewLabel.numberOfLines = 0
-        lectureNotePreviewLabel.text = "記録を読み込んでいます"
-
-        lectureNoteRecentLabel.font = .systemFont(ofSize: 12)
-        lectureNoteRecentLabel.textColor = .tertiaryLabel
-        lectureNoteRecentLabel.isHidden = true
-
-        let historyButton = UIButton(type: .system)
-        historyButton.setImage(UIImage(systemName: "clock.arrow.circlepath"), for: .normal)
-        historyButton.accessibilityLabel = "授業の記録を見る"
-        historyButton.addTarget(self, action: #selector(lectureNoteSeeAllTapped), for: .touchUpInside)
-        historyButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
-        historyButton.heightAnchor.constraint(equalToConstant: 36).isActive = true
-
-        let statusLabels = UIStackView(arrangedSubviews: [lectureNotePreviewLabel, lectureNoteRecentLabel])
-        statusLabels.axis = .vertical
-        statusLabels.spacing = 2
-        let statusRow = UIStackView(arrangedSubviews: [statusLabels, historyButton])
-        statusRow.axis = .horizontal
-        statusRow.alignment = .center
-        statusRow.spacing = 8
-
-        let photoTile = makeLectureNoteTile(systemImage: "camera.fill", title: "写真", filled: true, action: #selector(lectureNotePhotoTapped))
-        let memoTile = makeLectureNoteTile(systemImage: "square.and.pencil", title: "メモ", filled: false, action: #selector(lectureNoteMemoTapped))
-        let tileRow = UIStackView(arrangedSubviews: [photoTile, memoTile])
-        tileRow.axis = .horizontal
-        tileRow.spacing = 10
-        tileRow.distribution = .fillEqually
-
-        let pdfTile = makeLectureNoteWideButton(
-            systemImage: "doc.badge.plus",
-            title: "PDF / ファイルを追加",
-            action: #selector(lectureNotePDFTapped)
-        )
-
-        let organizeRow = UIStackView(arrangedSubviews: [
-            makeLectureNotePill(title: "要約", systemImage: "text.alignleft", action: #selector(lectureNoteSummaryTapped)),
-            makeLectureNotePill(title: "リアペ", systemImage: "sparkles", action: #selector(lectureNoteReactionPaperTapped)),
-            makeLectureNotePill(title: "質問", systemImage: "bubble.left.and.text.bubble.right", action: #selector(lectureNoteAskTapped))
-        ])
-        organizeRow.axis = .horizontal
-        organizeRow.spacing = 8
-        organizeRow.distribution = .fillEqually
-
-        lectureAIMessageStack.axis = .vertical
-        lectureAIMessageStack.spacing = 14
-
-        lectureAIPromptView.font = .systemFont(ofSize: 15)
-        lectureAIPromptView.backgroundColor = .clear
-        lectureAIPromptView.delegate = self
-        lectureAIPromptView.returnKeyType = .default
-        lectureAIPromptView.textContainerInset = UIEdgeInsets(top: 11, left: 4, bottom: 9, right: 4)
-
-        let keyboardToolbar = UIToolbar()
-        keyboardToolbar.sizeToFit()
-        keyboardToolbar.items = [
-            UIBarButtonItem(systemItem: .flexibleSpace),
-            UIBarButtonItem(
-                title: "完了",
-                style: .done,
-                target: self,
-                action: #selector(dismissLectureAIKeyboard)
-            )
-        ]
-        lectureAIPromptView.inputAccessoryView = keyboardToolbar
-
-        lectureAIPromptPlaceholder.text = "この授業について質問"
-        lectureAIPromptPlaceholder.font = .systemFont(ofSize: 15)
-        lectureAIPromptPlaceholder.textColor = .placeholderText
-        lectureAIPromptPlaceholder.translatesAutoresizingMaskIntoConstraints = false
-        lectureAIPromptView.addSubview(lectureAIPromptPlaceholder)
-
-        var attachConfig = UIButton.Configuration.plain()
-        attachConfig.image = UIImage(systemName: "plus")
-        attachConfig.baseForegroundColor = .label
-        attachConfig.cornerStyle = .capsule
-        lectureAIAttachButton.configuration = attachConfig
-        lectureAIAttachButton.accessibilityLabel = "資料を追加"
-        lectureAIAttachButton.addTarget(self, action: #selector(lectureAIAttachTapped), for: .touchUpInside)
-
-        var sendConfig = UIButton.Configuration.filled()
-        sendConfig.image = UIImage(systemName: "arrow.up")
-        sendConfig.baseBackgroundColor = HackColors.accent
-        sendConfig.baseForegroundColor = .white
-        sendConfig.cornerStyle = .capsule
-        lectureAISendButton.configuration = sendConfig
-        lectureAISendButton.accessibilityLabel = "送信"
-        lectureAISendButton.addTarget(self, action: #selector(lectureAISendTapped), for: .touchUpInside)
-
-        lectureAIComposer.backgroundColor = .secondarySystemBackground
-        lectureAIComposer.layer.cornerRadius = 24
-        lectureAIComposer.layer.borderWidth = 0.5
-        lectureAIComposer.layer.borderColor = UIColor.separator.cgColor
-        lectureAIComposer.layer.shadowColor = UIColor.black.cgColor
-        lectureAIComposer.layer.shadowOpacity = 0.08
-        lectureAIComposer.layer.shadowRadius = 8
-        lectureAIComposer.layer.shadowOffset = CGSize(width: 0, height: 2)
-        lectureAIComposer.isHidden = true
-        lectureAIComposer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(lectureAIComposer)
-        lectureAIComposer.addSubview(lectureAIAttachButton)
-        lectureAIComposer.addSubview(lectureAIPromptView)
-        lectureAIComposer.addSubview(lectureAISendButton)
-        lectureAIAttachButton.translatesAutoresizingMaskIntoConstraints = false
-        lectureAIPromptView.translatesAutoresizingMaskIntoConstraints = false
-        lectureAISendButton.translatesAutoresizingMaskIntoConstraints = false
-        let composerBottom = lectureAIComposer.bottomAnchor.constraint(equalTo: adContainer.topAnchor, constant: -8)
-        composerBottom.priority = .defaultHigh
-        NSLayoutConstraint.activate([
-            lectureAIPromptPlaceholder.leadingAnchor.constraint(equalTo: lectureAIPromptView.leadingAnchor, constant: 9),
-            lectureAIPromptPlaceholder.topAnchor.constraint(equalTo: lectureAIPromptView.topAnchor, constant: 11),
-            lectureAIComposer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            lectureAIComposer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            lectureAIComposer.heightAnchor.constraint(equalToConstant: 52),
-            composerBottom,
-            lectureAIComposer.bottomAnchor.constraint(lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor, constant: -8),
-            lectureAIAttachButton.leadingAnchor.constraint(equalTo: lectureAIComposer.leadingAnchor, constant: 6),
-            lectureAIAttachButton.centerYAnchor.constraint(equalTo: lectureAIComposer.centerYAnchor),
-            lectureAIAttachButton.widthAnchor.constraint(equalToConstant: 40),
-            lectureAIAttachButton.heightAnchor.constraint(equalToConstant: 40),
-            lectureAIPromptView.topAnchor.constraint(equalTo: lectureAIComposer.topAnchor),
-            lectureAIPromptView.leadingAnchor.constraint(equalTo: lectureAIAttachButton.trailingAnchor),
-            lectureAIPromptView.bottomAnchor.constraint(equalTo: lectureAIComposer.bottomAnchor),
-            lectureAIPromptView.trailingAnchor.constraint(equalTo: lectureAISendButton.leadingAnchor, constant: -4),
-            lectureAISendButton.trailingAnchor.constraint(equalTo: lectureAIComposer.trailingAnchor, constant: -6),
-            lectureAISendButton.centerYAnchor.constraint(equalTo: lectureAIComposer.centerYAnchor),
-            lectureAISendButton.widthAnchor.constraint(equalToConstant: 40),
-            lectureAISendButton.heightAnchor.constraint(equalToConstant: 40)
-        ])
-
-        lectureAIActivity.hidesWhenStopped = true
-
-        lectureNoteContainer.addArrangedSubview(statusRow)
-        lectureNoteContainer.addArrangedSubview(tileRow)
-        lectureNoteContainer.addArrangedSubview(pdfTile)
-        lectureNoteContainer.addArrangedSubview(organizeRow)
-        lectureNoteContainer.addArrangedSubview(lectureAIMessageStack)
-        lectureNoteContainer.addArrangedSubview(lectureAIActivity)
-
-        loadLatestLectureNotePreview()
-        loadLectureAIChatHistory()
-    }
-
-    /// 過去の授業AIチャット履歴をFirestoreから読み込み、吹き出しとして事前に流し込む
-    private func loadLectureAIChatHistory() {
-        Task {
-            let key = LectureNote.courseKey(course: course, term: term)
-            let messages = (try? await CourseChatStore.shared.fetchMessages(courseKey: key)) ?? []
-            guard !messages.isEmpty else { return }
-            await MainActor.run {
-                for message in messages {
-                    self.appendLectureAIMessage(message.content, fromUser: message.role == .user)
-                }
-            }
-        }
-    }
-
-    /// 授業ノートに素材を追加するための正方形タイルボタンを作る
-    private func makeLectureNoteTile(systemImage: String, title: String, filled: Bool, action: Selector) -> UIButton {
-        var config = UIButton.Configuration.plain()
-        config.image = UIImage(systemName: systemImage)
-        config.title = title
-        config.imagePlacement = .top
-        config.imagePadding = 8
-        config.baseForegroundColor = filled ? .white : HackColors.accent
-        config.background.backgroundColor = filled ? HackColors.accent : .secondarySystemBackground
-        config.background.cornerRadius = 12
-        config.contentInsets = NSDirectionalEdgeInsets(top: 18, leading: 8, bottom: 18, trailing: 8)
-        let button = UIButton(configuration: config)
-        button.addTarget(self, action: action, for: .touchUpInside)
-        return button
-    }
-
-    private func makeLectureNoteWideButton(systemImage: String, title: String, action: Selector) -> UIButton {
-        var config = UIButton.Configuration.gray()
-        config.image = UIImage(systemName: systemImage)
-        config.title = title
-        config.imagePadding = 8
-        config.baseForegroundColor = HackColors.accent
-        config.cornerStyle = .medium
-        config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12)
-        let button = UIButton(configuration: config)
-        button.contentHorizontalAlignment = .leading
-        button.addTarget(self, action: action, for: .touchUpInside)
-        return button
-    }
-
-    private func makeLectureNotePill(title: String, systemImage: String, action: Selector) -> UIButton {
-        var config = UIButton.Configuration.gray()
-        config.image = UIImage(systemName: systemImage)
-        config.title = title
-        config.imagePlacement = .top
-        config.imagePadding = 5
-        config.baseForegroundColor = .label
-        config.cornerStyle = .medium
-        config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 6, bottom: 10, trailing: 6)
-        let button = UIButton(configuration: config)
-        button.titleLabel?.adjustsFontSizeToFitWidth = true
-        button.titleLabel?.minimumScaleFactor = 0.8
-        button.addTarget(self, action: action, for: .touchUpInside)
-        return button
-    }
-
-    private func loadLatestLectureNotePreview() {
-        Task {
-            let key = LectureNote.courseKey(course: course, term: term)
-            let notes = (try? await LectureNoteStore.shared.fetchNotes(courseKey: key)) ?? []
-            await MainActor.run {
-                self.lectureAINotes = notes
-                guard let latest = notes.first else {
-                    self.lectureNotePreviewLabel.text = "まだ授業の記録がありません"
-                    self.lectureNoteRecentLabel.text = "写真・PDF・メモを追加できます"
-                    self.lectureNoteRecentLabel.isHidden = false
-                    return
-                }
-                let formatter = DateFormatter()
-                formatter.dateFormat = "M月d日"
-                formatter.locale = Locale(identifier: "ja_JP")
-                let dateStr = formatter.string(from: latest.lectureDate)
-                let latestSessionNumber = notes.compactMap(\.sessionNumber).max()
-                if let latestSessionNumber {
-                    self.lectureNotePreviewLabel.text = "第\(latestSessionNumber)回まで保存済み"
-                } else {
-                    self.lectureNotePreviewLabel.text = "\(notes.count)件の授業ノートを保存済み"
-                }
-                self.lectureNoteRecentLabel.text = "最終更新 \(dateStr)"
-                self.lectureNoteRecentLabel.isHidden = false
-            }
-        }
-    }
-
-    @objc private func lectureAISendTapped() {
-        sendLectureAIMessage(lectureAIPromptView.text)
-    }
-
-    private func sendLectureAIMessage(_ rawPrompt: String) {
-        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isLectureAISending else { return }
-
-        lectureAIPromptView.text = ""
-        lectureAIPromptPlaceholder.isHidden = false
-        appendLectureAIMessage(prompt, fromUser: true)
-        setLectureAISending(true)
-
-        Task {
-            do {
-                let key = LectureNote.courseKey(course: course, term: term)
-                let notes = try await LectureNoteStore.shared.fetchNotes(courseKey: key)
-                guard !notes.isEmpty else {
-                    await MainActor.run {
-                        self.appendLectureAIMessage("まだ授業ノートがありません。写真・PDF・メモを追加してから質問してください。", fromUser: false)
-                        self.setLectureAISending(false)
-                    }
-                    return
-                }
-
-                let selectedNotes = notesForLectureAI(prompt: prompt, notes: notes)
-                let context = lectureAIContext(from: selectedNotes)
-                let answer = try await CourseAIService.shared.ask(
-                    prompt: prompt,
-                    transcript: context.transcript,
-                    photoText: context.photoText,
-                    syllabusOverview: SyllabusOverviewProvider.overviewText(for: course),
-                    courseKey: key
-                )
-                await MainActor.run {
-                    self.lectureAINotes = notes
-                    self.appendLectureAIMessage(answer, fromUser: false)
-                    self.setLectureAISending(false)
-                }
-            } catch {
-                await MainActor.run {
-                    self.appendLectureAIMessage("回答を作れませんでした。少し待ってからもう一度試してください。", fromUser: false)
-                    self.setLectureAISending(false)
-                }
-            }
-        }
-    }
-
-    private func notesForLectureAI(prompt: String, notes: [LectureNote]) -> [LectureNote] {
-        let broadKeywords = ["今まで", "これまで", "全授業", "全体", "試験", "期末", "中間", "小テスト", "何回も", "共通"]
-        if broadKeywords.contains(where: prompt.contains) { return notes }
-
-        guard let latestDate = notes.first?.lectureDate else { return notes }
-        return notes.filter { Calendar.current.isDate($0.lectureDate, inSameDayAs: latestDate) }
-    }
-
-    private func lectureAIContext(from notes: [LectureNote]) -> (transcript: String, photoText: String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "M月d日"
-        formatter.locale = Locale(identifier: "ja_JP")
-
-        let chronological = notes.sorted { $0.lectureDate < $1.lectureDate }
-        let transcript = chronological.compactMap { note -> String? in
-            guard !note.transcriptText.isEmpty else { return nil }
-            let session = note.sessionNumber.map { "第\($0)回" } ?? formatter.string(from: note.lectureDate)
-            return "[\(session)]\n\(note.transcriptText)"
-        }.joined(separator: "\n\n")
-        let photoText = chronological.compactMap { note -> String? in
-            guard !note.photoText.isEmpty else { return nil }
-            let session = note.sessionNumber.map { "第\($0)回" } ?? formatter.string(from: note.lectureDate)
-            return "[\(session)の資料]\n\(note.photoText)"
-        }.joined(separator: "\n\n")
-        // Keep the newest material when a course has more history than one request needs.
-        return (
-            String(transcript.suffix(32_000)),
-            String(photoText.suffix(12_000))
-        )
-    }
-
-    private func setLectureAISending(_ sending: Bool) {
-        isLectureAISending = sending
-        lectureAIAttachButton.isEnabled = !sending
-        lectureAISendButton.isEnabled = !sending
-        lectureAIPromptView.isEditable = !sending
-        sending ? lectureAIActivity.startAnimating() : lectureAIActivity.stopAnimating()
-    }
-
-    private func appendLectureAIMessage(_ text: String, fromUser: Bool) {
-        let row = UIView()
-        let bubble = UIView()
-        bubble.backgroundColor = fromUser ? HackColors.accent : .secondarySystemBackground
-        bubble.layer.cornerRadius = 8
-        bubble.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(bubble)
-
-        let label = UILabel()
-        label.text = text
-        label.font = .systemFont(ofSize: 15)
-        label.textColor = fromUser ? .white : .label
-        label.numberOfLines = 0
-
-        let content = UIStackView(arrangedSubviews: [label])
-        content.axis = .vertical
-        content.spacing = 6
-        content.translatesAutoresizingMaskIntoConstraints = false
-        bubble.addSubview(content)
-
-        if !fromUser {
-            let copyButton = UIButton(type: .system)
-            copyButton.setImage(UIImage(systemName: "doc.on.doc"), for: .normal)
-            copyButton.accessibilityLabel = "回答をコピー"
-            copyButton.contentHorizontalAlignment = .leading
-            copyButton.addAction(UIAction { _ in UIPasteboard.general.string = text }, for: .touchUpInside)
-            content.addArrangedSubview(copyButton)
-        }
-
-        let sideConstraint = fromUser
-            ? bubble.trailingAnchor.constraint(equalTo: row.trailingAnchor)
-            : bubble.leadingAnchor.constraint(equalTo: row.leadingAnchor)
-        NSLayoutConstraint.activate([
-            bubble.topAnchor.constraint(equalTo: row.topAnchor),
-            bubble.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-            sideConstraint,
-            bubble.widthAnchor.constraint(lessThanOrEqualTo: row.widthAnchor, multiplier: 0.88),
-            content.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
-            content.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
-            content.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
-            content.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -10)
-        ])
-        lectureAIMessageStack.addArrangedSubview(row)
-        view.layoutIfNeeded()
-        scroll.scrollRectToVisible(row.convert(row.bounds, to: scroll), animated: true)
-    }
-
-    private func appendLectureAIPhotoAttachmentMessage(imageCount: Int) {
-        let row = UIView()
-        let bubble = UIView()
-        bubble.backgroundColor = HackColors.accent
-        bubble.layer.cornerRadius = 8
-        bubble.translatesAutoresizingMaskIntoConstraints = false
-        row.addSubview(bubble)
-
-        let icon = UIImageView(image: UIImage(systemName: "photo.on.rectangle.angled"))
-        icon.tintColor = .white
-        icon.contentMode = .scaleAspectFit
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 22).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 22).isActive = true
-
-        let titleLabel = UILabel()
-        titleLabel.text = "写真 \(imageCount)枚"
-        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        titleLabel.textColor = .white
-
-        let captionLabel = UILabel()
-        captionLabel.text = "授業資料として送信"
-        captionLabel.font = .systemFont(ofSize: 12)
-        captionLabel.textColor = UIColor.white.withAlphaComponent(0.82)
-
-        let labels = UIStackView(arrangedSubviews: [titleLabel, captionLabel])
-        labels.axis = .vertical
-        labels.spacing = 2
-
-        let content = UIStackView(arrangedSubviews: [icon, labels])
-        content.axis = .horizontal
-        content.alignment = .center
-        content.spacing = 10
-        content.translatesAutoresizingMaskIntoConstraints = false
-        bubble.addSubview(content)
-
-        NSLayoutConstraint.activate([
-            bubble.topAnchor.constraint(equalTo: row.topAnchor),
-            bubble.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-            bubble.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            bubble.widthAnchor.constraint(lessThanOrEqualTo: row.widthAnchor, multiplier: 0.88),
-            content.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
-            content.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
-            content.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
-            content.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -10)
-        ])
-        lectureAIMessageStack.addArrangedSubview(row)
-        view.layoutIfNeeded()
-        scroll.scrollRectToVisible(row.convert(row.bounds, to: scroll), animated: true)
-    }
-
-    func textViewDidChange(_ textView: UITextView) {
-        guard textView === lectureAIPromptView else { return }
-        lectureAIPromptPlaceholder.isHidden = !textView.text.isEmpty
-    }
-
-    func textViewDidBeginEditing(_ textView: UITextView) {
-        guard textView === lectureAIPromptView else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.scrollLectureAIPromptIntoView(animated: true)
-        }
-    }
-
-    @objc private func dismissLectureAIKeyboard() {
-        lectureAIPromptView.resignFirstResponder()
-    }
-
-    @objc private func lectureAIKeyboardWillChangeFrame(_ notification: Notification) {
-        guard lectureAIPromptView.isFirstResponder,
-              let keyboardFrameValue = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
-            return
-        }
-
-        let keyboardFrame = view.convert(keyboardFrameValue.cgRectValue, from: nil)
-        let overlap = max(0, scroll.frame.maxY - keyboardFrame.minY)
-        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
-        let curveValue = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 7
-        let options = UIView.AnimationOptions(rawValue: curveValue << 16)
-
-        UIView.animate(withDuration: duration, delay: 0, options: options) {
-            let bottomInset = overlap + 68
-            self.scroll.contentInset.bottom = bottomInset
-            self.scroll.verticalScrollIndicatorInsets.bottom = bottomInset
-            self.scrollLectureAIPromptIntoView(animated: false)
-        }
-    }
-
-    @objc private func lectureAIKeyboardWillHide(_ notification: Notification) {
-        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
-        let curveValue = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 7
-        let options = UIView.AnimationOptions(rawValue: curveValue << 16)
-        UIView.animate(withDuration: duration, delay: 0, options: options) {
-            let bottomInset = self.lectureAIComposer.isHidden
-                ? (self.adContainerHeight?.constant ?? 0)
-                : 76
-            self.scroll.contentInset.bottom = bottomInset
-            self.scroll.verticalScrollIndicatorInsets.bottom = bottomInset
-        }
-    }
-
-    private func scrollLectureAIPromptIntoView(animated: Bool) {
-        let promptRect = lectureAIComposer.convert(lectureAIComposer.bounds, to: scroll)
-            .insetBy(dx: 0, dy: -16)
-        scroll.scrollRectToVisible(promptRect, animated: animated)
-    }
-
-    func textView(
-        _ textView: UITextView,
-        shouldChangeTextIn range: NSRange,
-        replacementText text: String
-    ) -> Bool {
-        guard textView === lectureAIPromptView,
-              let stringRange = Range(range, in: textView.text) else { return true }
-        return textView.text.replacingCharacters(in: stringRange, with: text).count <= 200
-    }
-
-    private var lectureNoteDayPeriod: String { "\(location.dayName)\(location.period)" }
-
-    @objc private func lectureNoteSeeAllTapped() {
-        let vc = LectureNoteListViewController(course: course, term: term, dayPeriod: lectureNoteDayPeriod, weekday: location.day)
-        let nav = UINavigationController(rootViewController: vc)
-        present(nav, animated: true)
-    }
-
-    @objc private func lectureNotePhotoTapped() {
-        lectureAIAttachTapped()
-    }
-
-    @objc private func lectureNoteMemoTapped() {
-        let alert = UIAlertController(title: "メモを書く", message: "この授業回のノートとして保存します。", preferredStyle: .alert)
-        alert.addTextField { textField in
-            textField.placeholder = "先生が強調していたこと、感想など"
-            textField.clearButtonMode = .whileEditing
-        }
-        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
-        alert.addAction(UIAlertAction(title: "保存", style: .default) { [weak self, weak alert] _ in
-            guard let self,
-                  let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty else { return }
-            self.saveLectureMaterialText("[メモ]\n\(text)", successMessage: "メモを保存しました")
-        })
-        present(alert, animated: true)
-    }
-
-    @objc private func lectureNotePDFTapped() {
-        var types: [UTType] = [.pdf]
-        if #available(iOS 14.0, *) {
-            types.append(.plainText)
-        }
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
-        picker.delegate = self
-        picker.allowsMultipleSelection = false
-        present(picker, animated: true)
-    }
-
-    @objc private func lectureNoteSummaryTapped() {
-        sendLectureAIMessage("この回の授業内容を、要点がわかるように短く要約して")
-    }
-
-    @objc private func lectureNoteReactionPaperTapped() {
-        Task {
-            let key = LectureNote.courseKey(course: course, term: term)
-            let notes = (try? await LectureNoteStore.shared.fetchNotes(courseKey: key)) ?? []
-            let selectedNotes = notesForLatestLectureDay(notes)
-            await MainActor.run {
-                guard !selectedNotes.isEmpty else {
-                    self.presentLecturePhotoAlert(title: "使える授業ノートがありません", message: "先に写真・PDF・メモを追加してください。")
-                    return
-                }
-                let context = self.lectureAIContext(from: selectedNotes)
-                let vc = ReactionPaperViewController(
-                    transcript: context.transcript,
-                    photoText: context.photoText,
-                    syllabusOverview: SyllabusOverviewProvider.overviewText(for: self.course)
-                )
-                self.present(UINavigationController(rootViewController: vc), animated: true)
-            }
-        }
-    }
-
-    @objc private func lectureNoteAskTapped() {
-        lectureAIPromptView.becomeFirstResponder()
-    }
-
-    @objc private func lectureAIAttachTapped() {
-        let sheet = UIAlertController(title: "資料を追加", message: nil, preferredStyle: .actionSheet)
-        sheet.addAction(UIAlertAction(title: "カメラで撮る", style: .default) { [weak self] _ in
-            self?.presentLectureCamera()
-        })
-        sheet.addAction(UIAlertAction(title: "写真から選ぶ", style: .default) { [weak self] _ in
-            self?.presentLecturePhotoLibrary()
-        })
-        sheet.addAction(UIAlertAction(title: "PDF / ファイルを選ぶ", style: .default) { [weak self] _ in
-            self?.lectureNotePDFTapped()
-        })
-        sheet.addAction(UIAlertAction(title: "メモを書く", style: .default) { [weak self] _ in
-            self?.lectureNoteMemoTapped()
-        })
-        sheet.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
-        if let popover = sheet.popoverPresentationController {
-            popover.sourceView = lectureAIAttachButton.isHidden ? view : lectureAIAttachButton
-            popover.sourceRect = popover.sourceView?.bounds ?? .zero
-        }
-        present(sheet, animated: true)
-    }
-
-    private func presentLectureCamera() {
-        let vc = LecturePhotoCaptureViewController()
-        vc.onFinish = { [weak self] texts in
-            guard let self, !texts.isEmpty else { return }
-            self.saveLecturePhotoTexts(texts, imageCount: texts.count)
-        }
-        present(vc, animated: true)
-    }
-
-    private func presentLecturePhotoLibrary() {
-        var configuration = PHPickerConfiguration(photoLibrary: .shared())
-        configuration.filter = .images
-        configuration.selectionLimit = 10
-        let picker = PHPickerViewController(configuration: configuration)
-        picker.delegate = self
-        present(picker, animated: true)
-    }
-
-    private func importLecturePhotos(_ results: [PHPickerResult]) {
-        guard !results.isEmpty else { return }
-        lectureAIAttachButton.isEnabled = false
-        lectureAIActivity.startAnimating()
-
-        let group = DispatchGroup()
-        let recognizedTexts = NSMutableArray(array: Array(repeating: "", count: results.count))
-        for (index, result) in results.enumerated() {
-            let provider = result.itemProvider
-            guard provider.canLoadObject(ofClass: UIImage.self) else { continue }
-            group.enter()
-            provider.loadObject(ofClass: UIImage.self) { object, _ in
-                guard let image = object as? UIImage else {
-                    group.leave()
-                    return
-                }
-                LecturePhotoOCR.recognizeText(in: image) { text in
-                    objc_sync_enter(recognizedTexts)
-                    recognizedTexts[index] = text
-                    objc_sync_exit(recognizedTexts)
-                    group.leave()
-                }
-            }
-        }
-
-        group.notify(queue: .main) { [weak self] in
-            guard let self else { return }
-            self.lectureAIAttachButton.isEnabled = true
-            self.lectureAIActivity.stopAnimating()
-            let texts = recognizedTexts.compactMap { $0 as? String }.filter {
-                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            guard !texts.isEmpty else {
-                self.presentLecturePhotoAlert(
-                    title: "文字を読み取れませんでした",
-                    message: "文字がはっきり写っている画像を選んでください。"
-                )
-                return
-            }
-            self.saveLecturePhotoTexts(texts, imageCount: results.count)
-        }
-    }
-
-    private func saveLecturePhotoTexts(_ texts: [String], imageCount: Int) {
-        let body = texts.joined(separator: "\n\n")
-        saveLectureMaterialText(
-            body,
-            successMessage: "写真を\(imageCount)枚追加しました",
-            photoAttachmentCount: imageCount,
-            assistantMessage: "写真を授業資料として読み込みました。写っている文字や内容を、この授業についての質問・要約・リアペ作成に使えます。"
-        )
-    }
-
-    private func saveLectureMaterialText(
-        _ text: String,
-        successMessage: String,
-        photoAttachmentCount: Int? = nil,
-        assistantMessage: String? = nil
-    ) {
-        let lectureDate = Date()
-        let sessionNumber = LectureSessionNumbering.sessionNumber(
-            for: lectureDate, weekday: location.day, term: term,
-            campus: LectureSessionNumbering.campus(for: course)
-        )
-        let note = LectureNote(
-            courseKey: LectureNote.courseKey(course: course, term: term),
-            courseTitle: course.title,
-            term: term.displayTitle,
-            dayPeriod: lectureNoteDayPeriod,
-            lectureDate: lectureDate,
-            durationSec: 0,
-            transcriptText: "",
-            photoText: text,
-            sessionNumber: sessionNumber,
-            status: .completed
-        )
-        Task {
-            do {
-                try await LectureNoteStore.shared.save(note)
-                await MainActor.run {
-                    if let photoAttachmentCount {
-                        self.appendLectureAIPhotoAttachmentMessage(imageCount: photoAttachmentCount)
-                    } else {
-                        self.appendLectureAIMessage(successMessage, fromUser: true)
-                    }
-                    if let assistantMessage {
-                        self.appendLectureAIMessage(assistantMessage, fromUser: false)
-                    }
-                    self.loadLatestLectureNotePreview()
-                }
-            } catch {
-                await MainActor.run {
-                    self.presentLecturePhotoAlert(
-                        title: "授業ノートを保存できませんでした",
-                        message: error.localizedDescription
-                    )
-                }
-            }
-        }
-    }
-
-    private func notesForLatestLectureDay(_ notes: [LectureNote]) -> [LectureNote] {
-        guard let latestDate = notes.first?.lectureDate else { return [] }
-        return notes.filter {
-            Calendar.current.isDate($0.lectureDate, inSameDayAs: latestDate)
-        }
-    }
-
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        guard let url = urls.first else { return }
-        let didStartAccessing = url.startAccessingSecurityScopedResource()
-        defer {
-            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
-        }
-
-        let text: String
-        if url.pathExtension.lowercased() == "pdf" {
-            text = extractPDFText(from: url)
-        } else {
-            text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        }
-
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            presentLecturePhotoAlert(title: "文字を読み取れませんでした", message: "テキストを含むPDFまたはテキストファイルを選んでください。")
-            return
-        }
-        saveLectureMaterialText("[\(url.lastPathComponent)]\n\(trimmed)", successMessage: "\(url.lastPathComponent)を追加しました")
-    }
-
-    private func extractPDFText(from url: URL) -> String {
-        guard let document = PDFDocument(url: url) else { return "" }
-        var pages: [String] = []
-        for index in 0..<document.pageCount {
-            guard let page = document.page(at: index),
-                  let pageText = page.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !pageText.isEmpty else { continue }
-            pages.append(pageText)
-        }
-        return pages.joined(separator: "\n\n")
-    }
-
-    private func presentLecturePhotoAlert(title: String, message: String) {
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        present(alert, animated: true)
-    }
 
     private func loadFriendsInCourse() {
         guard Auth.auth().currentUser != nil else { return }
@@ -1515,7 +943,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
     // MARK: - Color Picker Row（「コマの色を変更」ボタン → 折りたたみ展開）
     private func buildColorPickerRow() {
         // === 歯車ボタンを緑ヘッダー右上に追加 ===
-        let sym = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        let sym = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
         let gear = UIButton(type: .system)
         gear.setImage(UIImage(systemName: "gearshape.fill", withConfiguration: sym), for: .normal)
         gear.tintColor = UIColor.white.withAlphaComponent(0.75)
@@ -1523,8 +951,8 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         gear.addTarget(self, action: #selector(gearTapped), for: .touchUpInside)
         titleHeader.addSubview(gear)
         NSLayoutConstraint.activate([
-            gear.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -12),
-            gear.bottomAnchor.constraint(equalTo: titleHeader.bottomAnchor, constant: -10),
+            gear.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -10),
+            gear.centerYAnchor.constraint(equalTo: titleHeader.centerYAnchor),
             gear.widthAnchor.constraint(equalToConstant: 32),
             gear.heightAnchor.constraint(equalToConstant: 32)
         ])
@@ -2150,7 +1578,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         addOpenInBrowserButton()
 
         // トグルを表示して現在のモードを適用
-        syllabusViewToggle.isHidden = (syllabusPageURL == nil && !showsLectureNotes)
+        syllabusViewToggle.isHidden = !showsLectureNotes && (syllabusPageURL == nil)
         applySyllabusDisplayMode()
     }
 
@@ -2567,15 +1995,46 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         syllabusLoadingRow.isHidden = true
         addOpenInBrowserButton()
         // ポータルには表示できるかもしれないのでトグルを出す
-        syllabusViewToggle.isHidden = (syllabusPageURL == nil && !showsLectureNotes)
+        syllabusViewToggle.isHidden = !showsLectureNotes && (syllabusPageURL == nil)
         applySyllabusDisplayMode()
     }
 
     // MARK: - Syllabus Display Mode Toggle
 
     @objc private func syllabusViewModeChanged() {
+        view.endEditing(true)
+        let old = syllabusDisplayMode
         syllabusDisplayMode = syllabusViewToggle.selectedSegmentIndex
         UIView.animate(withDuration: 0.2) { self.applySyllabusDisplayMode() }
+        slideInDisplayModeContent(direction: syllabusDisplayMode > old ? 1 : -1)
+    }
+
+    /// ポータル⇄AIハックの切り替え時、新しい内容を切り替えた向きから滑り込ませる。
+    private func slideInDisplayModeContent(direction: CGFloat) {
+        let candidates: [UIView] = [noteSection, syllabusSection, webContainer, countersRow]
+        let moving = candidates.filter { !$0.isHidden && $0.superview != nil }
+        moving.forEach {
+            $0.transform = CGAffineTransform(translationX: 48 * direction, y: 0)
+            $0.alpha = 0
+        }
+        UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut]) {
+            moving.forEach {
+                $0.transform = .identity
+                $0.alpha = 1
+            }
+        }
+    }
+
+    /// 横スワイプで、ポータルとAIハックを行き来する(左へ=AIハック、右へ=ポータル)。
+    @objc private func handleDisplayModeSwipe(_ gesture: UISwipeGestureRecognizer) {
+        guard showsLectureNotes, !noteShowsChatDetail, !noteChatTextField.isFirstResponder else { return }
+        let last = syllabusViewToggle.numberOfSegments - 1
+        let current = syllabusViewToggle.selectedSegmentIndex
+        if gesture.direction == .left, current < last {
+            _ = selectSyllabusDisplayMode(current + 1)
+        } else if gesture.direction == .right, current > 0 {
+            _ = selectSyllabusDisplayMode(current - 1)
+        }
     }
 
     @objc private func showNativeSyllabusAccessibilityAction() -> Bool {
@@ -2586,7 +2045,7 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         selectSyllabusDisplayMode(0)
     }
 
-    @objc private func showLectureAIAccessibilityAction() -> Bool {
+    @objc private func showNoteAccessibilityAction() -> Bool {
         selectSyllabusDisplayMode(syllabusViewToggle.numberOfSegments - 1)
     }
 
@@ -2603,21 +2062,37 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         if showsAttendanceControls {
             countersRow.isHidden = (mode != 0)
         }
-        if showsLectureNotes && mode == 1 {
+        let inNoteChat = showsLectureNotes && mode == syllabusViewToggle.numberOfSegments - 1 && noteShowsChatDetail
+        noteChatInputBar?.isHidden = !inNoteChat
+        updateScrollInsetForBanner(height: adContainerHeight?.constant ?? 0)
+
+        if showsLectureNotes && mode == syllabusViewToggle.numberOfSegments - 1 {
+            // 一覧(チャット一覧)表示中はセグメントを出したまま、個別チャット画面の時だけ隠す
+            syllabusViewToggle.isHidden = noteShowsChatDetail
+            actionHeaderRow.isHidden = noteShowsChatDetail
+            noteSortButton.isHidden = noteShowsChatDetail
+            noteAttachmentsButton.isHidden = noteShowsChatDetail
+            noteMoreButton.isHidden = noteShowsChatDetail
             syllabusSection.isHidden = true
             webContainer.isHidden = true
-            lectureNoteContainer.isHidden = false
-            lectureAIComposer.isHidden = false
+            noteSection.isHidden = false
+            noteBackdrop.alpha = 1
+            reviewWriteButton?.isHidden = true
             actionsRow.isHidden = true
             courseManagementSpacer.isHidden = true
-            updateScrollInsetForBanner(height: adContainerHeight?.constant ?? 0)
             return
         }
-        lectureNoteContainer.isHidden = true
-        lectureAIComposer.isHidden = true
+        syllabusViewToggle.isHidden = !showsLectureNotes && (syllabusPageURL == nil)
+        actionHeaderRow.isHidden = false
+        noteSortButton.isHidden = true
+        noteAttachmentsButton.isHidden = true
+        noteBackdrop.alpha = 0
+        noteMoreButton.isHidden = true
+        noteSection.isHidden = true
+        reviewWriteButton?.isHidden = false
         actionsRow.isHidden = !allowsCourseManagement
         courseManagementSpacer.isHidden = !allowsCourseManagement
-        updateScrollInsetForBanner(height: adContainerHeight?.constant ?? 0)
+
         syllabusSection.isHidden = true
         guard let url = syllabusPageURL else {
             webContainer.isHidden = true
@@ -2692,6 +2167,1914 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
         courseManagementSpacer.translatesAutoresizingMaskIntoConstraints = false
         courseManagementSpacer.heightAnchor.constraint(equalToConstant: 10).isActive = true
         stack.addArrangedSubview(courseManagementSpacer)
+    }
+
+    // MARK: - ノート
+
+    private static let noteIconButtonSize: CGFloat = 44
+
+    private func buildNoteSection() {
+        noteSection.axis = .vertical
+        noteSection.spacing = 16
+        noteSection.isHidden = true
+        stack.addArrangedSubview(noteSection)
+
+        buildNoteListContainer()
+        buildNoteChatPlaceholder()
+        noteSection.addArrangedSubview(noteListContainer)
+        noteSection.addArrangedSubview(noteChatContainer)
+        noteChatContainer.isHidden = true
+
+        let edgeSwipe = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleNoteChatEdgeSwipe(_:)))
+        edgeSwipe.edges = .left
+        view.addGestureRecognizer(edgeSwipe)
+
+        for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
+            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleDisplayModeSwipe(_:)))
+            swipe.direction = direction
+            swipe.cancelsTouchesInView = false
+            swipe.delegate = self
+            view.addGestureRecognizer(swipe)
+        }
+
+        let tapOutside = UITapGestureRecognizer(target: self, action: #selector(handleNoteChatTapOutside))
+        tapOutside.cancelsTouchesInView = false
+        tapOutside.delegate = self
+        view.addGestureRecognizer(tapOutside)
+
+        loadNoteSessionCards()
+    }
+
+    private func buildNoteListContainer() {
+        noteListContainer.axis = .vertical
+        noteListContainer.spacing = 12
+
+        let iconButtonSize = Self.noteIconButtonSize
+
+        var sortCfg = UIButton.Configuration.plain()
+        sortCfg.image = UIImage(systemName: "arrow.up.arrow.down")
+        sortCfg.baseForegroundColor = .label
+        sortCfg.cornerStyle = .capsule
+        noteSortButton.configuration = sortCfg
+        noteSortButton.backgroundColor = .systemBackground
+        noteSortButton.layer.cornerRadius = iconButtonSize / 2
+        noteSortButton.layer.masksToBounds = true
+        noteSortButton.layer.borderWidth = 1
+        noteSortButton.layer.borderColor = UIColor.separator.cgColor
+        noteSortButton.accessibilityLabel = "並び替え"
+        noteSortButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            noteSortButton.widthAnchor.constraint(equalToConstant: iconButtonSize),
+            noteSortButton.heightAnchor.constraint(equalToConstant: iconButtonSize)
+        ])
+        updateNoteSortMenu()
+
+        var attachCfg = UIButton.Configuration.plain()
+        attachCfg.image = UIImage(systemName: "photo")
+        attachCfg.baseForegroundColor = .label
+        attachCfg.cornerStyle = .capsule
+        noteAttachmentsButton.configuration = attachCfg
+        noteAttachmentsButton.backgroundColor = .systemBackground
+        noteAttachmentsButton.layer.cornerRadius = iconButtonSize / 2
+        noteAttachmentsButton.layer.masksToBounds = true
+        noteAttachmentsButton.layer.borderWidth = 1
+        noteAttachmentsButton.layer.borderColor = UIColor.separator.cgColor
+        noteAttachmentsButton.accessibilityLabel = "送信した画像・資料"
+        noteAttachmentsButton.addTarget(self, action: #selector(noteLibraryTapped), for: .touchUpInside)
+        noteAttachmentsButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            noteAttachmentsButton.widthAnchor.constraint(equalToConstant: iconButtonSize),
+            noteAttachmentsButton.heightAnchor.constraint(equalToConstant: iconButtonSize)
+        ])
+        // 将来、チャットで送った画像・資料の一覧を開くボタンにする予定。現時点では未実装(no-op)。
+
+        // 並び替え/ライブラリは、セグメント直下の共有行(授業レビューと同じ行)の右端に置く。
+        // 専用の行を作らないので、上下の余白が増えない。
+        let headerSpacer = UIView()
+        headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        actionHeaderRow.addArrangedSubview(headerSpacer)
+        actionHeaderRow.addArrangedSubview(noteSortButton)
+        actionHeaderRow.addArrangedSubview(noteAttachmentsButton)
+
+        var moreCfg = UIButton.Configuration.plain()
+        moreCfg.image = UIImage(systemName: "ellipsis")
+        moreCfg.baseForegroundColor = .label
+        moreCfg.cornerStyle = .capsule
+        noteMoreButton.configuration = moreCfg
+        noteMoreButton.backgroundColor = .systemBackground
+        noteMoreButton.layer.cornerRadius = iconButtonSize / 2
+        noteMoreButton.layer.masksToBounds = true
+        noteMoreButton.layer.borderWidth = 1
+        noteMoreButton.layer.borderColor = UIColor.separator.cgColor
+        noteMoreButton.accessibilityLabel = "その他"
+        noteMoreButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            noteMoreButton.widthAnchor.constraint(equalToConstant: iconButtonSize),
+            noteMoreButton.heightAnchor.constraint(equalToConstant: iconButtonSize)
+        ])
+        noteMoreButton.menu = UIMenu(children: [
+            UIAction(title: "補講日を追加", image: UIImage(systemName: "calendar.badge.plus")) { [weak self] _ in
+                self?.noteAddExtraDayTapped()
+            }
+        ])
+        noteMoreButton.showsMenuAsPrimaryAction = true
+        actionHeaderRow.addArrangedSubview(noteMoreButton)
+
+        noteCardStack.axis = .vertical
+        noteCardStack.spacing = 10
+        noteListContainer.addArrangedSubview(noteCardStack)
+
+        noteEmptyLabel.text = "まだ授業の記録がありません"
+        noteEmptyLabel.font = .systemFont(ofSize: 14)
+        noteEmptyLabel.textColor = .secondaryLabel
+        noteEmptyLabel.textAlignment = .center
+        noteEmptyLabel.isHidden = true
+        noteListContainer.addArrangedSubview(noteEmptyLabel)
+    }
+
+    private func buildNoteChatPlaceholder() {
+        noteChatContainer.axis = .vertical
+        noteChatContainer.spacing = 16
+
+        let iconButtonSize = Self.noteIconButtonSize
+        let chatHeader = UIView()
+        chatHeader.translatesAutoresizingMaskIntoConstraints = false
+        noteChatHeader = chatHeader
+        noteChatContainer.priorityHitView = chatHeader
+
+        var backCfg = UIButton.Configuration.plain()
+        backCfg.image = UIImage(systemName: "chevron.left")
+        backCfg.baseForegroundColor = .label
+        noteChatBackButton.configuration = backCfg
+        noteChatBackButton.accessibilityLabel = "チャット一覧に戻る"
+        noteChatBackButton.addTarget(self, action: #selector(noteChatBackButtonTapped), for: .touchUpInside)
+        noteChatBackButton.translatesAutoresizingMaskIntoConstraints = false
+
+        var headerAttachCfg = UIButton.Configuration.plain()
+        headerAttachCfg.image = UIImage(systemName: "photo")
+        headerAttachCfg.baseForegroundColor = .label
+        headerAttachCfg.cornerStyle = .capsule
+        noteChatAttachmentsButton.configuration = headerAttachCfg
+        noteChatAttachmentsButton.backgroundColor = .systemBackground
+        noteChatAttachmentsButton.layer.cornerRadius = iconButtonSize / 2
+        noteChatAttachmentsButton.layer.masksToBounds = true
+        noteChatAttachmentsButton.layer.borderWidth = 1
+        noteChatAttachmentsButton.layer.borderColor = UIColor.separator.cgColor
+        noteChatAttachmentsButton.accessibilityLabel = "送信した画像・資料"
+        noteChatAttachmentsButton.addTarget(self, action: #selector(noteChatLibraryTapped), for: .touchUpInside)
+        noteChatAttachmentsButton.translatesAutoresizingMaskIntoConstraints = false
+
+        chatHeader.addSubview(noteChatBackButton)
+        chatHeader.addSubview(noteChatAttachmentsButton)
+        NSLayoutConstraint.activate([
+            chatHeader.heightAnchor.constraint(equalToConstant: iconButtonSize),
+
+            noteChatBackButton.leadingAnchor.constraint(equalTo: chatHeader.leadingAnchor, constant: -10),
+            noteChatBackButton.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            noteChatBackButton.widthAnchor.constraint(equalToConstant: iconButtonSize),
+            noteChatBackButton.heightAnchor.constraint(equalToConstant: iconButtonSize),
+
+            noteChatAttachmentsButton.trailingAnchor.constraint(equalTo: chatHeader.trailingAnchor),
+            noteChatAttachmentsButton.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            noteChatAttachmentsButton.widthAnchor.constraint(equalToConstant: iconButtonSize),
+            noteChatAttachmentsButton.heightAnchor.constraint(equalToConstant: iconButtonSize)
+        ])
+        noteChatCompactActions.axis = .horizontal
+        noteChatCompactActions.spacing = 8
+        noteChatCompactActions.alignment = .center
+        noteChatCompactActions.distribution = .fill
+        noteChatCompactActions.alpha = 0
+        noteChatCompactActions.isHidden = true
+        noteChatCompactActions.translatesAutoresizingMaskIntoConstraints = false
+        noteChatCompactActions.addArrangedSubview(makeCompactUsageButton())
+        noteChatCompactActions.addArrangedSubview(makeCompactSilentButton())
+        chatHeader.addSubview(noteChatCompactActions)
+        NSLayoutConstraint.activate([
+            noteChatCompactActions.trailingAnchor.constraint(equalTo: noteChatAttachmentsButton.leadingAnchor, constant: -8),
+            noteChatCompactActions.leadingAnchor.constraint(equalTo: noteChatBackButton.trailingAnchor, constant: 4),
+            noteChatCompactActions.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor)
+        ])
+        // 上端に貼り付く(スティッキー)ヘッダー。背後の内容は上へフェードアウトする。
+        noteChatHeaderFade.translatesAutoresizingMaskIntoConstraints = false
+        noteChatHeaderFade.isUserInteractionEnabled = false
+        noteChatHeaderFade.alpha = 0
+        chatHeader.insertSubview(noteChatHeaderFade, at: 0)
+        NSLayoutConstraint.activate([
+            noteChatHeaderFade.leadingAnchor.constraint(equalTo: chatHeader.leadingAnchor, constant: -16),
+            noteChatHeaderFade.trailingAnchor.constraint(equalTo: chatHeader.trailingAnchor, constant: 16),
+            noteChatHeaderFade.topAnchor.constraint(equalTo: chatHeader.topAnchor, constant: -16),
+            noteChatHeaderFade.bottomAnchor.constraint(equalTo: chatHeader.bottomAnchor, constant: 40)
+        ])
+        noteChatContainer.addArrangedSubview(chatHeader)
+        // スタックの並び順に関係なく、ヘッダーを常にメッセージより手前に描く
+        chatHeader.layer.zPosition = 100
+
+        noteChatActionRow.axis = .horizontal
+        noteChatActionRow.distribution = .fillEqually
+        noteChatActionRow.spacing = 14
+        noteChatActionRow.addArrangedSubview(makeNoteActionCard(
+            title: "授業を聞かせる",
+            imageNames: ["mic.fill"],
+            showsUsage: true,
+            action: #selector(noteChatRecordTapped)
+        ))
+        noteChatActionRow.addArrangedSubview(makeNoteActionCard(
+            title: "無音で資料を撮る",
+            imageNames: ["speaker.slash.fill", "camera.fill"],
+            showsUsage: false,
+            action: #selector(noteChatSilentCameraTapped)
+        ))
+        noteChatContainer.addArrangedSubview(noteChatActionRow)
+
+        let messageLabel = UILabel()
+        messageLabel.text = "授業を聞かせたり資料を送ったりして\nAIに学習させよう"
+        messageLabel.font = .systemFont(ofSize: 16, weight: .medium)
+        messageLabel.textColor = UIColor.secondaryLabel.withAlphaComponent(0.4)
+        noteChatGuideLabel = messageLabel
+        messageLabel.textAlignment = .center
+        messageLabel.numberOfLines = 0
+
+        noteChatGuideContainer.translatesAutoresizingMaskIntoConstraints = false
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+        noteChatGuideContainer.addSubview(messageLabel)
+        NSLayoutConstraint.activate([
+            noteChatGuideContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            messageLabel.centerXAnchor.constraint(equalTo: noteChatGuideContainer.centerXAnchor),
+            messageLabel.centerYAnchor.constraint(equalTo: noteChatGuideContainer.centerYAnchor),
+            messageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: noteChatGuideContainer.leadingAnchor, constant: 16),
+            messageLabel.trailingAnchor.constraint(lessThanOrEqualTo: noteChatGuideContainer.trailingAnchor, constant: -16)
+        ])
+        noteChatContainer.addArrangedSubview(noteChatGuideContainer)
+
+        noteChatMessageStack.axis = .vertical
+        noteChatMessageStack.spacing = 12
+        noteChatMessageStack.isHidden = true
+        noteChatContainer.addArrangedSubview(noteChatMessageStack)
+
+        let inputBar = makeNoteInputBar()
+        inputBar.isHidden = true
+        view.addSubview(inputBar)
+        let followKeyboard = inputBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8)
+        followKeyboard.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            inputBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            inputBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            inputBar.bottomAnchor.constraint(lessThanOrEqualTo: adContainer.topAnchor, constant: -8),
+            followKeyboard
+        ])
+        noteChatInputBar = inputBar
+    }
+
+    private var noteChatPending: CapturedPhotoSet {
+        if let set = noteChatPendingBySession[noteChatCurrentSession] { return set }
+        let set = CapturedPhotoSet()
+        noteChatPendingBySession[noteChatCurrentSession] = set
+        return set
+    }
+
+    @objc private func noteChatTextChanged() {
+        updateNoteChatSendButton(animated: true)
+    }
+
+    /// 送れる内容(文字・写真・録音)があるときは濃い緑、空のときは淡いグレー。
+    private func updateNoteChatSendButton(animated: Bool) {
+        let hasText = !(noteChatTextField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasPhotos = !(noteChatPendingBySession[noteChatCurrentSession]?.items.isEmpty ?? true)
+        let hasRecordings = !(noteChatPendingRecordingsBySession[noteChatCurrentSession]?.isEmpty ?? true)
+        let canSend = hasText || hasPhotos || hasRecordings
+        let apply = {
+            self.noteChatSendButton.backgroundColor = canSend ? self.noteDeepGreen : .systemGray5
+            self.noteChatSendButton.tintColor = canSend ? .white : .tertiaryLabel
+        }
+        if animated { UIView.animate(withDuration: 0.15, animations: apply) } else { apply() }
+    }
+
+    @objc private func noteChatSendTapped() {
+        let text = (noteChatTextField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let pending = noteChatPending.items
+        let pendingRecordings = noteChatPendingRecordingsBySession[noteChatCurrentSession] ?? []
+        guard !text.isEmpty || !pending.isEmpty || !pendingRecordings.isEmpty else { return }
+        if noteChatEditingIndex != nil && text.isEmpty { return }
+        noteChatTextField.text = ""
+        updateNoteChatSendButton(animated: true)
+        if let editIndex = noteChatEditingIndex {
+            // 編集して再送信: 編集したメッセージ以降を消して、そこから新しい会話にする
+            truncateNoteChat(from: editIndex)
+            setNoteChatEditing(nil)
+        }
+
+        // ChatGPTと同じく、写真は横1列にまとめて送り、その下に文章を続ける
+        var messages: [NoteChatMessage] = []
+        if !pending.isEmpty {
+            messages.append(.photos(pending))
+            noteChatPending.items.removeAll()
+        }
+        for recording in pendingRecordings {
+            messages.append(.recording(url: recording.url, duration: recording.duration))
+        }
+        if !pending.isEmpty || !pendingRecordings.isEmpty {
+            noteChatPendingRecordingsBySession[noteChatCurrentSession] = []
+            reloadNoteChatAttachments(animated: true)
+        }
+        if !text.isEmpty { messages.append(.text(text)) }
+        appendNoteChatMessages(messages)
+    }
+
+    /// 送信した順に吹き出しを追加する。最初の1通のときは大きなカードを小さなボタンへ変形させる。
+    private func appendNoteChatMessages(_ messages: [NoteChatMessage]) {
+        guard !messages.isEmpty else { return }
+        let isFirst = (noteChatMessagesBySession[noteChatCurrentSession] ?? []).isEmpty
+        if isFirst {
+            noteChatMessageStack.alpha = 0
+            noteChatMessageStack.isHidden = false
+        }
+        noteChatMessagesBySession[noteChatCurrentSession, default: []].append(contentsOf: messages)
+        noteLastSentAt[noteChatCurrentSession] = Date()
+        loadNoteSessionCards()   // 一覧カードの副題を最新の送信内容に更新
+
+        var bubbles: [UIView] = []
+        for message in messages {
+            let bubble = makeNoteChatBubble(message)
+            bubble.alpha = 0
+            bubble.transform = CGAffineTransform(translationX: 0, y: 36).scaledBy(x: 0.9, y: 0.9)
+            noteChatMessageStack.addArrangedSubview(bubble)
+            bubbles.append(bubble)
+        }
+        view.layoutIfNeeded()
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.82,
+                       initialSpringVelocity: 0.4, options: [.curveEaseOut]) {
+            self.noteChatMessageStack.alpha = 1
+            bubbles.forEach {
+                $0.alpha = 1
+                $0.transform = .identity
+            }
+        }
+        syncNoteChatActions()   // 1通目なら、大きなカードを省略ボタンへ畳む(キーボード中は既に畳まれている)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        scrollNoteChatToBottom(animated: true)
+    }
+
+    // MARK: メッセージの長押し(コピー/編集)
+    private func noteChatMessageIndex(for view: UIView) -> Int? {
+        var current: UIView? = view
+        while let candidate = current, candidate.superview !== noteChatMessageStack {
+            current = candidate.superview
+        }
+        guard let row = current else { return nil }
+        return noteChatMessageStack.arrangedSubviews.firstIndex(of: row)
+    }
+
+    private func setNoteChatEditing(_ index: Int?) {
+        noteChatEditingIndex = index
+        noteChatEditBannerHeight?.constant = index == nil ? 0 : 34
+        UIView.animate(withDuration: 0.2) {
+            self.view.layoutIfNeeded()
+            self.updateScrollInsetForBanner(height: self.adContainerHeight?.constant ?? 0)
+        }
+    }
+
+    @objc private func noteChatCancelEditTapped() {
+        noteChatTextField.text = ""
+        updateNoteChatSendButton(animated: true)
+        setNoteChatEditing(nil)
+    }
+
+    private func beginEditingNoteMessage(at index: Int) {
+        guard let messages = noteChatMessagesBySession[noteChatCurrentSession], messages.indices.contains(index),
+              case .text(let text) = messages[index] else { return }
+        setNoteChatEditing(index)
+        noteChatTextField.text = text
+        updateNoteChatSendButton(animated: false)
+        noteChatTextField.becomeFirstResponder()
+    }
+
+    /// index以降のメッセージを消す(画面も作り直す)。全部消えたら最初の状態に戻す。
+    private func truncateNoteChat(from index: Int) {
+        var messages = noteChatMessagesBySession[noteChatCurrentSession] ?? []
+        guard messages.indices.contains(index) else { return }
+        messages.removeSubrange(index...)
+        noteChatMessagesBySession[noteChatCurrentSession] = messages
+        noteChatMessageStack.arrangedSubviews.forEach {
+            noteChatMessageStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        for message in messages { noteChatMessageStack.addArrangedSubview(makeNoteChatBubble(message)) }
+        if messages.isEmpty {
+            noteChatMessageStack.isHidden = true
+            noteChatActionRow.isHidden = false
+            noteChatActionRow.alpha = 1
+            noteChatActionRow.arrangedSubviews.forEach { $0.transform = .identity; $0.alpha = 1 }
+            noteChatGuideContainer.isHidden = false
+            noteChatGuideContainer.alpha = 1
+            noteChatCompactActions.arrangedSubviews.forEach { $0.transform = .identity; $0.alpha = 0 }
+            noteChatCompactActions.isHidden = true
+            noteChatActionsCompact = false
+        }
+        view.layoutIfNeeded()
+    }
+
+    // MARK: 録音
+    private func usageText(minutes: Int, compact: Bool) -> NSAttributedString {
+        let small = UIFont.systemFont(ofSize: compact ? 10 : 11, weight: .medium)
+        let big = UIFont.systemFont(ofSize: compact ? 16 : 18, weight: .bold)
+        let text = NSMutableAttributedString(string: "残り", attributes: [.font: small])
+        text.append(NSAttributedString(string: "\(minutes)", attributes: [.font: big]))
+        text.append(NSAttributedString(string: "分", attributes: [.font: small]))
+        return text
+    }
+
+    /// 残り時間・利用状況バー・録音中/待機中の表示を、全ての録音ボタンで更新する。
+    private func refreshNoteUsageUI() {
+        let recorder = NoteRecorder.shared
+        let recording = recorder.isRecording
+        let minutes = Int(recorder.remainingSeconds / 60)
+        let progress = CGFloat(recorder.usedSeconds / NoteRecordingUsage.limitSeconds)
+        for parts in noteUsageParts {
+            parts.remainingLabel.attributedText = usageText(minutes: minutes, compact: parts.isCompact)
+            parts.bar.progress = progress
+            parts.idleViews.forEach { $0.isHidden = recording }
+            parts.recordingViews.forEach { $0.isHidden = !recording }
+            if !recording { parts.waveform.reset() }
+        }
+    }
+
+    @objc private func noteChatRecordTapped() {
+        let recorder = NoteRecorder.shared
+        if recorder.isRecording {
+            noteRecordingStopped(recorder.stop(), auto: false)
+            return
+        }
+        view.endEditing(true)
+        noteRecordingSession = noteChatCurrentSession
+        recorder.onLevel = { [weak self] level in self?.noteUsageParts.forEach { $0.waveform.push(level) } }
+        recorder.onTick = { [weak self] in self?.refreshNoteUsageUI() }
+        recorder.onAutoStopped = { [weak self] result in self?.noteRecordingStopped(result, auto: true) }
+        NoteAudioPlayer.shared.stop()
+        recorder.activityCourseTitle = course.title
+        recorder.activitySessionLabel = noteSessionTitle(dayID: noteRecordingSession)
+        recorder.start { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.refreshNoteUsageUI()
+            case .failure(.limitReached):
+                self.showNoteAlert(title: "今週の録音上限に達しました",
+                                   message: "録音は1週間に180分までです。来週になるとまた録音できます。")
+            case .failure(.permissionDenied):
+                let alert = UIAlertController(title: "マイクを使えません",
+                                              message: "設定アプリで「青山ハック」のマイクを許可してください。",
+                                              preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "設定を開く", style: .default) { _ in
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                })
+                alert.addAction(UIAlertAction(title: "閉じる", style: .cancel))
+                self.present(alert, animated: true)
+            case .failure(.failed):
+                self.showNoteAlert(title: "録音を開始できませんでした", message: "もう一度お試しください。")
+            }
+        }
+    }
+
+    private func showNoteAlert(title: String, message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+
+    private func noteRecordingStopped(_ result: NoteRecordingResult?, auto: Bool) {
+        refreshNoteUsageUI()
+        if let result {
+            // 写真と同じく、すぐには送らずメッセージ欄に追加する
+            noteChatPendingRecordingsBySession[noteRecordingSession, default: []].append(result)
+            if noteShowsChatDetail && noteChatCurrentSession == noteRecordingSession {
+                reloadNoteChatAttachments(animated: true)
+            }
+        }
+        if auto && NoteRecorder.shared.remainingSeconds <= 0 {
+            showNoteAlert(title: "今週の録音上限に達しました", message: "録音は1週間に180分までです。録音を停止しました。")
+        }
+    }
+
+    private func makeNoteRecordingBubble(url: URL, duration: TimeInterval) -> UIView {
+        let bubble = NoteRecordingBubbleView(url: url, duration: duration,
+                                             background: Self.noteBubbleBackground, tint: Self.noteBubbleText)
+        bubble.addTarget(self, action: #selector(noteRecordingBubbleTapped(_:)), for: .touchUpInside)
+        NoteAudioPlayer.shared.onChange = { [weak self] in self?.refreshNoteAudioControls() }
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [spacer, bubble])
+        row.axis = .horizontal
+        return row
+    }
+
+    @objc private func noteRecordingBubbleTapped(_ sender: NoteRecordingBubbleView) {
+        NoteAudioPlayer.shared.toggle(sender.url)
+    }
+
+    // MARK: ライブラリ(送信した写真)
+    private func sentPhotos(session: Int) -> [CapturedPhoto] {
+        (noteChatMessagesBySession[session] ?? []).flatMap { message -> [CapturedPhoto] in
+            if case .photos(let items) = message { return items }
+            return []
+        }
+    }
+
+    /// 一覧画面から: 授業回ごとに区切って、全ての回の写真を表示する(新しい回が上)。
+    @objc private func noteLibraryTapped() {
+        let sections = noteChatMessagesBySession.keys.sorted(by: >).compactMap { session -> NoteLibraryViewController.Section? in
+            let photos = sentPhotos(session: session)
+            return photos.isEmpty ? nil : .init(title: noteSessionTitle(dayID: session), photos: photos)
+        }
+        let library = NoteLibraryViewController(title: "ライブラリ", sections: sections, showsSectionHeaders: true)
+        library.modalPresentationStyle = .fullScreen
+        present(library, animated: true)
+    }
+
+    /// 個別チャットから: この回の写真だけを表示する。
+    @objc private func noteChatLibraryTapped() {
+        view.endEditing(true)
+        let photos = sentPhotos(session: noteChatCurrentSession)
+        let sections: [NoteLibraryViewController.Section] = photos.isEmpty
+            ? [] : [.init(title: noteSessionTitle(dayID: noteChatCurrentSession), photos: photos)]
+        let library = NoteLibraryViewController(
+            title: "\(noteSessionTitle(dayID: noteChatCurrentSession))のライブラリ", sections: sections, showsSectionHeaders: false)
+        library.modalPresentationStyle = .fullScreen
+        present(library, animated: true)
+    }
+
+    /// ＋メニュー「ライブラリから追加」: 送信済みの写真から選んで、メッセージ欄に追加する。
+    private func noteChatPickFromLibrary() {
+        view.endEditing(true)
+        let sections = noteChatMessagesBySession.keys.sorted(by: >).compactMap { session -> NoteLibraryViewController.Section? in
+            let photos = sentPhotos(session: session)
+            return photos.isEmpty ? nil : .init(title: noteSessionTitle(dayID: session), photos: photos)
+        }
+        let library = NoteLibraryViewController(title: "ライブラリから追加", sections: sections, showsSectionHeaders: true)
+        library.onPick = { [weak self] photos in self?.addNotePhotosToComposer(photos) }
+        library.modalPresentationStyle = .fullScreen
+        present(library, animated: true)
+    }
+
+    /// チャットのヘッダー(戻る・録音・撮影・ライブラリ)は、スクロールしても上端に貼り付ける。
+    fileprivate func updateStickyNoteChatHeader() {
+        guard let header = noteChatHeader else { return }
+        guard noteShowsChatDetail else {
+            header.transform = .identity
+            noteChatHeaderFade.alpha = 0
+            return
+        }
+        header.transform = .identity
+        let naturalY = scroll.convert(header.bounds.origin, from: header).y
+        let top = scroll.contentOffset.y + 4
+        let shift = max(0, top - naturalY)
+        header.transform = CGAffineTransform(translationX: 0, y: shift)
+        noteChatHeaderFade.alpha = min(1, shift / 12)
+    }
+
+    // MARK: 無音カメラ
+    @objc private func noteChatSilentCameraTapped() {
+        view.endEditing(true)
+        let camera = SilentCameraViewController()
+        camera.modalPresentationStyle = .fullScreen
+        camera.onFinish = { [weak self] photos in
+            self?.addNotePhotosToComposer(photos)
+        }
+        present(camera, animated: true)
+    }
+
+    /// カメラで撮った写真は、すぐには送らずメッセージ欄に追加する。
+    private func addNotePhotosToComposer(_ photos: [CapturedPhoto]) {
+        guard !photos.isEmpty else { return }
+        noteChatPending.items.append(contentsOf: photos)
+        reloadNoteChatAttachments(animated: true)
+    }
+
+    /// メッセージ欄(入力欄の上)の添付サムネイルを、現在の追加済み写真に合わせて作り直す。
+    private func reloadNoteChatAttachments(animated: Bool) {
+        let items = noteChatPending.items
+        noteChatAttachmentStack.arrangedSubviews.forEach {
+            noteChatAttachmentStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        for (index, photo) in items.enumerated() {
+            noteChatAttachmentStack.addArrangedSubview(makeAttachmentThumb(photo, index: index))
+        }
+        let recordings = noteChatPendingRecordingsBySession[noteChatCurrentSession] ?? []
+        for (index, recording) in recordings.enumerated() {
+            noteChatAttachmentStack.addArrangedSubview(makeAttachmentRecordingChip(recording, index: index))
+        }
+        let show = !items.isEmpty || !recordings.isEmpty
+        noteChatAttachmentHeight?.constant = show ? Self.noteAttachmentThumb : 0
+        noteChatAttachmentTopPad?.constant = show ? 12 : 0
+        updateNoteChatSendButton(animated: animated)
+        let apply = {
+            self.view.layoutIfNeeded()
+            self.updateScrollInsetForBanner(height: self.adContainerHeight?.constant ?? 0)
+        }
+        if animated {
+            UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseInOut], animations: apply)
+        } else {
+            apply()
+        }
+    }
+
+    private func makeAttachmentThumb(_ photo: CapturedPhoto, index: Int) -> UIView {
+        let side = Self.noteAttachmentThumb
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        let imageView = UIImageView(image: photo.thumb)
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        imageView.layer.cornerRadius = 12
+        imageView.isUserInteractionEnabled = true
+        imageView.tag = index
+        imageView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(noteChatAttachmentTapped(_:))))
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .bold))
+        cfg.baseForegroundColor = .white
+        let remove = UIButton(configuration: cfg)
+        remove.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        remove.layer.cornerRadius = 10
+        remove.tag = index
+        remove.accessibilityLabel = "この写真を外す"
+        remove.addTarget(self, action: #selector(noteChatAttachmentRemoveTapped(_:)), for: .touchUpInside)
+        remove.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(imageView)
+        container.addSubview(remove)
+        NSLayoutConstraint.activate([
+            container.widthAnchor.constraint(equalToConstant: side),
+            container.heightAnchor.constraint(equalToConstant: side),
+            imageView.topAnchor.constraint(equalTo: container.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            imageView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            remove.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
+            remove.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -4),
+            remove.widthAnchor.constraint(equalToConstant: 20),
+            remove.heightAnchor.constraint(equalToConstant: 20)
+        ])
+        return container
+    }
+
+    /// 入力欄の上に並べる録音のチップ(タップで再生、×で外す)
+    private func makeAttachmentRecordingChip(_ recording: NoteRecordingResult, index: Int) -> UIView {
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        let chip = NoteRecordingBubbleView(url: recording.url, duration: recording.duration,
+                                           background: Self.noteBubbleBackground, tint: Self.noteBubbleText)
+        chip.addTarget(self, action: #selector(noteRecordingBubbleTapped(_:)), for: .touchUpInside)
+        NoteAudioPlayer.shared.onChange = { [weak self] in self?.refreshNoteAudioControls() }
+
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .bold))
+        cfg.baseForegroundColor = .white
+        let remove = UIButton(configuration: cfg)
+        remove.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        remove.layer.cornerRadius = 10
+        remove.tag = index
+        remove.accessibilityLabel = "この録音を外す"
+        remove.addTarget(self, action: #selector(noteChatRecordingRemoveTapped(_:)), for: .touchUpInside)
+        remove.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(chip)
+        container.addSubview(remove)
+        NSLayoutConstraint.activate([
+            container.heightAnchor.constraint(equalToConstant: Self.noteAttachmentThumb),
+            chip.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            chip.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
+            chip.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            remove.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            remove.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            remove.widthAnchor.constraint(equalToConstant: 20),
+            remove.heightAnchor.constraint(equalToConstant: 20)
+        ])
+        return container
+    }
+
+    @objc private func noteChatRecordingRemoveTapped(_ sender: UIButton) {
+        var recordings = noteChatPendingRecordingsBySession[noteChatCurrentSession] ?? []
+        guard recordings.indices.contains(sender.tag) else { return }
+        let removed = recordings.remove(at: sender.tag)
+        noteChatPendingRecordingsBySession[noteChatCurrentSession] = recordings
+        if NoteAudioPlayer.shared.isPlaying(removed.url) { NoteAudioPlayer.shared.stop() }
+        try? FileManager.default.removeItem(at: removed.url)
+        reloadNoteChatAttachments(animated: true)
+    }
+
+    /// 再生状態の変化を、チャット内の録音吹き出しと入力欄のチップに反映する。
+    private func refreshNoteAudioControls() {
+        func refresh(in view: UIView) {
+            if let bubble = view as? NoteRecordingBubbleView { bubble.refresh() }
+            view.subviews.forEach(refresh(in:))
+        }
+        refresh(in: noteChatMessageStack)
+        refresh(in: noteChatAttachmentStack)
+    }
+
+    @objc private func noteChatAttachmentRemoveTapped(_ sender: UIButton) {
+        let set = noteChatPending
+        guard set.items.indices.contains(sender.tag) else { return }
+        set.items.remove(at: sender.tag)
+        reloadNoteChatAttachments(animated: true)
+    }
+
+    @objc private func noteChatAttachmentTapped(_ gesture: UITapGestureRecognizer) {
+        guard let index = gesture.view?.tag else { return }
+        // 送信前は、全画面で確認しながら取り消しもできる
+        presentNotePhotoViewer(photoSet: noteChatPending, index: index, allowsDelete: true) { [weak self] in
+            self?.reloadNoteChatAttachments(animated: false)
+        }
+    }
+
+    private func presentNotePhotoViewer(photoSet: CapturedPhotoSet, index: Int, allowsDelete: Bool,
+                                        onDismiss: (() -> Void)? = nil) {
+        view.endEditing(true)
+        let pager = SilentCameraPagerViewController(photoSet: photoSet, startIndex: index, allowsDelete: allowsDelete)
+        pager.modalPresentationStyle = .fullScreen
+        pager.onDismiss = onDismiss
+        present(pager, animated: true)
+    }
+
+    @objc private func noteChatSentPhotoTapped(_ gesture: UITapGestureRecognizer) {
+        guard let imageView = gesture.view as? UIImageView,
+              let row = imageView.superview?.superview as? NotePhotoRowScrollView else { return }
+        presentNotePhotoViewer(photoSet: CapturedPhotoSet(items: row.photos), index: imageView.tag, allowsDelete: false)
+    }
+
+    private func morphTransform(from source: CGRect, to target: CGRect) -> CGAffineTransform {
+        CGAffineTransform(translationX: target.midX - source.midX, y: target.midY - source.midY)
+            .scaledBy(x: target.width / max(source.width, 1), y: target.height / max(source.height, 1))
+    }
+
+    /// 大きいカードを出すべきか(会話が空でキーボードも閉じている)、省略ボタンに畳むべきか(会話がある/入力中)を合わせる。
+    private func syncNoteChatActions() {
+        guard noteShowsChatDetail, !noteChatMorphing else { return }
+        let hasMessages = !(noteChatMessagesBySession[noteChatCurrentSession] ?? []).isEmpty
+        let desiredCompact = hasMessages || noteChatTextField.isFirstResponder
+        guard desiredCompact != noteChatActionsCompact else { return }
+        noteChatActionsCompact = desiredCompact
+        noteChatMorphing = true
+        let finished = { [weak self] in
+            guard let self else { return }
+            self.noteChatMorphing = false
+            self.syncNoteChatActions()   // アニメーション中に状態が変わっていたら追従する
+        }
+        if desiredCompact {
+            noteChatCompactActions.isHidden = false
+            noteChatCompactActions.alpha = 1
+            noteChatCompactActions.arrangedSubviews.forEach { $0.alpha = 0; $0.transform = .identity }
+            morphActionCardsIntoCompactButtons(completion: finished)
+        } else {
+            morphCompactButtonsIntoActionCards(completion: finished)
+        }
+    }
+
+    /// 大きい2枚のカードが、ヘッダーの小さいボタンへ縮みながら移動する。
+    private func morphActionCardsIntoCompactButtons(completion: @escaping () -> Void) {
+        let bigCards = noteChatActionRow.arrangedSubviews
+        let smallButtons = noteChatCompactActions.arrangedSubviews
+        guard bigCards.count == smallButtons.count else {
+            finishNoteActionMorph(completion: completion)
+            return
+        }
+        view.layoutIfNeeded()
+        let pairs: [(big: UIView, small: UIView, from: CGRect, to: CGRect)] = zip(bigCards, smallButtons).map { big, small in
+            (big, small,
+             big.convert(big.bounds, to: view),
+             small.convert(small.bounds, to: view))
+        }
+        // 小さいボタンは、大きいカードの位置・大きさから出発する
+        pairs.forEach { $0.small.transform = morphTransform(from: $0.to, to: $0.from) }
+
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9,
+                       initialSpringVelocity: 0.2, options: [.curveEaseInOut], animations: {
+            self.noteChatGuideContainer.alpha = 0
+            pairs.forEach {
+                $0.big.transform = self.morphTransform(from: $0.from, to: $0.to)
+                $0.big.alpha = 0
+                $0.small.transform = .identity
+                $0.small.alpha = 1
+            }
+        }, completion: { _ in
+            self.finishNoteActionMorph(completion: completion)
+        })
+    }
+
+    private func finishNoteActionMorph(completion: @escaping () -> Void) {
+        noteChatActionRow.arrangedSubviews.forEach { $0.transform = .identity }
+        UIView.animate(withDuration: 0.18, animations: {
+            self.noteChatActionRow.isHidden = true
+            self.noteChatGuideContainer.isHidden = true
+            self.noteChatCompactActions.alpha = 1
+            self.view.layoutIfNeeded()
+        }, completion: { _ in completion() })
+    }
+
+    /// 逆向き: 省略ボタンが膨らんで、大きい2枚のカードに戻る。
+    private func morphCompactButtonsIntoActionCards(completion: @escaping () -> Void) {
+        let bigCards = noteChatActionRow.arrangedSubviews
+        let smallButtons = noteChatCompactActions.arrangedSubviews
+        noteChatActionRow.isHidden = false
+        noteChatGuideContainer.isHidden = false
+        noteChatActionRow.alpha = 1
+        noteChatGuideContainer.alpha = 0
+        bigCards.forEach { $0.transform = .identity; $0.alpha = 0 }
+        view.layoutIfNeeded()
+        guard bigCards.count == smallButtons.count else {
+            bigCards.forEach { $0.alpha = 1 }
+            noteChatGuideContainer.alpha = 1
+            noteChatCompactActions.isHidden = true
+            completion()
+            return
+        }
+        let pairs: [(big: UIView, small: UIView, big0: CGRect, small0: CGRect)] = zip(bigCards, smallButtons).map { big, small in
+            (big, small, big.convert(big.bounds, to: view), small.convert(small.bounds, to: view))
+        }
+        // 大きいカードは、省略ボタンの位置・大きさから広がる
+        pairs.forEach { $0.big.transform = morphTransform(from: $0.big0, to: $0.small0) }
+
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9,
+                       initialSpringVelocity: 0.2, options: [.curveEaseInOut], animations: {
+            self.noteChatGuideContainer.alpha = 1
+            pairs.forEach {
+                $0.big.transform = .identity
+                $0.big.alpha = 1
+                $0.small.transform = self.morphTransform(from: $0.small0, to: $0.big0)
+                $0.small.alpha = 0
+            }
+        }, completion: { _ in
+            self.noteChatCompactActions.arrangedSubviews.forEach { $0.transform = .identity }
+            self.noteChatCompactActions.isHidden = true
+            self.startGuideFloating()
+            completion()
+        })
+    }
+
+    private func makeNoteChatBubble(_ message: NoteChatMessage) -> UIView {
+        if case .photos(let photos) = message {
+            return makeNotePhotoRow(photos)
+        }
+        if case .recording(let url, let duration) = message {
+            return makeNoteRecordingBubble(url: url, duration: duration)
+        }
+        return makeNoteTextBubble(message.previewText)
+    }
+
+    /// 送信済みの写真は、横1列(はみ出す分は横スクロール)で右寄せに並べる。
+    private func makeNotePhotoRow(_ photos: [CapturedPhoto]) -> UIView {
+        let side: CGFloat = 128
+        let scroll = NotePhotoRowScrollView()
+        scroll.photos = photos
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        let stack = UIStackView()
+        stack.axis = .horizontal
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(stack)
+        for (index, photo) in photos.enumerated() {
+            let imageView = UIImageView(image: photo.thumb)
+            imageView.contentMode = .scaleAspectFill
+            imageView.clipsToBounds = true
+            imageView.layer.cornerRadius = 16
+            imageView.isUserInteractionEnabled = true
+            imageView.tag = index
+            imageView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(noteChatSentPhotoTapped(_:))))
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            imageView.widthAnchor.constraint(equalToConstant: side).isActive = true
+            imageView.heightAnchor.constraint(equalToConstant: side).isActive = true
+            stack.addArrangedSubview(imageView)
+        }
+        NSLayoutConstraint.activate([
+            scroll.heightAnchor.constraint(equalToConstant: side),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)
+        ])
+        return scroll
+    }
+
+    private func makeNoteTextBubble(_ text: String) -> UIView {
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 15)
+        label.textColor = Self.noteBubbleText
+        label.numberOfLines = 0
+
+        let bubble = UIView()
+        bubble.backgroundColor = Self.noteBubbleBackground
+        bubble.layer.cornerRadius = 16
+        bubble.addInteraction(UIContextMenuInteraction(delegate: self))   // 長押しでコピー/編集
+        label.translatesAutoresizingMaskIntoConstraints = false
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+        bubble.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
+            label.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -14),
+            label.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -10)
+        ])
+
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [spacer, bubble])
+        row.axis = .horizontal
+        bubble.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        return row
+    }
+
+    /// メッセージ送信後にヘッダーへ出す省略版。録音ボタン(マイク+残り時間+利用状況バー)。
+    /// 録音中は、マイクと残り時間が「● + 波形」に切り替わる。
+    private func makeCompactUsageButton() -> UIView {
+        let button = UIButton(type: .system)
+        button.backgroundColor = noteMutedGreen
+        button.layer.cornerRadius = 12
+        button.clipsToBounds = true
+        button.accessibilityLabel = "授業を聞かせる"
+        button.addTarget(self, action: #selector(noteChatRecordTapped), for: .touchUpInside)
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        let parts = NoteUsageParts()
+        parts.isCompact = true
+
+        let icon = UIImageView(image: UIImage(systemName: "mic.fill"))
+        icon.tintColor = .white
+        icon.contentMode = .scaleAspectFit
+        icon.isUserInteractionEnabled = false
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let remaining = parts.remainingLabel
+        remaining.textColor = .white
+        remaining.isUserInteractionEnabled = false
+        remaining.translatesAutoresizingMaskIntoConstraints = false
+
+        let track = parts.bar
+        track.trackColor = UIColor.white.withAlphaComponent(0.3)
+        track.fillColor = noteDeepGreen.withAlphaComponent(0.6)
+        track.isUserInteractionEnabled = false
+        track.translatesAutoresizingMaskIntoConstraints = false
+
+        let dot = UIView()
+        dot.backgroundColor = .systemRed
+        dot.layer.cornerRadius = 7
+        dot.isHidden = true
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        let waveform = parts.waveform
+        waveform.isHidden = true
+        waveform.translatesAutoresizingMaskIntoConstraints = false
+
+        button.addSubview(icon)
+        button.addSubview(remaining)
+        button.addSubview(dot)
+        button.addSubview(waveform)
+        button.addSubview(track)
+        NSLayoutConstraint.activate([
+            button.heightAnchor.constraint(equalToConstant: 44),
+            icon.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
+            icon.centerYAnchor.constraint(equalTo: button.topAnchor, constant: 18),
+            icon.widthAnchor.constraint(equalToConstant: 20),
+            icon.heightAnchor.constraint(equalToConstant: 20),
+            remaining.leadingAnchor.constraint(greaterThanOrEqualTo: icon.trailingAnchor, constant: 8),
+            remaining.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12),
+            remaining.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+
+            dot.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
+            dot.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 14),
+            dot.heightAnchor.constraint(equalToConstant: 14),
+            waveform.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 10),
+            waveform.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12),
+            waveform.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+            waveform.heightAnchor.constraint(equalToConstant: 20),
+
+            track.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 4),
+            track.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -4),
+            track.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -7),
+            track.heightAnchor.constraint(equalToConstant: 5)
+        ])
+        parts.idleViews = [icon, remaining]
+        parts.recordingViews = [dot, waveform]
+        noteUsageParts.append(parts)
+        refreshNoteUsageUI()
+        return button
+    }
+
+    /// 省略版の「無音で資料を撮る」ボタン(アイコンのみ)
+    private func makeCompactSilentButton() -> UIView {
+        let button = UIButton(type: .system)
+        button.backgroundColor = noteMutedGreen
+        button.layer.cornerRadius = 12
+        button.clipsToBounds = true
+        button.accessibilityLabel = "無音で資料を撮る"
+        button.addTarget(self, action: #selector(noteChatSilentCameraTapped), for: .touchUpInside)
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 12
+        row.alignment = .center
+        row.isUserInteractionEnabled = false
+        row.translatesAutoresizingMaskIntoConstraints = false
+        for name in ["speaker.slash.fill", "camera.fill"] {
+            let iv = UIImageView(image: UIImage(systemName: name))
+            iv.tintColor = .white
+            iv.contentMode = .scaleAspectFit
+            iv.translatesAutoresizingMaskIntoConstraints = false
+            iv.widthAnchor.constraint(equalToConstant: 22).isActive = true
+            iv.heightAnchor.constraint(equalToConstant: 22).isActive = true
+            row.addArrangedSubview(iv)
+        }
+        button.addSubview(row)
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 84),
+            button.heightAnchor.constraint(equalToConstant: 44),
+            row.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+            row.centerYAnchor.constraint(equalTo: button.centerYAnchor)
+        ])
+        return button
+    }
+
+    private func makeNoteActionCard(title: String, imageNames: [String], showsUsage: Bool, action: Selector? = nil) -> UIView {
+        let button = UIButton(type: .system)
+        if let action { button.addTarget(self, action: action, for: .touchUpInside) }
+        button.backgroundColor = noteMutedGreen
+        button.layer.cornerRadius = 18
+        button.clipsToBounds = true
+        button.accessibilityLabel = title
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.heightAnchor.constraint(equalToConstant: 114).isActive = true
+
+        let content = UIStackView()
+        content.axis = .vertical
+        content.alignment = .center
+        content.spacing = showsUsage ? 2 : 8
+        content.isUserInteractionEnabled = false
+        content.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(content)
+
+        // 利用状況パネルより下の領域(パネルが無ければカード全体)の中央に、アイコンとタイトルを置く
+        let body = UILayoutGuide()
+        button.addLayoutGuide(body)
+        var bodyTop = body.topAnchor.constraint(equalTo: button.topAnchor)
+        var usageParts: NoteUsageParts?
+
+        if showsUsage {
+            let usageContainer = UIView()
+            usageContainer.backgroundColor = UIColor.white.withAlphaComponent(0.5)
+            usageContainer.layer.cornerRadius = 10
+            usageContainer.translatesAutoresizingMaskIntoConstraints = false
+            usageContainer.isUserInteractionEnabled = false
+            usageContainer.layer.cornerRadius = 0   // 角はカード側のclipsToBoundsで丸める
+            button.addSubview(usageContainer)
+            NSLayoutConstraint.activate([
+                usageContainer.topAnchor.constraint(equalTo: button.topAnchor),
+                usageContainer.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+                usageContainer.trailingAnchor.constraint(equalTo: button.trailingAnchor)
+            ])
+            bodyTop = body.topAnchor.constraint(equalTo: usageContainer.bottomAnchor)
+
+            let usageRow = UIStackView()
+            usageRow.axis = .horizontal
+            usageRow.alignment = .lastBaseline
+            usageRow.spacing = 4
+            usageRow.translatesAutoresizingMaskIntoConstraints = false
+
+            let usageTitle = UILabel()
+            usageTitle.text = "今週の利用状況"
+            usageTitle.font = .systemFont(ofSize: 12, weight: .medium)
+            usageTitle.adjustsFontSizeToFitWidth = true
+            usageTitle.minimumScaleFactor = 0.75
+            usageTitle.textColor = noteDeepGreen
+            usageTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+            let parts = NoteUsageParts()
+            let usageRemaining = parts.remainingLabel
+            usageRemaining.textColor = noteDeepGreen
+            usageRemaining.textAlignment = .right
+            usageRemaining.setContentCompressionResistancePriority(.required, for: .horizontal)
+            usageRemaining.setContentHuggingPriority(.required, for: .horizontal)
+
+            usageRow.addArrangedSubview(usageTitle)
+            usageRow.addArrangedSubview(usageRemaining)
+
+            let track = parts.bar
+            track.trackColor = noteMutedGreen.withAlphaComponent(0.6)
+            track.fillColor = noteDeepGreen.withAlphaComponent(0.6)
+            track.translatesAutoresizingMaskIntoConstraints = false
+            track.heightAnchor.constraint(equalToConstant: 10).isActive = true
+            usageParts = parts
+
+            let usageInnerStack = UIStackView(arrangedSubviews: [usageRow, track])
+            usageInnerStack.axis = .vertical
+            usageInnerStack.spacing = 4
+            usageInnerStack.translatesAutoresizingMaskIntoConstraints = false
+            usageContainer.addSubview(usageInnerStack)
+            NSLayoutConstraint.activate([
+                usageInnerStack.topAnchor.constraint(equalTo: usageContainer.topAnchor, constant: 5),
+                usageInnerStack.leadingAnchor.constraint(equalTo: usageContainer.leadingAnchor, constant: 10),
+                usageInnerStack.trailingAnchor.constraint(equalTo: usageContainer.trailingAnchor, constant: -10),
+                usageInnerStack.bottomAnchor.constraint(equalTo: usageContainer.bottomAnchor, constant: -6)
+            ])
+        }
+
+        let iconRow = UIStackView()
+        iconRow.axis = .horizontal
+        iconRow.alignment = .center
+        iconRow.spacing = 14
+        let iconSize: CGFloat = showsUsage ? 28 : 28
+        imageNames.forEach { name in
+            let imageView = UIImageView(image: UIImage(systemName: name))
+            imageView.tintColor = .white
+            imageView.contentMode = .scaleAspectFit
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                imageView.widthAnchor.constraint(equalToConstant: iconSize),
+                imageView.heightAnchor.constraint(equalToConstant: iconSize)
+            ])
+            iconRow.addArrangedSubview(imageView)
+        }
+        content.addArrangedSubview(iconRow)
+
+        let titleLabel = UILabel()
+        titleLabel.text = title
+        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.textAlignment = .center
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.82
+        content.addArrangedSubview(titleLabel)
+
+        NSLayoutConstraint.activate([
+            bodyTop,
+            body.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+            content.centerYAnchor.constraint(equalTo: body.centerYAnchor),
+            content.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12)
+        ])
+
+        // 録音中の表示: 波形と「● 録音中」
+        if let parts = usageParts {
+            let waveform = parts.waveform
+            waveform.translatesAutoresizingMaskIntoConstraints = false
+            let dot = UIView()
+            dot.backgroundColor = .systemRed
+            dot.layer.cornerRadius = 5
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 10).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+            let status = UILabel()
+            status.text = "録音中"
+            status.font = .systemFont(ofSize: 14, weight: .bold)
+            status.textColor = .systemRed
+            let statusRow = UIStackView(arrangedSubviews: [dot, status])
+            statusRow.axis = .horizontal
+            statusRow.alignment = .center
+            statusRow.spacing = 8
+
+            let recording = UIStackView(arrangedSubviews: [waveform, statusRow])
+            recording.axis = .vertical
+            recording.alignment = .center
+            recording.spacing = 3
+            recording.isUserInteractionEnabled = false
+            recording.isHidden = true
+            recording.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(recording)
+            NSLayoutConstraint.activate([
+                waveform.heightAnchor.constraint(equalToConstant: 26),
+                waveform.widthAnchor.constraint(equalTo: recording.widthAnchor),
+                recording.centerYAnchor.constraint(equalTo: body.centerYAnchor),
+                recording.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 14),
+                recording.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -14)
+            ])
+            parts.idleViews = [content]
+            parts.recordingViews = [recording]
+            noteUsageParts.append(parts)
+            refreshNoteUsageUI()
+        }
+        return button
+    }
+
+    /// キーボードの高さぶん下余白を増やし、一番下のメッセージが入力欄のすぐ上に来るようスクロールする。
+    @objc private func noteKeyboardWillChangeFrame(_ note: Notification) {
+        guard noteShowsChatDetail, noteChatTextField.isFirstResponder,
+              let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        let local = view.convert(end, from: nil)
+        noteKeyboardOverlap = max(0, view.bounds.maxY - local.minY)
+        let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        let curve = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? 7
+        UIView.animate(withDuration: duration, delay: 0, options: UIView.AnimationOptions(rawValue: curve << 16)) {
+            self.updateScrollInsetForBanner(height: self.adContainerHeight?.constant ?? 0)
+            self.view.layoutIfNeeded()
+            self.scrollNoteChatToBottom(animated: false)
+        }
+    }
+
+    @objc private func noteKeyboardWillHide(_ note: Notification) {
+        guard noteKeyboardOverlap > 0 else { return }
+        noteKeyboardOverlap = 0
+        let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        UIView.animate(withDuration: duration) {
+            self.updateScrollInsetForBanner(height: self.adContainerHeight?.constant ?? 0)
+            self.view.layoutIfNeeded()
+            // 余白が減ってコンテンツが範囲外に出ないよう、下端に収める
+            let maxOffset = max(-self.scroll.contentInset.top,
+                                self.scroll.contentSize.height + self.scroll.contentInset.bottom - self.scroll.bounds.height)
+            if self.scroll.contentOffset.y > maxOffset { self.scroll.contentOffset.y = maxOffset }
+        }
+    }
+
+    /// コンテンツの下端(=最新メッセージ)が、下の余白の直前に見える位置までスクロールする。
+    private func scrollNoteChatToBottom(animated: Bool) {
+        guard noteShowsChatDetail else { return }
+        // まだ何も送っていないときは動かさない(授業名の帯が一瞬スクロールアウトしてしまうため)
+        guard !(noteChatMessagesBySession[noteChatCurrentSession] ?? []).isEmpty else { return }
+        view.layoutIfNeeded()
+        let visibleHeight = scroll.bounds.height - scroll.contentInset.bottom
+        let target = scroll.contentSize.height - visibleHeight
+        guard target > -scroll.contentInset.top, scroll.contentSize.height > visibleHeight else { return }
+        scroll.setContentOffset(CGPoint(x: 0, y: target), animated: animated)
+    }
+
+    @objc private func handleNoteChatTapOutside() {
+        guard noteChatTextField.isFirstResponder else { return }
+        view.endEditing(true)
+    }
+
+    @objc private func noteChatBackButtonTapped() {
+        showNoteChatDetail(false)
+    }
+
+    @objc private func handleNoteChatEdgeSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        guard gesture.state == .ended, noteShowsChatDetail else { return }
+        showNoteChatDetail(false)
+    }
+
+    /// UIVisualEffectView(ガラスのカード)を含むビューは snapshotView だと黒っぽく写るため、描画結果を画像にして使う。
+    private static func blurSafeSnapshot(of view: UIView) -> UIView? {
+        guard view.bounds.width > 0, view.bounds.height > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        let imageView = UIImageView(image: image)
+        imageView.frame = view.bounds
+        return imageView
+    }
+
+    private func showNoteChatDetail(_ show: Bool) {
+        guard show != noteShowsChatDetail else { return }
+        view.endEditing(true)
+
+        let incoming = show ? noteChatContainer : noteListContainer
+        let outgoing = show ? noteListContainer : noteChatContainer
+        let width = max(noteSection.bounds.width, view.bounds.width)
+
+        // 退場側は見た目だけ(スナップショット)を残して即座にレイアウトから外す。
+        // 両方がスタックに残ると、入場側が退場側の下に押し下げられて上に余白ができるため。
+        let snapshot = Self.blurSafeSnapshot(of: outgoing)
+        // noteSection自体がヘッダーの出入りで上下に動くため、動かない親(stack)に載せて位置を固定する
+        let snapshotHost: UIView = stack
+        snapshot?.frame = outgoing.convert(outgoing.bounds, to: snapshotHost)
+
+        // セグメント(ポータル/AIハック)と授業レビュー行も、一覧と一緒に横へスライドさせる
+        let headerViews: [UIView] = [syllabusViewToggle, actionHeaderRow]
+        var headerSnapshots: [UIView] = []
+        if show {
+            for header in headerViews where !header.isHidden {
+                guard let host = header.superview,
+                      let snap = header.snapshotView(afterScreenUpdates: false) else { continue }
+                snap.frame = header.frame
+                headerSnapshots.append(snap)
+                host.addSubview(snap)
+            }
+        }
+
+        noteShowsChatDetail = show
+        noteChatInputBar?.isHidden = !show
+        updateTitleSubtitle(animated: false)
+        updateStickyNoteChatHeader()
+        updateScrollInsetForBanner(height: adContainerHeight?.constant ?? 0)
+        syllabusViewToggle.isHidden = show
+        actionHeaderRow.isHidden = show
+        noteSortButton.isHidden = show
+        noteAttachmentsButton.isHidden = show
+        noteMoreButton.isHidden = show
+        if !show {
+            headerViews.forEach { $0.transform = CGAffineTransform(translationX: -width, y: 0) }
+        }
+
+        outgoing.isHidden = true
+        incoming.isHidden = false
+        incoming.transform = CGAffineTransform(translationX: show ? width : -width, y: 0)
+        if let snapshot { snapshotHost.addSubview(snapshot) }
+        view.layoutIfNeeded()
+
+        UIView.animate(
+            withDuration: 0.3,
+            delay: 0,
+            options: [.curveEaseInOut],
+            animations: {
+                incoming.transform = .identity
+                snapshot?.transform = CGAffineTransform(translationX: show ? -width : width, y: 0)
+                headerSnapshots.forEach { $0.transform = CGAffineTransform(translationX: -width, y: 0) }
+                if !show { headerViews.forEach { $0.transform = .identity } }
+            },
+            completion: { _ in
+                snapshot?.removeFromSuperview()
+                headerSnapshots.forEach { $0.removeFromSuperview() }
+            }
+        )
+    }
+
+    private func makeNoteInputBar() -> UIView {
+        let bar = UIView()
+        bar.backgroundColor = .systemBackground
+        bar.layer.cornerRadius = 24
+        bar.layer.borderWidth = 1
+        bar.layer.borderColor = UIColor.separator.cgColor
+        bar.clipsToBounds = true
+        bar.translatesAutoresizingMaskIntoConstraints = false
+
+        // 上段: 追加した写真のサムネイル(無いときは高さ0)
+        noteChatAttachmentScroll.showsHorizontalScrollIndicator = false
+        noteChatAttachmentScroll.alwaysBounceHorizontal = true
+        noteChatAttachmentScroll.translatesAutoresizingMaskIntoConstraints = false
+        noteChatAttachmentStack.axis = .horizontal
+        noteChatAttachmentStack.spacing = 8
+        noteChatAttachmentStack.translatesAutoresizingMaskIntoConstraints = false
+        noteChatAttachmentScroll.addSubview(noteChatAttachmentStack)
+        bar.addSubview(noteChatAttachmentScroll)
+
+        // 下段: +  入力欄  送信
+        let fieldRow = UIView()
+        fieldRow.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(fieldRow)
+
+        let plus = UIButton(type: .system)
+        plus.setImage(UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), for: .normal)
+        plus.tintColor = .secondaryLabel
+        plus.accessibilityLabel = "追加"
+        plus.showsMenuAsPrimaryAction = true
+        plus.menu = UIMenu(children: [
+            UIAction(title: "撮影", image: UIImage(systemName: "camera")) { [weak self] _ in
+                self?.noteChatSilentCameraTapped()
+            },
+            UIAction(title: "ライブラリから追加", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in
+                self?.noteChatPickFromLibrary()
+            }
+        ])
+        plus.translatesAutoresizingMaskIntoConstraints = false
+
+        noteChatTextField.placeholder = "リアクションペーパーを書いて"
+        noteChatTextField.font = .systemFont(ofSize: 15)
+        noteChatTextField.returnKeyType = .send
+        noteChatTextField.delegate = self
+        noteChatTextField.addTarget(self, action: #selector(noteChatTextChanged), for: .editingChanged)
+        noteChatTextField.translatesAutoresizingMaskIntoConstraints = false
+
+        let sendButton = noteChatSendButton
+        sendButton.layer.cornerRadius = 18
+        sendButton.setImage(UIImage(systemName: "arrow.up"), for: .normal)
+        sendButton.accessibilityLabel = "送信"
+        sendButton.addTarget(self, action: #selector(noteChatSendTapped), for: .touchUpInside)
+        sendButton.translatesAutoresizingMaskIntoConstraints = false
+
+        fieldRow.addSubview(plus)
+        fieldRow.addSubview(noteChatTextField)
+        fieldRow.addSubview(sendButton)
+
+        // 最上段: 「編集中」バナー(編集していないときは高さ0)
+        noteChatEditBanner.clipsToBounds = true
+        noteChatEditBanner.translatesAutoresizingMaskIntoConstraints = false
+        let editIcon = UIImageView(image: UIImage(systemName: "pencil"))
+        editIcon.tintColor = .secondaryLabel
+        editIcon.translatesAutoresizingMaskIntoConstraints = false
+        let editLabel = UILabel()
+        editLabel.text = "メッセージを編集中(これ以降の会話は新しくなります)"
+        editLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        editLabel.textColor = .secondaryLabel
+        editLabel.translatesAutoresizingMaskIntoConstraints = false
+        var cancelCfg = UIButton.Configuration.plain()
+        cancelCfg.image = UIImage(systemName: "xmark.circle.fill")
+        cancelCfg.baseForegroundColor = .tertiaryLabel
+        let cancelEdit = UIButton(configuration: cancelCfg)
+        cancelEdit.accessibilityLabel = "編集をやめる"
+        cancelEdit.addTarget(self, action: #selector(noteChatCancelEditTapped), for: .touchUpInside)
+        cancelEdit.translatesAutoresizingMaskIntoConstraints = false
+        noteChatEditBanner.addSubview(editIcon)
+        noteChatEditBanner.addSubview(editLabel)
+        noteChatEditBanner.addSubview(cancelEdit)
+        bar.addSubview(noteChatEditBanner)
+        let bannerHeight = noteChatEditBanner.heightAnchor.constraint(equalToConstant: 0)
+        noteChatEditBannerHeight = bannerHeight
+        NSLayoutConstraint.activate([
+            noteChatEditBanner.topAnchor.constraint(equalTo: bar.topAnchor),
+            noteChatEditBanner.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            noteChatEditBanner.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            bannerHeight,
+            editIcon.leadingAnchor.constraint(equalTo: noteChatEditBanner.leadingAnchor, constant: 16),
+            editIcon.centerYAnchor.constraint(equalTo: noteChatEditBanner.centerYAnchor),
+            editLabel.leadingAnchor.constraint(equalTo: editIcon.trailingAnchor, constant: 6),
+            editLabel.centerYAnchor.constraint(equalTo: noteChatEditBanner.centerYAnchor),
+            cancelEdit.trailingAnchor.constraint(equalTo: noteChatEditBanner.trailingAnchor, constant: -8),
+            cancelEdit.centerYAnchor.constraint(equalTo: noteChatEditBanner.centerYAnchor),
+            cancelEdit.widthAnchor.constraint(equalToConstant: 32),
+            cancelEdit.heightAnchor.constraint(equalToConstant: 32),
+            editLabel.trailingAnchor.constraint(lessThanOrEqualTo: cancelEdit.leadingAnchor, constant: -4)
+        ])
+
+        let heightConstraint = noteChatAttachmentScroll.heightAnchor.constraint(equalToConstant: 0)
+        let topPad = noteChatAttachmentScroll.topAnchor.constraint(equalTo: noteChatEditBanner.bottomAnchor, constant: 0)
+        noteChatAttachmentHeight = heightConstraint
+        noteChatAttachmentTopPad = topPad
+
+        NSLayoutConstraint.activate([
+            topPad,
+            noteChatAttachmentScroll.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            noteChatAttachmentScroll.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
+            heightConstraint,
+            noteChatAttachmentStack.topAnchor.constraint(equalTo: noteChatAttachmentScroll.contentLayoutGuide.topAnchor),
+            noteChatAttachmentStack.bottomAnchor.constraint(equalTo: noteChatAttachmentScroll.contentLayoutGuide.bottomAnchor),
+            noteChatAttachmentStack.leadingAnchor.constraint(equalTo: noteChatAttachmentScroll.contentLayoutGuide.leadingAnchor),
+            noteChatAttachmentStack.trailingAnchor.constraint(equalTo: noteChatAttachmentScroll.contentLayoutGuide.trailingAnchor),
+            noteChatAttachmentStack.heightAnchor.constraint(equalTo: noteChatAttachmentScroll.frameLayoutGuide.heightAnchor),
+
+            fieldRow.topAnchor.constraint(equalTo: noteChatAttachmentScroll.bottomAnchor),
+            fieldRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            fieldRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            fieldRow.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            fieldRow.heightAnchor.constraint(equalToConstant: Self.noteInputBarMinHeight),
+
+            plus.leadingAnchor.constraint(equalTo: fieldRow.leadingAnchor, constant: 8),
+            plus.centerYAnchor.constraint(equalTo: fieldRow.centerYAnchor),
+            plus.widthAnchor.constraint(equalToConstant: 40),
+            plus.heightAnchor.constraint(equalToConstant: 40),
+
+            sendButton.trailingAnchor.constraint(equalTo: fieldRow.trailingAnchor, constant: -6),
+            sendButton.centerYAnchor.constraint(equalTo: fieldRow.centerYAnchor),
+            sendButton.widthAnchor.constraint(equalToConstant: 36),
+            sendButton.heightAnchor.constraint(equalToConstant: 36),
+
+            noteChatTextField.leadingAnchor.constraint(equalTo: plus.trailingAnchor, constant: 4),
+            noteChatTextField.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -10),
+            noteChatTextField.centerYAnchor.constraint(equalTo: fieldRow.centerYAnchor)
+        ])
+        return bar
+    }
+
+    // MARK: 休講・補講(授業日ごとの印)
+    private static let noteJST = TimeZone(identifier: "Asia/Tokyo") ?? .current
+
+    fileprivate static func noteDayID(_ date: Date) -> Int {
+        Int(floor((date.timeIntervalSince1970 + TimeInterval(noteJST.secondsFromGMT(for: date))) / 86400))
+    }
+
+    fileprivate static func noteDate(dayID: Int) -> Date {
+        let utcMidnight = Date(timeIntervalSince1970: TimeInterval(dayID) * 86400)
+        return utcMidnight.addingTimeInterval(-TimeInterval(noteJST.secondsFromGMT(for: utcMidnight)))
+    }
+
+    private var noteCancelledDays: Set<Int> {
+        get { Set(UserDefaults.standard.array(forKey: "note.cancelled.\(course.id)") as? [Int] ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "note.cancelled.\(course.id)") }
+    }
+
+    private var noteExtraDays: Set<Int> {
+        get { Set(UserDefaults.standard.array(forKey: "note.extra.\(course.id)") as? [Int] ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "note.extra.\(course.id)") }
+    }
+
+    private func setNoteDay(_ dayID: Int, cancelled: Bool) {
+        var days = noteCancelledDays
+        if cancelled { days.insert(dayID) } else { days.remove(dayID) }
+        noteCancelledDays = days
+        reloadNoteCardsAnimated()
+    }
+
+    private func addNoteExtraDay(_ date: Date) {
+        let dayID = Self.noteDayID(date)
+        if let existing = noteSchedule.first(where: { $0.dayID == dayID }) {
+            if existing.isCancelled {
+                setNoteDay(dayID, cancelled: false)   // 休講にしていた日なら、授業日に戻す
+            } else {
+                showNoteAlert(title: "その日はすでに授業日です", message: "別の日を選んでください。")
+            }
+            return
+        }
+        var days = noteExtraDays
+        days.insert(dayID)
+        noteExtraDays = days
+        reloadNoteCardsAnimated()
+    }
+
+    private func removeNoteExtraDay(_ dayID: Int) {
+        var days = noteExtraDays
+        days.remove(dayID)
+        noteExtraDays = days
+        reloadNoteCardsAnimated()
+    }
+
+    private func reloadNoteCardsAnimated() {
+        UIView.transition(with: noteCardStack, duration: 0.25, options: [.transitionCrossDissolve]) {
+            self.loadNoteSessionCards()
+        }
+    }
+
+    /// 「第N回授業」(休講の日は「10/8 休講」)。
+    private func noteSessionTitle(dayID: Int) -> String {
+        if let entry = noteSchedule.first(where: { $0.dayID == dayID }), let number = entry.number {
+            return "第\(number)回授業"
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ja_JP")
+        formatter.dateFormat = "M/d"
+        return "\(formatter.string(from: Self.noteDate(dayID: dayID))) 休講"
+    }
+
+    @objc private func noteAddExtraDayTapped() {
+        let picker = NoteExtraDatePickerViewController()
+        picker.onPick = { [weak self] date in self?.addNoteExtraDay(date) }
+        present(picker, animated: true)
+    }
+
+    private func loadNoteSessionCards() {
+        let cal = Calendar(identifier: .gregorian)
+        // 箱は「前日の時点で」用意しておきたいので、翌日までの授業回を対象にする
+        // (例: 今日が木曜なら、今日の回に加えて明日=金曜の回もすでに表示する)
+        guard let tomorrow = cal.date(byAdding: .day, value: 1, to: Date()) else { return }
+
+        let baseDates = LectureSessionNumbering.sessionDates(
+            upTo: tomorrow,
+            weekday: location.day,
+            term: term,
+            campus: LectureSessionNumbering.campus(for: course)
+        )
+        // 学事暦の授業日 + 補講日。日付(dayID)で重複を除いて古い順に並べる。
+        var datesByID: [Int: Date] = [:]
+        for date in baseDates { datesByID[Self.noteDayID(date)] = date }
+        let extras = noteExtraDays
+        for id in extras where datesByID[id] == nil { datesByID[id] = Self.noteDate(dayID: id) }
+
+        let cancelled = noteCancelledDays
+        var number = 0
+        var cards: [NoteSessionCard] = datesByID.keys.sorted().map { id in
+            let isCancelled = cancelled.contains(id)
+            if !isCancelled { number += 1 }
+            return NoteSessionCard(dayID: id, number: isCancelled ? nil : number, date: datesByID[id]!,
+                                   isCancelled: isCancelled, isExtra: extras.contains(id))
+        }
+        noteSchedule = cards
+
+        switch noteSortMode {
+        case .session:
+            cards.sort { $0.dayID > $1.dayID }
+        case .oldest:
+            cards.sort { $0.dayID < $1.dayID }
+        case .chat:
+            // 最後に送信した順(新しい方が上)。まだ送っていない回は日付順で後ろに並べる。
+            cards.sort { lhs, rhs in
+                switch (noteLastSentAt[lhs.dayID], noteLastSentAt[rhs.dayID]) {
+                case let (l?, r?): return l > r
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default: return lhs.dayID > rhs.dayID
+                }
+            }
+        }
+
+        noteCardStack.arrangedSubviews.forEach {
+            noteCardStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        cards.forEach { noteCardStack.addArrangedSubview(makeNoteCard($0)) }
+        noteEmptyLabel.isHidden = !cards.isEmpty
+    }
+
+    private func makeNoteCard(_ card: NoteSessionCard) -> UIView {
+        let messages = noteChatMessagesBySession[card.dayID] ?? []
+
+        let classDateFormatter = DateFormatter()
+        classDateFormatter.locale = Locale(identifier: "ja_JP")
+        classDateFormatter.dateFormat = "M/d E"
+        let classDateText = classDateFormatter.string(from: card.date)
+        let sentText = noteSentTimeText(dayID: card.dayID)   // 送信済みのときだけ。授業日と同じ表示を重ねない
+
+        // 最後のメッセージ(種類アイコン付き)。無ければ薄い文言。
+        let previewIcon = UIImageView()
+        previewIcon.contentMode = .scaleAspectFit
+        previewIcon.tintColor = .tertiaryLabel
+        previewIcon.setContentHuggingPriority(.required, for: .horizontal)
+        previewIcon.translatesAutoresizingMaskIntoConstraints = false
+        previewIcon.widthAnchor.constraint(equalToConstant: 14).isActive = true
+        previewIcon.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        let previewLabel = UILabel()
+        previewLabel.numberOfLines = 1
+        previewLabel.lineBreakMode = .byTruncatingTail
+        previewLabel.font = .systemFont(ofSize: 13)
+        if let last = messages.last {
+            previewIcon.image = UIImage(systemName: last.previewSymbol,
+                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .medium))
+            previewLabel.text = last.previewText
+            previewLabel.textColor = .secondaryLabel
+        } else {
+            previewLabel.text = card.isCancelled ? "タップで休講を取り消せます" : "まだ記録がありません"
+            previewLabel.textColor = .tertiaryLabel
+        }
+        let previewRow = UIStackView(arrangedSubviews: messages.isEmpty ? [previewLabel] : [previewIcon, previewLabel])
+        previewRow.axis = .horizontal
+        previewRow.alignment = .center
+        previewRow.spacing = 5
+
+        let titleLabel = UILabel()
+        let titleText = card.number.map { "第\($0)回授業" } ?? classDateText
+        titleLabel.text = card.isExtra && card.number != nil ? "\(titleText) · 補講" : titleText
+        let timeLabel = UILabel()
+        timeLabel.textColor = .tertiaryLabel
+        timeLabel.textAlignment = .right
+        timeLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        let content: UIView
+        let cardView: NoteSessionCardControl
+
+        if card.isCancelled {
+            // ── 休講: 淡く、点線の枠。番号は付けない ──
+            cardView = NoteSessionCardControl(cornerRadius: 24, tint: nil)
+            cardView.setDashedStyle()
+            cardView.alpha = 0.6
+            titleLabel.font = .systemFont(ofSize: 15, weight: .medium)
+            titleLabel.attributedText = NSAttributedString(string: titleLabel.text ?? "", attributes: [
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                .foregroundColor: UIColor.secondaryLabel,
+                .font: UIFont.systemFont(ofSize: 15, weight: .medium)
+            ])
+            let badgeTag = UILabel()
+            badgeTag.text = "  休講  "
+            badgeTag.font = .systemFont(ofSize: 11, weight: .medium)
+            badgeTag.textColor = .secondaryLabel
+            badgeTag.backgroundColor = UIColor.secondaryLabel.withAlphaComponent(0.15)
+            badgeTag.layer.cornerRadius = 9
+            badgeTag.layer.masksToBounds = true
+            badgeTag.setContentHuggingPriority(.required, for: .horizontal)
+            let titleRow = UIStackView(arrangedSubviews: [titleLabel, badgeTag, UIView()])
+            titleRow.axis = .horizontal
+            titleRow.alignment = .center
+            titleRow.spacing = 8
+            let icon = NoteSessionCircleBadge(symbol: "calendar.badge.minus", size: 44, deep: noteDeepGreen)
+            let titles = UIStackView(arrangedSubviews: [titleRow, previewRow])
+            titles.axis = .vertical
+            titles.spacing = 2
+            let row = UIStackView(arrangedSubviews: [icon, titles])
+            row.axis = .horizontal
+            row.alignment = .center
+            row.spacing = 12
+            content = row
+        } else {
+            // ── 通常: 浮かぶガラスの行 ──
+            cardView = NoteSessionCardControl(cornerRadius: 24, tint: nil)
+            titleLabel.font = .systemFont(ofSize: 15, weight: .medium)
+            timeLabel.font = .systemFont(ofSize: 12)
+            timeLabel.text = sentText ?? classDateText   // 送信済みは送信時刻、未送信は授業日
+            let badge = NoteSessionCircleBadge(number: card.number ?? 0, size: 44, solid: false,
+                                               deep: noteDeepGreen, fontSize: 17)
+            let titles = UIStackView(arrangedSubviews: [titleLabel, previewRow])
+            titles.axis = .vertical
+            titles.spacing = 2
+            // 右: 時刻(未送信なら授業日)と、写真・録音の件数
+            let trailing = UIStackView(arrangedSubviews: [timeLabel] + (makeNoteCountPills(messages: messages).map { [$0] } ?? []))
+            trailing.axis = .vertical
+            trailing.alignment = .trailing
+            trailing.spacing = 5
+            trailing.setContentHuggingPriority(.required, for: .horizontal)
+            let row = UIStackView(arrangedSubviews: [badge, titles, trailing])
+            row.axis = .horizontal
+            row.alignment = .center
+            row.spacing = 12
+            content = row
+        }
+
+        content.isUserInteractionEnabled = false
+        content.translatesAutoresizingMaskIntoConstraints = false
+        cardView.tag = card.dayID
+        cardView.addTarget(self, action: #selector(noteCardTapped(_:)), for: .touchUpInside)
+        // 長押しで休講/補講の操作。システムのコンテキストメニューは、タップ時にも周りを暗くしてしまうため使わない。
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(noteCardLongPressed(_:)))
+        longPress.minimumPressDuration = 0.45
+        cardView.addGestureRecognizer(longPress)
+        cardView.accessibilityLabel = noteSessionTitle(dayID: card.dayID)
+        cardView.addSubview(content)
+        let inset: CGFloat = 12
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: cardView.topAnchor, constant: inset),
+            content.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 14),
+            content.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -14),
+            content.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -inset)
+        ])
+        return cardView
+    }
+
+    /// 写真・録音の件数を小さなカプセルで並べる(どちらも無ければnil)。
+    private func makeNoteCountPills(messages: [NoteChatMessage]) -> UIView? {
+        var photoCount = 0
+        var recordingCount = 0
+        for message in messages {
+            switch message {
+            case .photos(let items): photoCount += items.count
+            case .recording: recordingCount += 1
+            case .text: break
+            }
+        }
+        guard photoCount > 0 || recordingCount > 0 else { return nil }
+        let pills = UIStackView()
+        pills.axis = .horizontal
+        pills.spacing = 4
+        if photoCount > 0 { pills.addArrangedSubview(makeNoteCountPill(symbol: "photo", count: photoCount)) }
+        if recordingCount > 0 { pills.addArrangedSubview(makeNoteCountPill(symbol: "waveform", count: recordingCount)) }
+        return pills
+    }
+
+    private func makeNoteCountPill(symbol: String, count: Int) -> UIView {
+        let icon = UIImageView(image: UIImage(systemName: symbol,
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)))
+        icon.tintColor = Self.noteBubbleText
+        let label = UILabel()
+        label.text = "\(count)"
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = Self.noteBubbleText
+        let stack = UIStackView(arrangedSubviews: [icon, label])
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.spacing = 3
+        stack.isLayoutMarginsRelativeArrangement = true
+        stack.layoutMargins = UIEdgeInsets(top: 3, left: 7, bottom: 3, right: 8)
+        stack.backgroundColor = Self.noteBubbleBackground
+        stack.layer.cornerRadius = 10
+        stack.layer.masksToBounds = true
+        return stack
+    }
+
+    @objc private func noteCardTapped(_ sender: UIControl) {
+        let dayID = sender.tag
+        guard let card = noteSchedule.first(where: { $0.dayID == dayID }) else { return }
+        if card.isCancelled {
+            // 休講のカード: 取り消すか、(チャットがあれば)開くかを選ぶ
+            let sheet = UIAlertController(title: noteSessionTitle(dayID: dayID), message: nil, preferredStyle: .actionSheet)
+            sheet.addAction(UIAlertAction(title: "休講を取り消す", style: .default) { [weak self] _ in
+                self?.setNoteDay(dayID, cancelled: false)
+            })
+            if !(noteChatMessagesBySession[dayID] ?? []).isEmpty {
+                sheet.addAction(UIAlertAction(title: "チャットを開く", style: .default) { [weak self] _ in
+                    self?.openNoteChat(session: dayID)
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+            sheet.popoverPresentationController?.sourceView = sender
+            sheet.popoverPresentationController?.sourceRect = sender.bounds
+            present(sheet, animated: true)
+            return
+        }
+        openNoteChat(session: dayID)
+    }
+
+    /// カード長押しで出す操作の一覧。
+    private func noteCardActions(dayID: Int) -> [(title: String, destructive: Bool, enabled: Bool, handler: () -> Void)] {
+        guard let card = noteSchedule.first(where: { $0.dayID == dayID }) else { return [] }
+        let hasMessages = !(noteChatMessagesBySession[dayID] ?? []).isEmpty
+        var actions: [(title: String, destructive: Bool, enabled: Bool, handler: () -> Void)] = []
+        if card.isCancelled {
+            actions.append(("休講を取り消す", false, true, { [weak self] in self?.setNoteDay(dayID, cancelled: false) }))
+        } else {
+            actions.append(("休講にする", false, true, { [weak self] in self?.setNoteDay(dayID, cancelled: true) }))
+        }
+        if !card.isCancelled || hasMessages {
+            actions.append(("チャットを開く", false, true, { [weak self] in self?.openNoteChat(session: dayID) }))
+        }
+        if card.isExtra {
+            actions.append(("補講を削除", true, !hasMessages, { [weak self] in self?.removeNoteExtraDay(dayID) }))
+        }
+        return actions
+    }
+
+    @objc private func noteCardLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, let card = gesture.view else { return }
+        let actions = noteCardActions(dayID: card.tag)
+        guard !actions.isEmpty else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        let sheet = UIAlertController(title: noteSessionTitle(dayID: card.tag), message: nil, preferredStyle: .actionSheet)
+        for action in actions {
+            let item = UIAlertAction(title: action.title, style: action.destructive ? .destructive : .default) { _ in action.handler() }
+            item.isEnabled = action.enabled
+            sheet.addAction(item)
+        }
+        sheet.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        sheet.popoverPresentationController?.sourceView = card
+        sheet.popoverPresentationController?.sourceRect = card.bounds
+        present(sheet, animated: true)
+    }
+
+    /// 授業回ごとに別チャット。開く回のメッセージで画面を作り直してから遷移する。
+    private func openNoteChat(session: Int) {
+        noteChatCurrentSession = session
+        noteChatTextField.text = ""
+        updateNoteChatSendButton(animated: false)
+        updateTitleSubtitle(animated: false)
+        if noteChatEditingIndex != nil { setNoteChatEditing(nil) }
+        reloadNoteChatAttachments(animated: false)
+        noteChatMessageStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let messages = noteChatMessagesBySession[session] ?? []
+        for message in messages {
+            noteChatMessageStack.addArrangedSubview(makeNoteChatBubble(message))
+        }
+        let isEmpty = messages.isEmpty
+        noteChatMessageStack.alpha = 1
+        noteChatMessageStack.isHidden = isEmpty
+        noteChatActionRow.alpha = 1
+        noteChatActionRow.arrangedSubviews.forEach { $0.transform = .identity; $0.alpha = 1 }
+        noteChatCompactActions.arrangedSubviews.forEach { $0.transform = .identity; $0.alpha = 1 }
+        noteChatActionRow.isHidden = !isEmpty
+        noteChatGuideContainer.alpha = 1
+        noteChatGuideContainer.isHidden = !isEmpty
+        startGuideFloating()
+        noteChatCompactActions.isHidden = isEmpty
+        noteChatCompactActions.alpha = isEmpty ? 0 : 1
+        noteChatActionsCompact = !isEmpty
+        noteChatMorphing = false
+        showNoteChatDetail(true)
+    }
+
+    /// チャット表示中は、緑の帯に「第N回授業 · 9/29 火」を小さく出す(どの回のチャットか分かるように)。
+    private func updateTitleSubtitle(animated: Bool) {
+        let show = noteShowsChatDetail
+        if show, let entry = noteSchedule.first(where: { $0.dayID == noteChatCurrentSession }) {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "ja_JP")
+            formatter.dateFormat = "M/d E"
+            titleSubLabel.text = "\(noteSessionTitle(dayID: entry.dayID)) · \(formatter.string(from: entry.date))"
+        }
+        titleLabelBottomConstraint?.constant = show ? -28 : -12
+        let changes = {
+            self.titleSubLabel.alpha = show ? 1 : 0
+            self.view.layoutIfNeeded()
+        }
+        if animated { UIView.animate(withDuration: 0.25, animations: changes) } else { changes() }
+    }
+
+    /// 最後に送った時刻(今日は時:分、昨日は「昨日」、それ以前は月/日)。まだ送っていなければnil。
+    private func noteSentTimeText(dayID: Int) -> String? {
+        guard let sent = noteLastSentAt[dayID] else { return nil }
+        let cal = Calendar(identifier: .gregorian)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ja_JP")
+        if cal.isDateInToday(sent) {
+            formatter.dateFormat = "H:mm"
+        } else if cal.isDateInYesterday(sent) {
+            return "昨日"
+        } else {
+            formatter.dateFormat = "M/d"
+        }
+        return formatter.string(from: sent)
+    }
+
+    private func relativeDateString(from date: Date) -> String {
+        let cal = Calendar(identifier: .gregorian)
+        // card.dateは授業当日の0時なので、メッセージが無いうちは時刻(0:00)を出さず「今日」「明日」で表す。
+        // メッセージが実装されたら、ここは最終送信日時ベースの表示に差し替える(他のTODOと同じ箇所)。
+        if cal.isDateInToday(date) { return "今日" }
+        if cal.isDateInTomorrow(date) { return "明日" }
+        if cal.isDateInYesterday(date) { return "昨日" }
+        if let twoDaysAgo = cal.date(byAdding: .day, value: -2, to: Date()), cal.isDate(date, inSameDayAs: twoDaysAgo) {
+            return "一昨日"
+        }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = cal.isDate(date, equalTo: Date(), toGranularity: .year) ? "M/d" : "yyyy/M/d"
+        return f.string(from: date)
+    }
+
+    /// 並び替えメニュー(新しい順/古い順/チャット順)。選択中の項目にチェックを付ける。
+    private func updateNoteSortMenu() {
+        func action(_ title: String, _ image: String, _ mode: NoteSortMode) -> UIAction {
+            UIAction(title: title, image: UIImage(systemName: image),
+                     state: noteSortMode == mode ? .on : .off) { [weak self] _ in
+                guard let self else { return }
+                self.noteSortMode = mode
+                self.updateNoteSortMenu()
+                UIView.transition(with: self.noteCardStack, duration: 0.25, options: [.transitionCrossDissolve]) {
+                    self.loadNoteSessionCards()
+                }
+            }
+        }
+        noteSortButton.menu = UIMenu(title: "並び替え", children: [
+            action("授業が新しい順", "arrow.down", .session),
+            action("授業が古い順", "arrow.up", .oldest),
+            action("チャット順", "bubble.left.and.bubble.right", .chat)
+        ])
+        noteSortButton.showsMenuAsPrimaryAction = true
     }
 
 
@@ -3558,21 +4941,14 @@ final class CourseDetailViewController: UIViewController, UITextViewDelegate, UI
 
     private func updateScrollInsetForBanner(height: CGFloat) {
         var inset = scroll.contentInset
-        inset.bottom = height + (lectureAIComposer.isHidden ? 0 : 76)
+        let barVisible = noteChatInputBar.map { !$0.isHidden } ?? false
+        let barHeight = max(Self.noteInputBarMinHeight, noteChatInputBar?.bounds.height ?? 0)
+        inset.bottom = max(height, noteKeyboardOverlap) + (barVisible ? barHeight + 8 + 12 : 0)
         scroll.contentInset = inset
         scroll.verticalScrollIndicatorInsets.bottom = inset.bottom
     }
 
     @objc private func onAdMobReady() { loadBannerIfNeeded() }
-}
-
-// MARK: - PHPickerViewControllerDelegate
-extension CourseDetailViewController: PHPickerViewControllerDelegate {
-    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        picker.dismiss(animated: true) { [weak self] in
-            self?.importLecturePhotos(results)
-        }
-    }
 }
 
 // MARK: - BannerViewDelegate
@@ -3590,22 +4966,84 @@ extension CourseDetailViewController: BannerViewDelegate {
     }
 }
 
+// MARK: - UITextFieldDelegate (ノートチャットの入力欄)
+extension CourseDetailViewController: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer is UISwipeGestureRecognizer {
+            // 横にスクロールできる部品(友だち一覧・写真の列・添付欄)の上では、画面切り替えスワイプを使わない
+            var current: UIView? = touch.view
+            while let candidate = current {
+                if let scrollView = candidate as? UIScrollView, scrollView !== scroll,
+                   !(scrollView.superview is WKWebView),   // ポータル(WKWebView)の上でも切り替えられるようにする
+                   scrollView.contentSize.width > scrollView.bounds.width + 1 { return false }
+                if candidate is UITextField || candidate is PixelToggleControl { return false }
+                current = candidate.superview
+            }
+            return true
+        }
+        guard let bar = noteChatInputBar else { return true }
+        return !(touch.view?.isDescendant(of: bar) ?? false)
+    }
+}
+
+extension CourseDetailViewController: UITextFieldDelegate {
+    /// 入力を始めると、まだ何も送っていなくても大きなカードを省略ボタンに畳む。
+    /// 何も送らずにキーボードを閉じたら、また大きなカードに戻す(どちらもアニメーション)。
+    func textFieldDidBeginEditing(_ textField: UITextField) {
+        guard textField === noteChatTextField else { return }
+        syncNoteChatActions()
+    }
+
+    func textFieldDidEndEditing(_ textField: UITextField) {
+        guard textField === noteChatTextField else { return }
+        syncNoteChatActions()
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        noteChatSendTapped()
+        return true
+    }
+}
+
 // MARK: - WKNavigationDelegate
 extension CourseDetailViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         syllabusWebPageLoaded = true
-        // SPAレンダリング完了を待つため2秒後に抽出 ＋ ポータル高さ更新
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+        // 以前は固定2秒待ってから抽出していたが、対象ページはASP.NET側で完全にレンダリングされた
+        // HTMLが返るため、ほとんどの場合didFinish時点で既に準備できている。
+        // 準備完了を短い間隔でポーリングし、できるだけ早く抽出する(最大2秒まで待つ安全策は維持)。
+        pollSyllabusReadyThenExtract(webView: webView, attempt: 0)
+    }
+
+    private func pollSyllabusReadyThenExtract(webView: WKWebView, attempt: Int) {
+        let maxAttempts = 10
+        let pollInterval = 0.2
+        let readinessCheck = """
+        document.readyState === 'complete' &&
+        (document.querySelectorAll('[id*="gvKeikaku_lblSQ_NO_"]').length > 0 ||
+         document.querySelectorAll('table').length > 0)
+        """
+        webView.evaluateJavaScript(readinessCheck) { [weak self] result, _ in
             guard let self else { return }
-            self.extractSyllabusFields()
-            // ページの実際の高さに合わせてコンテナを広げる
-            webView.evaluateJavaScript("document.documentElement.scrollHeight") { result, _ in
-                DispatchQueue.main.async {
-                    if let h = result as? CGFloat, h > 200 {
-                        self.webHeightConstraint.constant = h + 40
-                        UIView.animate(withDuration: 0.2) { self.view.layoutIfNeeded() }
+            let ready = (result as? Bool) ?? false
+            if ready || attempt >= maxAttempts {
+                self.extractSyllabusFields()
+                // ページの実際の高さに合わせてコンテナを広げる
+                webView.evaluateJavaScript("document.documentElement.scrollHeight") { result, _ in
+                    DispatchQueue.main.async {
+                        if let h = result as? CGFloat, h > 200 {
+                            self.webHeightConstraint.constant = h + 40
+                            UIView.animate(withDuration: 0.2) { self.view.layoutIfNeeded() }
+                        }
                     }
+                }
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + pollInterval) { [weak self] in
+                    self?.pollSyllabusReadyThenExtract(webView: webView, attempt: attempt + 1)
                 }
             }
         }
@@ -3971,14 +5409,9 @@ extension CourseDetailViewController: WKNavigationDelegate {
         btn.addAction(UIAction { [weak self] _ in self?.openWriteReview() }, for: .touchUpInside)
         reviewWriteButton = btn
 
-        // 右寄せレイアウト
-        let spacer = UIView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let row = UIStackView(arrangedSubviews: [spacer, btn])
-        row.axis = .horizontal
-        row.alignment = .center
-        row.spacing = 8
-        stack.insertArrangedSubview(row, at: 0)
+        // セグメント直下の共有行(actionHeaderRow)の左端に挿入する。
+        // 右側にはbuildNoteSection()が並び替え/資料ボタンを追加する。
+        actionHeaderRow.insertArrangedSubview(btn, at: 0)
 
         // 初回のみレビュー促進アラートを表示
         showReviewPromptIfNeeded()
@@ -4180,5 +5613,363 @@ extension CourseDetailViewController: WKNavigationDelegate {
             let host = self.presentedViewController ?? self
             host.present(ac, animated: true)
         }
+    }
+}
+
+
+/// 送信済みの写真を横1列に並べるスクロール。内容が幅に収まるときは右寄せにする。
+final class NotePhotoRowScrollView: UIScrollView {
+    var photos: [CapturedPhoto] = []
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let extra = max(0, bounds.width - contentSize.width)
+        if contentInset.left != extra {
+            contentInset.left = extra
+            if extra > 0 { contentOffset.x = -extra }
+        }
+    }
+}
+
+
+// MARK: - スティッキーヘッダー用
+extension CourseDetailViewController: UIScrollViewDelegate {
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === scroll else { return }
+        updateStickyNoteChatHeader()
+    }
+}
+
+/// ヘッダーの背後に敷く、下へ向かって透明になるフェード。
+final class NoteHeaderFadeView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        updateColors()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        updateColors()
+    }
+
+    private func updateColors() {
+        guard let gradient = layer as? CAGradientLayer else { return }
+        let base = UIColor.systemBackground.resolvedColor(with: traitCollection)
+        gradient.colors = [base.cgColor, base.cgColor, base.withAlphaComponent(0).cgColor]
+        gradient.locations = [0, 0.62, 1]
+        gradient.startPoint = CGPoint(x: 0.5, y: 0)
+        gradient.endPoint = CGPoint(x: 0.5, y: 1)
+    }
+}
+
+
+// MARK: - メッセージ長押しメニュー
+extension CourseDetailViewController: UIContextMenuInteractionDelegate {
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        guard let bubble = interaction.view, let index = noteChatMessageIndex(for: bubble),
+              let messages = noteChatMessagesBySession[noteChatCurrentSession], messages.indices.contains(index),
+              case .text(let text) = messages[index] else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            let copy = UIAction(title: "コピー", image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.string = text
+            }
+            let edit = UIAction(title: "編集", image: UIImage(systemName: "pencil")) { _ in
+                self?.beginEditingNoteMessage(at: index)
+            }
+            return UIMenu(children: [copy, edit])
+        }
+    }
+
+    private func bubblePreview(for interaction: UIContextMenuInteraction) -> UITargetedPreview? {
+        guard let bubble = interaction.view else { return nil }
+        let params = UIPreviewParameters()
+        params.backgroundColor = .clear
+        params.visiblePath = UIBezierPath(roundedRect: bubble.bounds, cornerRadius: bubble.layer.cornerRadius > 0 ? bubble.layer.cornerRadius : 16)
+        return UITargetedPreview(view: bubble, parameters: params)
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        bubblePreview(for: interaction)
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        bubblePreview(for: interaction)
+    }
+}
+
+// MARK: - ヘッダーのタップを優先するスタック
+/// スクロールで上端に貼り付いたヘッダーが、後ろのメッセージより先にタップを受け取れるようにする。
+final class NoteChatStackView: UIStackView {
+    weak var priorityHitView: UIView?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if let header = priorityHitView, !header.isHidden, header.alpha > 0.01, header.isUserInteractionEnabled {
+            let local = convert(point, to: header)
+            if let hit = header.hitTest(local, with: event) { return hit }
+        }
+        return super.hitTest(point, with: event)
+    }
+}
+
+// MARK: - 録音メッセージの吹き出し
+final class NoteRecordingBubbleView: UIControl {
+    let url: URL
+    private let icon = UIImageView()
+
+    init(url: URL, duration: TimeInterval, background: UIColor, tint: UIColor) {
+        self.url = url
+        super.init(frame: .zero)
+        backgroundColor = background
+        layer.cornerRadius = 16
+        translatesAutoresizingMaskIntoConstraints = false
+
+        icon.tintColor = tint
+        icon.contentMode = .scaleAspectFit
+        icon.isUserInteractionEnabled = false
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = UILabel()
+        label.text = "録音  \(CourseDetailViewController.timeText(duration))"
+        label.font = .monospacedDigitSystemFont(ofSize: 15, weight: .medium)
+        label.textColor = tint
+        label.isUserInteractionEnabled = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(icon)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 20),
+            icon.heightAnchor.constraint(equalToConstant: 20),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
+        ])
+        accessibilityLabel = "録音を再生"
+        refresh()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func refresh() {
+        let name = NoteAudioPlayer.shared.isPlaying(url) ? "pause.circle.fill" : "play.circle.fill"
+        icon.image = UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold))
+    }
+}
+
+
+// MARK: - 授業回カード(チャット一覧)
+/// すりガラス風のカード。タップ中に少し縮む。
+final class NoteSessionCardControl: UIControl {
+    // ガラス風の面。UIVisualEffectView(ブラー)は、画面遷移で画像化すると黒っぽく写るため使わず、
+    // 半透明の塗りと上からの光沢のグラデーションで質感を出す。
+    private let blur = UIView()
+    private let tintView = UIView()
+    private let highlight = CAGradientLayer()
+
+    init(cornerRadius: CGFloat, tint: UIColor?) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        backgroundColor = .clear
+        layer.cornerRadius = cornerRadius
+        layer.borderWidth = 1
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.07
+        layer.shadowRadius = 14
+        layer.shadowOffset = CGSize(width: 0, height: 6)
+
+        blur.isUserInteractionEnabled = false
+        blur.layer.cornerRadius = cornerRadius
+        blur.clipsToBounds = true
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(blur)
+
+        tintView.isUserInteractionEnabled = false
+        tintView.backgroundColor = UIColor { trait in
+            trait.userInterfaceStyle == .dark ? UIColor.white.withAlphaComponent(0.08) : UIColor.white.withAlphaComponent(0.92)
+        }
+        tintView.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(tintView)
+        blur.layer.addSublayer(highlight)
+        highlight.startPoint = CGPoint(x: 0.5, y: 0)
+        highlight.endPoint = CGPoint(x: 0.5, y: 1)
+
+        if let tint {
+            let color = UIView()
+            color.isUserInteractionEnabled = false
+            color.backgroundColor = tint
+            color.translatesAutoresizingMaskIntoConstraints = false
+            blur.addSubview(color)
+            NSLayoutConstraint.activate([
+                color.topAnchor.constraint(equalTo: blur.topAnchor), color.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+                color.leadingAnchor.constraint(equalTo: blur.leadingAnchor), color.trailingAnchor.constraint(equalTo: blur.trailingAnchor)
+            ])
+        }
+        NSLayoutConstraint.activate([
+            blur.topAnchor.constraint(equalTo: topAnchor), blur.bottomAnchor.constraint(equalTo: bottomAnchor),
+            blur.leadingAnchor.constraint(equalTo: leadingAnchor), blur.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tintView.topAnchor.constraint(equalTo: blur.topAnchor), tintView.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+            tintView.leadingAnchor.constraint(equalTo: blur.leadingAnchor), tintView.trailingAnchor.constraint(equalTo: blur.trailingAnchor)
+        ])
+        updateBorder()
+        updateHighlight()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func updateHighlight() {
+        let isDark = traitCollection.userInterfaceStyle == .dark
+        let top = UIColor.white.withAlphaComponent(isDark ? 0.10 : 0.55).cgColor
+        highlight.colors = [top, UIColor.white.withAlphaComponent(0).cgColor]
+        highlight.locations = [0, 0.7]
+    }
+
+    private var dashed = false
+    private let dashLayer = CAShapeLayer()
+
+    /// 休講のカード用: 点線の枠・影なし。
+    func setDashedStyle() {
+        dashed = true
+        layer.shadowOpacity = 0
+        layer.borderWidth = 0
+        dashLayer.fillColor = nil
+        dashLayer.lineWidth = 1
+        dashLayer.lineDashPattern = [5, 4]
+        layer.addSublayer(dashLayer)
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        highlight.frame = blur.bounds
+        if dashed {
+            dashLayer.frame = bounds
+            dashLayer.path = UIBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), cornerRadius: layer.cornerRadius).cgPath
+            dashLayer.strokeColor = UIColor.separator.cgColor
+        }
+    }
+
+    private func updateBorder() {
+        guard !dashed else { return }
+        // ガラスの縁の光沢(ライトは白、ダークは薄い白)
+        let isDark = traitCollection.userInterfaceStyle == .dark
+        layer.borderColor = (isDark ? UIColor.white.withAlphaComponent(0.14) : UIColor.white.withAlphaComponent(0.9)).cgColor
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        updateBorder()
+        updateHighlight()
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.allowUserInteraction, .curveEaseOut]) {
+                self.transform = self.isHighlighted ? CGAffineTransform(scaleX: 0.975, y: 0.975) : .identity
+            }
+        }
+    }
+}
+
+/// 回数を載せた丸いバッジ。solid=最新の回(濃い緑 + 淡い光の輪)、それ以外は淡い緑の円。
+final class NoteSessionCircleBadge: UIView {
+    init(number: Int, size: CGFloat, solid: Bool, deep: UIColor, fontSize: CGFloat) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        isUserInteractionEnabled = false
+        layer.cornerRadius = size / 2
+        if solid {
+            backgroundColor = deep
+            // 外側に淡い光の輪
+            layer.shadowColor = deep.cgColor
+            layer.shadowOpacity = 0.28
+            layer.shadowRadius = 6
+            layer.shadowOffset = .zero
+        } else {
+            backgroundColor = deep.withAlphaComponent(0.12)
+            layer.borderWidth = 1
+            layer.borderColor = deep.withAlphaComponent(0.25).cgColor
+        }
+        let label = UILabel()
+        label.text = "\(number)"
+        label.font = .systemFont(ofSize: fontSize, weight: .medium)
+        label.textColor = solid ? .white : deep
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: size),
+            heightAnchor.constraint(equalToConstant: size),
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+    /// アイコン付き(休講のカード用)
+    init(symbol: String, size: CGFloat, deep: UIColor) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        isUserInteractionEnabled = false
+        layer.cornerRadius = size / 2
+        layer.borderWidth = 1
+        layer.borderColor = UIColor.separator.cgColor
+        let icon = UIImageView(image: UIImage(systemName: symbol,
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)))
+        icon.tintColor = .secondaryLabel
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: size),
+            heightAnchor.constraint(equalToConstant: size),
+            icon.centerXAnchor.constraint(equalTo: centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+
+// MARK: - AIハック画面の背景
+/// ごく薄い緑と青のにじみ。白い背景の上でも、ガラス風のカードが浮いて見えるようにする。
+final class NoteBackdropView: UIView {
+    private let green = CAGradientLayer()
+    private let blue = CAGradientLayer()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        for layer in [green, blue] {
+            layer.type = .radial
+            layer.locations = [0, 1]
+            self.layer.addSublayer(layer)
+        }
+        green.startPoint = CGPoint(x: 0.1, y: 0.12)
+        green.endPoint = CGPoint(x: 1.0, y: 0.85)
+        blue.startPoint = CGPoint(x: 0.95, y: 0.95)
+        blue.endPoint = CGPoint(x: 0.0, y: 0.2)
+        updateColors()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        green.frame = bounds
+        blue.frame = bounds
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        updateColors()
+    }
+
+    private func updateColors() {
+        let dark = traitCollection.userInterfaceStyle == .dark
+        let g = UIColor(red: 0/255, green: 150/255, blue: 100/255, alpha: dark ? 0.16 : 0.12)
+        let b = UIColor(red: 70/255, green: 140/255, blue: 220/255, alpha: dark ? 0.12 : 0.09)
+        green.colors = [g.cgColor, g.withAlphaComponent(0).cgColor]
+        blue.colors = [b.cgColor, b.withAlphaComponent(0).cgColor]
     }
 }

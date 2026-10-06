@@ -154,3 +154,6 @@ export const onIncomingRequestDeleted = functions
     await flagRef.set({ createdAt: admin.firestore.FieldValue.serverTimestamp(), by: "onIncomingRequestDeleted" });
   });
 
+
+export {aiCreateSource, aiCompleteSource, aiGetSource, aiListSources, aiRetrySource, aiUpdateSource,
+  aiDeleteSource, aiGetEvidence, aiRetrieveContext, aiProcessSource, aiReconcileInputs, aiRejectLateUpload} from "./ai";

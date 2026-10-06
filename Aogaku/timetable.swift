@@ -7,7 +7,7 @@ import FirebaseAuth
 import FirebaseFirestore
 import WidgetKit   // ← 追加
 
-private let APP_GROUP_ID = "group.jp.forta.Aogaku"
+private let APP_GROUP_ID = WidgetBridge.appGroupID
 
 @inline(__always) private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
@@ -945,7 +945,7 @@ final class timetable: UIViewController,
         } catch { print("Save error:", error) }
         
         // === 共有（App Group）へミラー ===
-        if let g = UserDefaults(suiteName: "group.jp.forta.Aogaku"),
+        if let g = UserDefaults(suiteName: APP_GROUP_ID),
            let data = try? JSONEncoder().encode(assigned) {
             g.set(data, forKey: "tt.assigned.\(currentTerm.storageKey)")
             g.set(dayLabels.count,     forKey: "tt.days")

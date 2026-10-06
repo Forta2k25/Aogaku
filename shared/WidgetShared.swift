@@ -24,7 +24,11 @@ public struct WidgetSnapshot: Codable {
 }
 
 public enum WidgetBridge {
-    static let appGroupID = "group.jp.forta.Aogaku"   // ←あなたの App Group に合わせて
+    #if DEBUG
+    static let appGroupID = "group.jp.forta.Aogaku.dev"
+    #else
+    static let appGroupID = "group.jp.forta.Aogaku"
+    #endif
     static let key = "today_timetable_snapshot"
 
     public static func save(_ snap: WidgetSnapshot) {

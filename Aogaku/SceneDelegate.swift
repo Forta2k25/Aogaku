@@ -19,6 +19,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let ws = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: ws)
+        if AppBackend.isOffline || AppBackend.configurationError != nil {
+            window.rootViewController = UINavigationController(rootViewController: AIInputPreviewViewController())
+            window.makeKeyAndVisible(); self.window = window; return
+        }
         let sb = UIStoryboard(name: "Main", bundle: nil)
         let root = sb.instantiateInitialViewController()
         if let tab = root as? UITabBarController {
@@ -49,7 +53,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
     }
     
     func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
-        guard let url = contexts.first?.url else { return }
+        guard !AppBackend.isOffline, AppBackend.configurationError == nil, let url = contexts.first?.url else { return }
         _ = DeepLinkRouter.handle(url, window: window)
     }
 
@@ -61,6 +65,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
         // The scene may re-connect later, as its session was not necessarily discarded (see `application:didDiscardSceneSessions` instead).
     }
     func sceneDidBecomeActive(_ scene: UIScene) {
+        guard !AppBackend.isOffline, AppBackend.configurationError == nil else { return }
         let top = (window?.rootViewController?.presentedViewController)
                  ?? window?.rootViewController
         if let top { AppGatekeeper.shared.forceRefreshAndPresentIfNeeded(on: top) }

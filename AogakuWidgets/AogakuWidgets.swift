@@ -7,7 +7,7 @@
 import WidgetKit
 import SwiftUI
 
-private let APP_GROUP_ID = "group.jp.forta.Aogaku"
+private let APP_GROUP_ID = WidgetBridge.appGroupID
 
 struct TodayEntry: TimelineEntry {
     let date: Date
@@ -140,7 +140,7 @@ struct TodayProvider: TimelineProvider {
 // Widgetの背景色（system / lightGray / white に対応）
 private func widgetBGColor() -> Color {
     // App Group 未設定でも動くよう、とりあえず "lightGray" を既定に
-    let pref = (UserDefaults(suiteName: "group.jp.forta.Aogaku")?
+    let pref = (UserDefaults(suiteName: APP_GROUP_ID)?
                 .string(forKey: "timetable.bg")) ?? "lightGray"
     switch pref {
     case "white":

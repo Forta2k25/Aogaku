@@ -109,6 +109,7 @@
 		B3A17B472E40A19A00ACCA3A /* Exceptions for "Aogaku" folder in "Aogaku" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"GoogleService-Info.plist",
 				Info.plist,
 			);
 			target = B3A17B1E2E40A19700ACCA3A /* Aogaku */;
@@ -305,6 +306,7 @@
 				B3A17B1B2E40A19700ACCA3A /* Sources */,
 				B3A17B1C2E40A19700ACCA3A /* Frameworks */,
 				B3A17B1D2E40A19700ACCA3A /* Resources */,
+				C0DE00000000000000000001 /* Prepare Firebase Environment */,
 				A49A40742E7BDFCE0036636C /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -473,6 +475,31 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		C0DE00000000000000000001 /* Prepare Firebase Environment */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/prepare_firebase_config.py",
+				"$(SRCROOT)/Aogaku/GoogleService-Info.plist",
+				"$(SRCROOT)/Config",
+			);
+			name = "Prepare Firebase Environment";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info-development.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info-production.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FirebaseEnvironment.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/scripts/prepare_firebase_config.py\"";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A49A405C2E7BDFCC0036636C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -545,7 +572,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
-				CODE_SIGN_ENTITLEMENTS = AogakuWidgetsExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Config/Extensions-Debug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
@@ -559,7 +586,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 2.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.AogakuWidgets;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.dev.AogakuWidgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -601,7 +628,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
-				CODE_SIGN_ENTITLEMENTS = AogakuAction/AogakuAction.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Config/Extensions-Debug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
@@ -616,7 +643,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 2.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.AogakuAction;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.dev.AogakuAction;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -665,13 +692,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Aogaku/Aogaku.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Config/Aogaku-Debug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Aogaku/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "青山ハック";
+				INFOPLIST_FILE = "Config/Info-Debug.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "青山ハック Dev";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "授業や学事予定をiOSカレンダーに追加・表示するためにカレンダーへのアクセスが必要です。";
 				INFOPLIST_KEY_NSCameraUsageDescription = "QRコードの読み取りと、授業資料の撮影のためにカメラを使用します。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "授業の音声を録音するためにマイクを使用します。";
@@ -679,7 +707,6 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
-				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
@@ -688,7 +715,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -715,7 +742,6 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
-				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;

@@ -9,6 +9,12 @@
 //
 
 import UIKit
+
+#if DEBUG
+private let AI_APP_GROUP_ID = "group.jp.forta.Aogaku.dev"
+#else
+private let AI_APP_GROUP_ID = "group.jp.forta.Aogaku"
+#endif
 import UniformTypeIdentifiers
 
 final class ActionViewController: UIViewController {
@@ -414,7 +420,7 @@ final class ActionViewController: UIViewController {
             return
         }
 
-        let defaults = UserDefaults(suiteName: "group.jp.forta.Aogaku")
+        let defaults = UserDefaults(suiteName: AI_APP_GROUP_ID)
         defaults?.set(data, forKey: "pendingGradesImport")
         defaults?.synchronize()
         NSLog("[AogakuAction] saved %d bytes to pendingGradesImport", data.count)
@@ -448,7 +454,7 @@ final class ActionViewController: UIViewController {
 
         // App Group の共有 UserDefaults に先に保存しておく
         // → extensionContext?.open() が成功しても失敗しても、アプリ側で拾える
-        let defaults = UserDefaults(suiteName: "group.jp.forta.Aogaku")
+        let defaults = UserDefaults(suiteName: AI_APP_GROUP_ID)
         if defaults == nil {
             NSLog("[AogakuAction] ⚠️ App Group UserDefaults is NIL – entitlement missing?")
         }

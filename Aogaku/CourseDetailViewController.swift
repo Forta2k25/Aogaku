@@ -4,6 +4,8 @@ import WebKit
 import FirebaseFirestore
 import FirebaseAuth
 import GoogleMobileAds
+import UniformTypeIdentifiers
+import PhotosUI
 
 // すでに別所で定義済みなら削除OK
 struct AttendanceCounts: Codable {
@@ -143,11 +145,13 @@ final class CourseDetailViewController: UIViewController {
     /// チャットの1メッセージ。写真は表示用の縮小版と、送信用の高画質JPEGを両方持つ。
     private enum NoteChatMessage {
         case text(String)
+        case document(String)
         case photos([CapturedPhoto])
         case recording(url: URL, duration: TimeInterval)
 
         var previewSymbol: String {
             switch self {
+            case .document: return "doc.text"
             case .text: return "text.bubble"
             case .photos: return "photo"
             case .recording: return "waveform"
@@ -156,12 +160,15 @@ final class CourseDetailViewController: UIViewController {
 
         var previewText: String {
             switch self {
+            case .document(let name): return name
             case .text(let t): return t
             case .photos(let items): return "写真 \(items.count)枚"
             case .recording(_, let duration): return "録音 \(CourseDetailViewController.timeText(duration))"
             }
         }
     }
+    private var aiSessionUID: String?
+    private var aiMessageIDs: [Int: [String]] = [:]
     private var noteChatMessagesBySession: [Int: [NoteChatMessage]] = [:]
     private var noteChatCurrentSession: Int = 0
     private let noteChatCompactActions = UIStackView()
@@ -182,6 +189,105 @@ final class CourseDetailViewController: UIViewController {
             UserDefaults.standard.string(forKey: "note.sortMode.\(course.id)").flatMap(NoteSortMode.init(rawValue:)) ?? .session
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "note.sortMode.\(course.id)") }
+    }
+
+    private func aiContext(day: Int) throws -> AIInputContext {
+        guard let uid = aiSessionUID, AppBackend.currentUID == uid else {
+            throw AIInputError.message("ログインして授業画面を開き直してください")
+        }
+        return AIInputContext(ownerUID: uid, localCourseId: course.id, classDocId: course.firestoreDocID,
+                              year: term.year, semester: term.semester == .spring ? "spring" : "fall", dayID: day)
+    }
+
+    private func stageAIPhoto(_ photo: CapturedPhoto, context: AIInputContext) throws -> AIStoredSource {
+        try SourceIngestionService.shared.store(uid: context.ownerUID).stage(context: context, kind: .image, title: "授業の写真", mime: "image/jpeg", data: photo.jpeg)
+    }
+
+    private func restoreAIInput() {
+        guard let context = try? aiContext(day: noteChatCurrentSession) else { return }
+        do {
+            if !NoteRecorder.shared.isRecording { try RecordingRecovery.finish(uid: context.ownerUID) }
+            let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
+            noteChatMessagesBySession = [:]; aiMessageIDs = [:]
+            noteChatPendingBySession = [:]; noteChatPendingRecordingsBySession = [:]
+            func photo(_ source: AIStoredSource) -> CapturedPhoto? {
+                guard let url = store.fileURL(source), let data = try? Data(contentsOf: url),
+                      let thumb = PhotoCodec.downsample(data, maxPixel: 256) else { return nil }
+                return CapturedPhoto(jpeg: data, thumb: thumb)
+            }
+            let visibleSources = store.ledger.sources.filter { !$0.wantsDeletion }
+            for message in store.ledger.messages where message.context.courseKey == context.courseKey && !message.hidden {
+                let selected = message.sourceIDs.compactMap { id in visibleSources.first { $0.id == id } }
+                let rendered: NoteChatMessage
+                switch message.kind {
+                case "image":
+                    let photos = selected.compactMap(photo)
+                    rendered = photos.isEmpty ? .document("削除した写真") : .photos(photos)
+                case "audio":
+                    if let source = selected.first, let url = store.fileURL(source) {
+                        rendered = .recording(url: url, duration: Double(source.durationSeconds ?? 0))
+                    } else { rendered = .document("削除した録音") }
+                case "pdf": rendered = .document("PDF · \(selected.first?.title ?? "削除した資料")")
+                case "note": rendered = .document("メモ · \(selected.first?.text ?? "削除したメモ")")
+                default: rendered = .text(message.text ?? "")
+                }
+                noteChatMessagesBySession[message.context.dayID, default: []].append(rendered)
+                aiMessageIDs[message.context.dayID, default: []].append(message.id)
+                noteLastSentAt[message.context.dayID] = message.createdAt
+            }
+            for source in visibleSources where source.context.courseKey == context.courseKey && !source.submitted {
+                if source.kind == .image, let image = photo(source) {
+                    let set = noteChatPendingBySession[source.context.dayID] ?? CapturedPhotoSet()
+                    set.items.append(image); noteChatPendingBySession[source.context.dayID] = set
+                } else if source.kind == .audio, let url = store.fileURL(source) {
+                    noteChatPendingRecordingsBySession[source.context.dayID, default: []].append(NoteRecordingResult(url: url, duration: Double(source.durationSeconds ?? 0)))
+                }
+            }
+            loadNoteSessionCards()
+            if noteShowsChatDetail {
+                noteChatMessageStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+                let messages = noteChatMessagesBySession[noteChatCurrentSession] ?? []
+                for message in messages { noteChatMessageStack.addArrangedSubview(makeNoteChatBubble(message)) }
+                noteChatMessageStack.isHidden = messages.isEmpty
+                syncNoteChatActions()
+                reloadNoteChatAttachments(animated: false)
+            }
+        } catch { showNoteAlert(title: "保存した資料を読み込めませんでした", message: error.localizedDescription) }
+    }
+
+    private func openAISources(allDays: Bool) {
+        do {
+            let context = try aiContext(day: noteChatCurrentSession >= 10000 ? noteChatCurrentSession : Self.noteDayID(Date()))
+            present(UINavigationController(rootViewController: SourceLibraryViewController(context: context, allDays: allDays)), animated: true)
+        } catch { showNoteAlert(title: "資料を開けませんでした", message: error.localizedDescription) }
+    }
+
+    private func pickAIPhotos() {
+        var configuration = PHPickerConfiguration(); configuration.filter = .images; configuration.selectionLimit = 10
+        let picker = PHPickerViewController(configuration: configuration); picker.delegate = self
+        present(picker, animated: true)
+    }
+
+    private func pickAIPDF() {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.pdf], asCopy: true)
+        picker.delegate = self; picker.allowsMultipleSelection = true
+        if AppBackend.isOffline {
+            picker.directoryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("AIInputSamples")
+        }
+        present(picker, animated: true)
+    }
+
+    private func saveAIMemo() {
+        let text = (noteChatTextField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { showNoteAlert(title: "メモを入力してください", message: "入力欄に書いた文章を授業の資料として保存します。"); return }
+        do {
+            let context = try aiContext(day: noteChatCurrentSession)
+            let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
+            let source = try store.stage(context: context, kind: .note, title: String(text.prefix(50)), mime: "text/plain", text: text)
+            try store.submit(context: context, snapshots: [AIChatSnapshot(id: UUID().uuidString, context: context, kind: "note", text: nil, sourceIDs: [source.id], createdAt: Date())])
+            noteChatTextField.text = ""; restoreAIInput(); updateNoteChatSendButton(animated: true)
+            SourceIngestionService.shared.resume(uid: context.ownerUID)
+        } catch { showNoteAlert(title: "メモを保存できませんでした", message: error.localizedDescription) }
     }
 
     // MARK: - Color Picker
@@ -334,7 +440,9 @@ final class CourseDetailViewController: UIViewController {
         if let sheet = sheetPresentationController {
             sheet.prefersGrabberVisible = true
         }
+        aiSessionUID = AppBackend.currentUID
         buildLayout()
+        restoreAIInput()
         if showsSyllabusActions {
             buildSyllabusActionButtons()
         }
@@ -342,7 +450,12 @@ final class CourseDetailViewController: UIViewController {
             loadCounts()
             updateCounterButtons()
         }
-        loadSyllabus()         // URL検証つき読込
+        if !AppBackend.isOffline { loadSyllabus() }
+        else {
+            syllabusSpinner.stopAnimating()
+            syllabusLoadingHint.text = "ローカル確認ではポータルに接続しません"
+            applySyllabusDisplayMode()
+        }
         if allowsCourseManagement {
             buildColorPickerRow()  // タイトル直下に設置
         }
@@ -377,13 +490,15 @@ final class CourseDetailViewController: UIViewController {
         view.endEditing(true)
         if isBeingDismissed || isMovingFromParent {
             // 授業詳細を閉じたら、録音と再生も止める(使用時間は加算される)
-            NoteRecorder.shared.stop()
+            noteRecordingStopped(NoteRecorder.shared.stop(), auto: false)
             NoteAudioPlayer.shared.stop()
         }
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        restoreAIInput()
+        if let uid = aiSessionUID { SourceIngestionService.shared.resume(uid: uid) }
         if #available(iOS 16.0, *),
            let sheet = sheetPresentationController {
             sheet.animateChanges { sheet.selectedDetentIdentifier = .large }
@@ -2452,32 +2567,43 @@ final class CourseDetailViewController: UIViewController {
     @objc private func noteChatSendTapped() {
         let text = (noteChatTextField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let pending = noteChatPending.items
-        let pendingRecordings = noteChatPendingRecordingsBySession[noteChatCurrentSession] ?? []
-        guard !text.isEmpty || !pending.isEmpty || !pendingRecordings.isEmpty else { return }
+        let recordings = noteChatPendingRecordingsBySession[noteChatCurrentSession] ?? []
+        guard !text.isEmpty || !pending.isEmpty || !recordings.isEmpty else { return }
         if noteChatEditingIndex != nil && text.isEmpty { return }
-        noteChatTextField.text = ""
-        updateNoteChatSendButton(animated: true)
-        if let editIndex = noteChatEditingIndex {
-            // 編集して再送信: 編集したメッセージ以降を消して、そこから新しい会話にする
-            truncateNoteChat(from: editIndex)
-            setNoteChatEditing(nil)
-        }
-
-        // ChatGPTと同じく、写真は横1列にまとめて送り、その下に文章を続ける
-        var messages: [NoteChatMessage] = []
-        if !pending.isEmpty {
-            messages.append(.photos(pending))
+        do {
+            let context = try aiContext(day: noteChatCurrentSession)
+            let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
+            var snapshots: [AIChatSnapshot] = []
+            var messages: [NoteChatMessage] = []
+            if !pending.isEmpty {
+                let ids = try pending.map { try stageAIPhoto($0, context: context).id }
+                snapshots.append(AIChatSnapshot(id: UUID().uuidString, context: context, kind: "image", text: nil, sourceIDs: ids, createdAt: Date()))
+                messages.append(.photos(pending))
+            }
+            for recording in recordings {
+                let source = try store.stage(context: context, kind: .audio, title: "授業の録音", mime: "audio/mp4", fileURL: recording.url, duration: recording.duration)
+                snapshots.append(AIChatSnapshot(id: UUID().uuidString, context: context, kind: "audio", text: nil, sourceIDs: [source.id], createdAt: Date()))
+                messages.append(.recording(url: store.fileURL(source)!, duration: recording.duration))
+            }
+            if !text.isEmpty {
+                snapshots.append(AIChatSnapshot(id: UUID().uuidString, context: context, kind: "question", text: text, sourceIDs: [], createdAt: Date()))
+                messages.append(.text(text))
+            }
+            let replacing = noteChatEditingIndex.flatMap { index in
+                let ids = aiMessageIDs[noteChatCurrentSession] ?? []
+                return ids.indices.contains(index) ? ids[index] : nil
+            }
+            try store.submit(context: context, snapshots: snapshots, replacingFrom: replacing)
+            if let index = noteChatEditingIndex { truncateNoteChat(from: index); setNoteChatEditing(nil) }
+            aiMessageIDs[noteChatCurrentSession] = store.messages(context: context).map(\.id)
+            noteChatTextField.text = ""
             noteChatPending.items.removeAll()
-        }
-        for recording in pendingRecordings {
-            messages.append(.recording(url: recording.url, duration: recording.duration))
-        }
-        if !pending.isEmpty || !pendingRecordings.isEmpty {
             noteChatPendingRecordingsBySession[noteChatCurrentSession] = []
             reloadNoteChatAttachments(animated: true)
-        }
-        if !text.isEmpty { messages.append(.text(text)) }
-        appendNoteChatMessages(messages)
+            appendNoteChatMessages(messages)
+            updateNoteChatSendButton(animated: true)
+            SourceIngestionService.shared.resume(uid: context.ownerUID)
+        } catch { showNoteAlert(title: "保存できませんでした", message: error.localizedDescription) }
     }
 
     /// 送信した順に吹き出しを追加する。最初の1通のときは大きなカードを小さなボタンへ変形させる。
@@ -2605,6 +2731,8 @@ final class CourseDetailViewController: UIViewController {
             return
         }
         view.endEditing(true)
+        do { recorder.inputContext = try aiContext(day: noteChatCurrentSession) }
+        catch { showNoteAlert(title: "録音できませんでした", message: error.localizedDescription); return }
         noteRecordingSession = noteChatCurrentSession
         recorder.onLevel = { [weak self] level in self?.noteUsageParts.forEach { $0.waveform.push(level) } }
         recorder.onTick = { [weak self] in self?.refreshNoteUsageUI() }
@@ -2644,6 +2772,10 @@ final class CourseDetailViewController: UIViewController {
     private func noteRecordingStopped(_ result: NoteRecordingResult?, auto: Bool) {
         refreshNoteUsageUI()
         if let result {
+            do {
+                let context = try aiContext(day: noteRecordingSession)
+                _ = try SourceIngestionService.shared.store(uid: context.ownerUID).stage(context: context, kind: .audio, title: "授業の録音", mime: "audio/mp4", fileURL: result.url, duration: result.duration)
+            } catch { showNoteAlert(title: "録音の紐づけを保存できませんでした", message: error.localizedDescription + "。音声ファイルは端末に残っています。") }
             // 写真と同じく、すぐには送らずメッセージ欄に追加する
             noteChatPendingRecordingsBySession[noteRecordingSession, default: []].append(result)
             if noteShowsChatDetail && noteChatCurrentSession == noteRecordingSession {
@@ -2681,25 +2813,12 @@ final class CourseDetailViewController: UIViewController {
 
     /// 一覧画面から: 授業回ごとに区切って、全ての回の写真を表示する(新しい回が上)。
     @objc private func noteLibraryTapped() {
-        let sections = noteChatMessagesBySession.keys.sorted(by: >).compactMap { session -> NoteLibraryViewController.Section? in
-            let photos = sentPhotos(session: session)
-            return photos.isEmpty ? nil : .init(title: noteSessionTitle(dayID: session), photos: photos)
-        }
-        let library = NoteLibraryViewController(title: "ライブラリ", sections: sections, showsSectionHeaders: true)
-        library.modalPresentationStyle = .fullScreen
-        present(library, animated: true)
+        openAISources(allDays: true)
     }
 
     /// 個別チャットから: この回の写真だけを表示する。
     @objc private func noteChatLibraryTapped() {
-        view.endEditing(true)
-        let photos = sentPhotos(session: noteChatCurrentSession)
-        let sections: [NoteLibraryViewController.Section] = photos.isEmpty
-            ? [] : [.init(title: noteSessionTitle(dayID: noteChatCurrentSession), photos: photos)]
-        let library = NoteLibraryViewController(
-            title: "\(noteSessionTitle(dayID: noteChatCurrentSession))のライブラリ", sections: sections, showsSectionHeaders: false)
-        library.modalPresentationStyle = .fullScreen
-        present(library, animated: true)
+        openAISources(allDays: false)
     }
 
     /// ＋メニュー「ライブラリから追加」: 送信済みの写真から選んで、メッセージ欄に追加する。
@@ -2745,6 +2864,10 @@ final class CourseDetailViewController: UIViewController {
     /// カメラで撮った写真は、すぐには送らずメッセージ欄に追加する。
     private func addNotePhotosToComposer(_ photos: [CapturedPhoto]) {
         guard !photos.isEmpty else { return }
+        do {
+            let context = try aiContext(day: noteChatCurrentSession)
+            for photo in photos { _ = try stageAIPhoto(photo, context: context) }
+        } catch { showNoteAlert(title: "写真を保存できませんでした", message: error.localizedDescription); return }
         noteChatPending.items.append(contentsOf: photos)
         reloadNoteChatAttachments(animated: true)
     }
@@ -2858,6 +2981,12 @@ final class CourseDetailViewController: UIViewController {
         var recordings = noteChatPendingRecordingsBySession[noteChatCurrentSession] ?? []
         guard recordings.indices.contains(sender.tag) else { return }
         let removed = recordings.remove(at: sender.tag)
+        do {
+            let context = try aiContext(day: noteChatCurrentSession)
+            let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
+            let source = try store.stage(context: context, kind: .audio, title: "授業の録音", mime: "audio/mp4", fileURL: removed.url, duration: removed.duration)
+            try store.discard(source.id)
+        } catch { showNoteAlert(title: "変更を保存できませんでした", message: error.localizedDescription) }
         noteChatPendingRecordingsBySession[noteChatCurrentSession] = recordings
         if NoteAudioPlayer.shared.isPlaying(removed.url) { NoteAudioPlayer.shared.stop() }
         try? FileManager.default.removeItem(at: removed.url)
@@ -2878,6 +3007,10 @@ final class CourseDetailViewController: UIViewController {
         let set = noteChatPending
         guard set.items.indices.contains(sender.tag) else { return }
         set.items.remove(at: sender.tag)
+        do {
+            let context = try aiContext(day: noteChatCurrentSession)
+            try SourceIngestionService.shared.store(uid: context.ownerUID).retainDraftPhotos(context: context, photos: set.items.map(\.jpeg))
+        } catch { showNoteAlert(title: "変更を保存できませんでした", message: error.localizedDescription) }
         reloadNoteChatAttachments(animated: true)
     }
 
@@ -2885,7 +3018,12 @@ final class CourseDetailViewController: UIViewController {
         guard let index = gesture.view?.tag else { return }
         // 送信前は、全画面で確認しながら取り消しもできる
         presentNotePhotoViewer(photoSet: noteChatPending, index: index, allowsDelete: true) { [weak self] in
-            self?.reloadNoteChatAttachments(animated: false)
+            guard let self else { return }
+            do {
+                let context = try self.aiContext(day: self.noteChatCurrentSession)
+                try SourceIngestionService.shared.store(uid: context.ownerUID).retainDraftPhotos(context: context, photos: self.noteChatPending.items.map(\.jpeg))
+            } catch { self.showNoteAlert(title: "変更を保存できませんでした", message: error.localizedDescription) }
+            self.reloadNoteChatAttachments(animated: false)
         }
     }
 
@@ -3520,14 +3658,19 @@ final class CourseDetailViewController: UIViewController {
         plus.setImage(UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), for: .normal)
         plus.tintColor = .secondaryLabel
         plus.accessibilityLabel = "追加"
+        plus.accessibilityIdentifier = "ai-input-add"
         plus.showsMenuAsPrimaryAction = true
         plus.menu = UIMenu(children: [
             UIAction(title: "撮影", image: UIImage(systemName: "camera")) { [weak self] _ in
                 self?.noteChatSilentCameraTapped()
             },
+            UIAction(title: "写真から選ぶ", image: UIImage(systemName: "photo")) { [weak self] _ in self?.pickAIPhotos() },
             UIAction(title: "ライブラリから追加", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in
                 self?.noteChatPickFromLibrary()
-            }
+            },
+            UIAction(title: "PDFを追加", image: UIImage(systemName: "doc")) { [weak self] _ in self?.pickAIPDF() },
+            UIAction(title: "入力した文章をメモとして保存", image: UIImage(systemName: "note.text")) { [weak self] _ in self?.saveAIMemo() },
+            UIAction(title: "資料と送信状況", image: UIImage(systemName: "tray")) { [weak self] _ in self?.openAISources(allDays: false) }
         ])
         plus.translatesAutoresizingMaskIntoConstraints = false
 
@@ -3886,7 +4029,7 @@ final class CourseDetailViewController: UIViewController {
             switch message {
             case .photos(let items): photoCount += items.count
             case .recording: recordingCount += 1
-            case .text: break
+            case .text, .document: break
             }
         }
         guard photoCount > 0 || recordingCount > 0 else { return nil }
@@ -4899,7 +5042,7 @@ final class CourseDetailViewController: UIViewController {
     // MARK: - AdMob Banner
 
     private func setupAdBanner() {
-        guard AdsConfig.enabled else {
+        guard !AppBackend.isOffline, AdsConfig.enabled else {
             adContainer.isHidden = true
             adContainerHeight?.constant = 0
             return
@@ -5971,5 +6114,57 @@ final class NoteBackdropView: UIView {
         let b = UIColor(red: 70/255, green: 140/255, blue: 220/255, alpha: dark ? 0.12 : 0.09)
         green.colors = [g.cgColor, g.withAlphaComponent(0).cgColor]
         blue.colors = [b.cgColor, b.withAlphaComponent(0).cgColor]
+    }
+}
+
+
+extension CourseDetailViewController: UIDocumentPickerDelegate {
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        do {
+            let context = try aiContext(day: noteChatCurrentSession)
+            let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
+            for url in urls {
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let source = try store.stage(context: context, kind: .pdf, title: url.lastPathComponent, mime: "application/pdf", fileURL: url)
+                try store.submit(context: context, snapshots: [AIChatSnapshot(id: UUID().uuidString, context: context, kind: "pdf", text: nil, sourceIDs: [source.id], createdAt: Date())])
+            }
+            restoreAIInput(); SourceIngestionService.shared.resume(uid: context.ownerUID)
+        } catch { showNoteAlert(title: "PDFを保存できませんでした", message: error.localizedDescription) }
+    }
+}
+
+
+extension CourseDetailViewController: PHPickerViewControllerDelegate {
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        let selectedDay = noteChatCurrentSession
+        picker.dismiss(animated: true)
+        guard !results.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                var photos: [CapturedPhoto] = []
+                for result in results {
+                    let bytes: Data = try await withCheckedThrowingContinuation { continuation in
+                        result.itemProvider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, error in
+                            if let error { continuation.resume(throwing: error); return }
+                            do {
+                                guard let url else { throw AIInputError.message("写真を読み込めませんでした") }
+                                let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                                guard let image = PhotoCodec.downsample(data, maxPixel: 4096), let jpeg = image.jpegData(compressionQuality: 0.9) else {
+                                    throw AIInputError.message("この写真の形式は読み込めませんでした")
+                                }
+                                continuation.resume(returning: jpeg)
+                            } catch { continuation.resume(throwing: error) }
+                        }
+                    }
+                    guard let thumb = PhotoCodec.downsample(bytes, maxPixel: 256) else { continue }
+                    photos.append(CapturedPhoto(jpeg: bytes, thumb: thumb))
+                }
+                // Preserve the picker opening context even when loading an iCloud image takes time.
+                let context = try aiContext(day: selectedDay)
+                for photo in photos { _ = try stageAIPhoto(photo, context: context) }
+                if selectedDay == noteChatCurrentSession { restoreAIInput() }
+            } catch { showNoteAlert(title: "写真を追加できませんでした", message: error.localizedDescription) }
+        }
     }
 }

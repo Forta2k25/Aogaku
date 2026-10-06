@@ -1,6 +1,8 @@
 # AI入力基盤（input-v1）
 
-対象: `integrate-20250923-1539` の `47d54c8` から派生した `codex/ai-input-foundation`。
+現在の対象: 最新 `origin/main` の `9d596f7` に統合した `codex/ai-input-main-integration`。元のAI実装は `47d54c8` を基点とし、`ed4e424` に保存済み。
+
+統合・再検証の結果と現在開く作業コピーは [MAIN_INTEGRATION_RESULTS.md](MAIN_INTEGRATION_RESULTS.md) を参照。通常は統合コピーの `Aogaku.xcodeproj` をScheme `Aogaku-Dev` / Debugで開く。
 
 ## この実装でできること
 

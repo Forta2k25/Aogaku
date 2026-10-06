@@ -1,5 +1,7 @@
 # AI入力：Simulatorと開発Firebaseの準備
 
+**最新main統合後は [MAIN_INTEGRATION_RESULTS.md](MAIN_INTEGRATION_RESULTS.md) を参照。** 開くコピーは `/Users/shum/Documents/Codex/2026-10-06/y/work/Aogaku-main-integration/Aogaku.xcodeproj`、Scheme `Aogaku-Dev` / Debug。以下は統合前の準備履歴。
+
 **現在のDev接続結果は [DEV_CONNECTION_AND_RESULTS.md](DEV_CONNECTION_AND_RESULTS.md) を参照。** `forta-aogaku-dev` の実設定とAPI接続は完了し、以下の「設定がまだない」説明は初回準備時点のもの。通常は `Aogaku-Dev` / Debugを使用する。Groq Secretは音声処理時だけADC/IAMで取得する。
 
 確認日：2026-10-06。作業コピーは `/Users/shum/Documents/Codex/2026-10-06/y/work/Aogaku`。ブランチ `codex/ai-input-foundation`、HEAD `47d54c8c03247c9311acc0c3d7bcdd2f5046a997`。commit・push・PR・mergeは行っていない。本番 `Forta-Aogaku` / `forta-aogaku` へのアクセスも、既存 `Aogaku-clean` の変更も行っていない。

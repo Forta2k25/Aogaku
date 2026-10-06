@@ -1,5 +1,7 @@
 # Dev接続・E2E実施結果（2026-10-06）
 
+以下はmain統合前のDev検証履歴。最新mainへ統合した結果は [MAIN_INTEGRATION_RESULTS.md](MAIN_INTEGRATION_RESULTS.md) を参照。元の検証記録は保存済み。
+
 Devへの接続・12個のAI Functionsのデプロイと、4種類の入力の実通信検証を完了した。SimulatorのiOS保存・送信サービスからの検証も成功。手動での全ピッカー操作・実機のマイク録音や中断条件の確認は別途必要。
 
 ## 作業場所・安全境界

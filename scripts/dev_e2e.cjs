@@ -21,6 +21,7 @@ const lock=openSync(lockFile,'wx',0o600);closeSync(lock);writeFileSync(lockFile,
 process.on('exit',()=>{if(existsSync(lockFile))unlinkSync(lockFile);});
 const stateFile=join(OUT,'e2e-state.json');
 const state=existsSync(stateFile) ? JSON.parse(readFileSync(stateFile)) : {runId:Date.now().toString(),users:{},sources:{},results:[]};
+const resultsStart=state.results.length;
 const save=()=>writeFileSync(stateFile,JSON.stringify(state,null,2),{mode:0o600});
 function hash(...parts) { return createHash('sha256').update(JSON.stringify(parts)).digest('hex'); }
 function field(v) {
@@ -228,14 +229,36 @@ async function interruptedUploadRetry() {
   const ready=await waitReady(source.sourceId);assert.equal(ready.status,'ready');
   return {sourceId:source.sourceId,interruption:'aborted HTTP stream',retry:'same receipt, ready'};
 }
+async function retryFailedSource() {
+  const {bytes,source}=await createFileFixture('failed-retry');
+  await upload(source,bytes);await call('aiCompleteSource',{sourceId:source.sourceId});
+  await waitReady(source.sourceId);
+  const url=`https://firestore.googleapis.com/v1/projects/${P}/databases/(default)/documents/aiSources/${source.sourceId}`;
+  const before=await request(url);
+  assert.equal(before.fields.ownerUserId.stringValue,state.users.owner.uid);
+  assert.equal(before.fields.status.stringValue,'ready');
+  // Inject a failure only into this run's freshly created fictional source; retain original and evidence.
+  await request(url+'?updateMask.fieldPaths=status&updateMask.fieldPaths=error&updateMask.fieldPaths=updatedAt','PATCH',{
+    fields:{status:field('failed'),error:field({code:'DEV_E2E_INJECTED',retryable:true}),updatedAt:field(Date.now())}});
+  assert.equal((await call('aiGetSource',{sourceId:source.sourceId})).status,'failed');
+  await call('aiRetrySource',{sourceId:source.sourceId});
+  const ready=await waitReady(source.sourceId);assert.equal(ready.status,'ready');assert.equal(ready.error,null);
+  const after=await request(url);
+  assert(Number(after.fields.attempts.integerValue)>Number(before.fields.attempts.integerValue));
+  assert((await call('aiGetEvidence',{sourceId:source.sourceId})).items.length>0);
+  const search=await call('aiRetrieveContext',{courseOfferingId:state.courseId,purpose:'lecture_summary'});
+  assert(search.items.some(x=>x.sourceId===source.sourceId));
+  return {sourceId:source.sourceId,failure:'injected test-only state',retry:'real aiRetrySource → worker → ready',sameReceipt:true};
+}
 async function main() {
   const action=process.argv[2]||'core';
-  if(!['prepare','core','pdf','audio','audio-long','permissions','races'].includes(action))throw Error('Usage: dev_e2e.cjs prepare|core|pdf|audio|audio-long|permissions|races');
+  if(!['prepare','core','pdf','audio','audio-long','permissions','races','retry'].includes(action))throw Error('Usage: dev_e2e.cjs prepare|core|pdf|audio|audio-long|permissions|races|retry');
   guard();await users();
   if(action==='core')for(const type of ['note','image','pdf'])await check(`${type}: create → upload → extract → evidence → list → retrieve`,()=>input(type));
   if(action==='pdf')await check('pdf: retry → text/OCR → page evidence → retrieve',()=>input('pdf'));
   if(action==='audio')await check('audio: create → upload → ASR → timestamps → retrieve',()=>input('audio'));
   if(action==='audio-long')await check('17-minute audio: 15-minute split → two ASR units → timestamps beyond 15 minutes → retrieve',()=>input('audio','audio-long'));
+  if(action==='retry')await check('failed source → aiRetrySource → same receipt → ready → evidence/retrieve',retryFailedSource);
   if(action==='races') {
     await check('interrupted upload → same receipt → retry → ready',interruptedUploadRetry);
     await check('upload in progress → delete → upload finishes → no resurrection',deleteDuringUpload);
@@ -246,6 +269,7 @@ async function main() {
     await check('Firestore and Storage client permissions',clientRules);
     await check('delete → delayed upload → trigger cleanup → no resurrection',lateDelete);
   }
+  if(state.results.slice(resultsStart).some(x=>x.status!=='PASS'))process.exitCode=1;
   writeFileSync(join(OUT,'e2e-results.json'),JSON.stringify({project:P,runId:state.runId,results:state.results},null,2));
 }
 main().catch(e=>{console.error(e.code||e.message);process.exitCode=1;});

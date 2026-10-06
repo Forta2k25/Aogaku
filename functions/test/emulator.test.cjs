@@ -2,16 +2,30 @@ const {test,before,after}=require('node:test');
 const assert=require('node:assert/strict');
 const admin=require('firebase-admin');
 const enabled=!!process.env.FIRESTORE_EMULATOR_HOST && !!process.env.STORAGE_EMULATOR_HOST;
-let app,db,api,taskPrototype,originalEnqueue;
+let app,db,api,taskPrototype,originalEnqueue,originalFetch,credential,originalToken;
 before(()=>{
   if(!enabled)return;
-  app=admin.initializeApp({projectId:'demo-aogaku-input',storageBucket:'demo-aogaku-input.appspot.com'});
+  credential=admin.credential.applicationDefault();originalToken=credential.getAccessToken;
+  credential.getAccessToken=async()=>({access_token:'emulator-only',expires_in:3600});
+  app=admin.initializeApp({projectId:'demo-aogaku-input',storageBucket:'demo-aogaku-input.appspot.com',credential});
+  // Stub the new worker metadata transport as well as Tasks; never ask ADC or real cloud APIs.
+  originalFetch=global.fetch;
+  global.fetch=async(url,options)=>{
+    const name='projects/demo-aogaku-input/locations/asia-northeast1/functions/aiProcessSource';
+    if(String(url)===`https://cloudfunctions.googleapis.com/v2/${name}`) {
+      assert.equal(options.headers.Authorization,'Bearer emulator-only');
+      return new Response(JSON.stringify({name,serviceConfig:{uri:'https://emulator-worker.a.run.app'}}),{status:200});
+    }
+    const u=new URL(url);
+    if(u.protocol!=='http:' || !['127.0.0.1','localhost','[::1]'].includes(u.hostname))throw Error('Emulator test attempted a non-local network request');
+    return originalFetch(url,options);
+  };
   db=admin.firestore(); api=require('../lib/ai');
   // Replace transport only: acceptance, transactions and worker logic remain real.
   taskPrototype=Object.getPrototypeOf(require('firebase-admin/functions').getFunctions().taskQueue('aiProcessSource'));
   originalEnqueue=taskPrototype.enqueue; taskPrototype.enqueue=async()=>{};
 });
-after(async()=>{if(taskPrototype)taskPrototype.enqueue=originalEnqueue;if(app)await app.delete()});
+after(async()=>{if(taskPrototype)taskPrototype.enqueue=originalEnqueue;if(originalFetch)global.fetch=originalFetch;if(credential)credential.getAccessToken=originalToken;if(app)await app.delete()});
 const call=(name,uid,data)=>api[name].run({auth:uid?{uid,token:{}}:undefined,data});
 async function seed(id,owner,visibility='private',course='course-a') {
   const source={sourceId:id,sourceVersion:1,ownerUserId:owner,courseOfferingId:course,lectureId:'lecture-a',dayID:20730,

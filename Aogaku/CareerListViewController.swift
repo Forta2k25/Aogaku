@@ -10,7 +10,8 @@ import FirebaseFirestore
 
 final class CareerListViewController: UIViewController,
                                        UITableViewDataSource,
-                                       UITableViewDelegate {
+                                       UITableViewDelegate,
+                                       UISearchResultsUpdating {
 
     // MARK: - UI
     private let filterScrollView = UIScrollView()
@@ -26,7 +27,9 @@ final class CareerListViewController: UIViewController,
 
     // MARK: - Data
     private var allItems: [CareerListing] = []
-    private var visibleItems: [CareerListing] = []
+    /// 表示用セクション。`title` が nil のときはヘッダーなし
+    private var sections: [(title: String?, items: [CareerListing])] = []
+    private var searchText = ""
     private var selectedTab: CareerFilterTab = .all
 
     // MARK: - Lifecycle
@@ -35,8 +38,31 @@ final class CareerListViewController: UIViewController,
         view.backgroundColor = .systemGroupedBackground
 
         setupNavigationHeader()
+        setupSearch()
         setupUI()
         startListening()
+        NotificationCenter.default.addObserver(self, selector: #selector(bookmarksChanged),
+                                               name: .careerBookmarkDidChange, object: nil)
+    }
+
+    @objc private func bookmarksChanged() {
+        // 「保存済み」タブでは解除した項目を即座に消す
+        if selectedTab == .saved { applyFilter() }
+    }
+
+    private func setupSearch() {
+        let sc = UISearchController(searchResultsController: nil)
+        sc.obscuresBackgroundDuringPresentation = false
+        sc.searchBar.placeholder = "企業名・職種・キーワードで検索"
+        sc.searchResultsUpdater = self
+        navigationItem.searchController = sc
+        navigationItem.hidesSearchBarWhenScrolling = false
+        definesPresentationContext = true
+    }
+
+    func updateSearchResults(for searchController: UISearchController) {
+        searchText = searchController.searchBar.text?.trimmingCharacters(in: .whitespaces) ?? ""
+        applyFilter()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -51,6 +77,7 @@ final class CareerListViewController: UIViewController,
     }
 
     deinit {
+        NotificationCenter.default.removeObserver(self)
         listener?.remove()
     }
 
@@ -58,7 +85,7 @@ final class CareerListViewController: UIViewController,
     private func setupNavigationHeader() {
         navigationItem.largeTitleDisplayMode = .never
         let titleLabel = UILabel()
-        titleLabel.text = "インターン"
+        titleLabel.text = "インターン・就活"
         titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
         titleLabel.textColor = .label
         navigationItem.titleView = titleLabel
@@ -102,11 +129,11 @@ final class CareerListViewController: UIViewController,
             filterScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             filterScrollView.heightAnchor.constraint(equalToConstant: 50),
 
-            filterStack.topAnchor.constraint(equalTo: filterScrollView.topAnchor),
-            filterStack.bottomAnchor.constraint(equalTo: filterScrollView.bottomAnchor),
+            filterStack.topAnchor.constraint(equalTo: filterScrollView.topAnchor, constant: 7),
+            filterStack.bottomAnchor.constraint(equalTo: filterScrollView.bottomAnchor, constant: -7),
             filterStack.leadingAnchor.constraint(equalTo: filterScrollView.leadingAnchor, constant: 16),
             filterStack.trailingAnchor.constraint(equalTo: filterScrollView.trailingAnchor, constant: -16),
-            filterStack.heightAnchor.constraint(equalTo: filterScrollView.heightAnchor),
+            filterStack.heightAnchor.constraint(equalToConstant: 36),
         ])
     }
 
@@ -188,30 +215,64 @@ final class CareerListViewController: UIViewController,
 
     // MARK: - Filtering
     private func applyFilter() {
-        if let category = selectedTab.category {
-            visibleItems = allItems.filter { $0.category == category }
-        } else {
-            visibleItems = allItems
+        var items = allItems
+
+        if selectedTab == .saved {
+            let ids = Set(CareerBookmarkStore.shared.allIDs())
+            items = items.filter { ids.contains($0.id) }
+        } else if let cats = selectedTab.categories {
+            items = items.filter { cats.contains($0.category) }
         }
+
+        if !searchText.isEmpty {
+            items = items.filter { item in
+                [item.companyName, item.title, item.description, item.location, item.sourceName ?? ""]
+                    .contains { $0.localizedCaseInsensitiveContains(searchText) }
+            }
+        }
+
+        // 検索・保存済みでないときは「締切間近」を先頭にまとめる
+        if searchText.isEmpty && selectedTab != .saved {
+            let soon = items.filter { $0.isDeadlineSoon }
+                .sorted { ($0.applicationDeadline ?? .distantFuture) < ($1.applicationDeadline ?? .distantFuture) }
+            let soonIDs = Set(soon.map(\.id))
+            let rest = items.filter { !soonIDs.contains($0.id) }
+            sections = []
+            if !soon.isEmpty { sections.append(("締切間近", soon)) }
+            if !rest.isEmpty { sections.append((soon.isEmpty ? nil : "新着・おすすめ", rest)) }
+        } else {
+            sections = items.isEmpty ? [] : [(nil, items)]
+        }
+
         tableView.reloadData()
-        emptyLabel.isHidden = !visibleItems.isEmpty
+        emptyLabel.text = selectedTab == .saved && searchText.isEmpty
+            ? "保存した求人はまだありません\nカード右上のしおりで保存できます"
+            : "該当する求人・イベントはありません"
+        emptyLabel.numberOfLines = 0
+        emptyLabel.isHidden = !sections.isEmpty
     }
 
     // MARK: - UITableViewDataSource
+    func numberOfSections(in tableView: UITableView) -> Int { sections.count }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        visibleItems.count
+        sections[section].items.count
+    }
+
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        sections[section].title
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: CareerListingCell.reuseId, for: indexPath) as! CareerListingCell
-        cell.configure(with: visibleItems[indexPath.row])
+        cell.configure(with: sections[indexPath.section].items[indexPath.row])
         return cell
     }
 
     // MARK: - UITableViewDelegate
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let item = visibleItems[indexPath.row]
+        let item = sections[indexPath.section].items[indexPath.row]
         let vc = CareerDetailViewController(listing: item)
         navigationController?.pushViewController(vc, animated: true)
     }

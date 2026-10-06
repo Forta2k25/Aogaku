@@ -34,6 +34,22 @@ final class CareerDetailViewController: UIViewController {
         setupPhoto()
         setupSections()
         setupApplyButton()
+        updateBookmarkItem()
+    }
+
+    private func updateBookmarkItem() {
+        let saved = CareerBookmarkStore.shared.isBookmarked(id: listing.id)
+        let item = UIBarButtonItem(image: UIImage(systemName: saved ? "bookmark.fill" : "bookmark"),
+                                   style: .plain, target: self, action: #selector(didTapBookmark))
+        item.tintColor = saved ? .systemOrange : .label
+        navigationItem.rightBarButtonItem = item
+    }
+
+    @objc private func didTapBookmark() {
+        if CareerBookmarkStore.shared.toggle(id: listing.id) {
+            AppAnalytics.logCareerSave(jobID: listing.id)
+        }
+        updateBookmarkItem()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -255,7 +271,7 @@ final class CareerDetailViewController: UIViewController {
         wrap.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(wrap)
 
-        applyButton.setTitle("この求人に応募する", for: .normal)
+        applyButton.setTitle(listing.sourceName.map { "\($0)で応募・詳細を見る" } ?? "応募・詳細を見る", for: .normal)
         applyButton.setTitleColor(.white, for: .normal)
         applyButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
         applyButton.backgroundColor = listing.category.tintColor

@@ -18,6 +18,11 @@ final class CareerListingCell: UITableViewCell {
     private let postedIcon = UIImageView()
     private let postedLabel = UILabel()
     private let categoryChip = PaddingLabel(padding: UIEdgeInsets(top: 3, left: 8, bottom: 3, right: 8))
+    private let badgeLabel = PaddingLabel(padding: UIEdgeInsets(top: 3, left: 8, bottom: 3, right: 8))
+    private let bookmarkButton = UIButton(type: .system)
+    private var listingID: String?
+    /// ブックマークがトグルされたときに呼ばれる（引数: 求人ID）
+    var onBookmarkToggled: ((String) -> Void)?
 
     private let titleLabel = UILabel()
     private let thumbnailImageView = UIImageView()
@@ -42,6 +47,7 @@ final class CareerListingCell: UITableViewCell {
         photoTask = nil
         thumbnailImageView.image = nil
         thumbnailImageView.isHidden = true
+        onBookmarkToggled = nil
     }
 
     private func setupUI() {
@@ -72,7 +78,23 @@ final class CareerListingCell: UITableViewCell {
 
         categoryChip.font = .systemFont(ofSize: 11, weight: .bold)
 
-        let metaStack = UIStackView(arrangedSubviews: [postedIcon, postedLabel, categoryChip])
+        badgeLabel.font = .systemFont(ofSize: 11, weight: .bold)
+        badgeLabel.layer.cornerRadius = 8
+        badgeLabel.layer.masksToBounds = true
+        categoryChip.layer.cornerRadius = 8
+        categoryChip.layer.masksToBounds = true
+
+        bookmarkButton.tintColor = .secondaryLabel
+        bookmarkButton.translatesAutoresizingMaskIntoConstraints = false
+        bookmarkButton.addAction(UIAction { [weak self] _ in
+            guard let self, let id = self.listingID else { return }
+            let added = CareerBookmarkStore.shared.toggle(id: id)
+            if added { AppAnalytics.logCareerSave(jobID: id) }
+            self.updateBookmarkIcon()
+            self.onBookmarkToggled?(id)
+        }, for: .touchUpInside)
+
+        let metaStack = UIStackView(arrangedSubviews: [postedIcon, postedLabel, categoryChip, badgeLabel])
         metaStack.axis = .horizontal
         metaStack.spacing = 4
         metaStack.alignment = .center
@@ -91,7 +113,7 @@ final class CareerListingCell: UITableViewCell {
         detailStack.spacing = 10
         detailStack.translatesAutoresizingMaskIntoConstraints = false
 
-        let headerRow = UIStackView(arrangedSubviews: [companyLabel, UIView(), locationBadge])
+        let headerRow = UIStackView(arrangedSubviews: [companyLabel, UIView(), locationBadge, bookmarkButton])
         headerRow.axis = .horizontal
         headerRow.alignment = .center
         headerRow.translatesAutoresizingMaskIntoConstraints = false
@@ -142,12 +164,37 @@ final class CareerListingCell: UITableViewCell {
             detailStack.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -16),
             detailStack.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -14),
 
+            bookmarkButton.widthAnchor.constraint(equalToConstant: 32),
+            bookmarkButton.heightAnchor.constraint(equalToConstant: 28),
+
             postedIcon.widthAnchor.constraint(equalToConstant: 13),
             postedIcon.heightAnchor.constraint(equalToConstant: 13),
         ])
     }
 
+    private func updateBookmarkIcon() {
+        let saved = listingID.map { CareerBookmarkStore.shared.isBookmarked(id: $0) } ?? false
+        bookmarkButton.setImage(UIImage(systemName: saved ? "bookmark.fill" : "bookmark"), for: .normal)
+        bookmarkButton.tintColor = saved ? .systemOrange : .secondaryLabel
+        bookmarkButton.accessibilityLabel = saved ? "保存を解除" : "保存"
+    }
+
     func configure(with item: CareerListing) {
+        listingID = item.id
+        updateBookmarkIcon()
+        if item.isDeadlineSoon, let n = item.daysUntilDeadline {
+            badgeLabel.text = n == 0 ? "本日締切" : "あと\(n)日"
+            badgeLabel.textColor = .systemRed
+            badgeLabel.backgroundColor = UIColor.systemRed.withAlphaComponent(0.12)
+            badgeLabel.isHidden = false
+        } else if item.isNew {
+            badgeLabel.text = "NEW"
+            badgeLabel.textColor = .systemGreen
+            badgeLabel.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.12)
+            badgeLabel.isHidden = false
+        } else {
+            badgeLabel.isHidden = true
+        }
         companyLabel.text = item.companyName
         locationBadge.text = shortLocation(item.location)
 

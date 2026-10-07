@@ -60,5 +60,34 @@ async function invokeBindings() {
     await bind(`${service}:getIamPolicy?options.requestedPolicyVersion=3`,`${service}:setIamPolicy`,MEMBER,['roles/run.invoker']);
   }
 }
-if(require.main===module) (process.argv[2]==='runtime' ? provision() : process.argv[2]==='invoke' ? invokeBindings() : Promise.reject(Error('Usage: provision_dev.cjs runtime|invoke')))
+async function deletionBindings() {
+  guard();
+  const project=await request(`https://cloudresourcemanager.googleapis.com/v1/projects/${P}`);
+  if(project.projectId!==P || project.projectNumber!==N)throw Error('STOP: live Dev mismatch');
+  await createIfAbsent(`https://iam.googleapis.com/v1/projects/${P}/roles/aogakuAIAuthRead`,
+    `https://iam.googleapis.com/v1/projects/${P}/roles`,{roleId:'aogakuAIAuthRead',role:{title:'AI input Auth existence read',stage:'GA',includedPermissions:['firebaseauth.users.get']}});
+  const scope=`https://cloudresourcemanager.googleapis.com/v1/projects/${P}`;
+  await bind(`${scope}:getIamPolicy`,`${scope}:setIamPolicy`,MEMBER,[`projects/${P}/roles/aogakuAIAuthRead`],'POST','POST');
+  const q=`https://cloudtasks.googleapis.com/v2/projects/${P}/locations/${R}/queues/aiProcessSource`;
+  await bind(`${q}:getIamPolicy`,`${q}:setIamPolicy`,MEMBER,['roles/cloudtasks.taskDeleter'],'POST','POST');
+}
+async function accountDeletionRuntime() {
+  guard();
+  const project=await request(`https://cloudresourcemanager.googleapis.com/v1/projects/${P}`);
+  if(project.projectId!==P||project.projectNumber!==N)throw Error('STOP: Dev project mismatch');
+  const email=`aogaku-ai-account-deletion@${P}.iam.gserviceaccount.com`,member='serviceAccount:'+email;
+  await createIfAbsent(`https://iam.googleapis.com/v1/projects/${P}/serviceAccounts/${email}`,
+    `https://iam.googleapis.com/v1/projects/${P}/serviceAccounts`,{accountId:'aogaku-ai-account-deletion',serviceAccount:{displayName:'Dev account deletion only'}});
+  for(const [roleId,permissions] of [['aogakuAccountAuthCleanup',['firebaseauth.users.get','firebaseauth.users.delete']],['aogakuAccountStorageCleanup',['storage.objects.get','storage.objects.list','storage.objects.delete']]]) {
+    await createIfAbsent(`https://iam.googleapis.com/v1/projects/${P}/roles/${roleId}`,
+      `https://iam.googleapis.com/v1/projects/${P}/roles`,{roleId,role:{title:roleId,stage:'GA',includedPermissions:permissions}});
+  }
+  const projectScope=`https://cloudresourcemanager.googleapis.com/v1/projects/${P}`;
+  await bind(`${projectScope}:getIamPolicy`,`${projectScope}:setIamPolicy`,member,['roles/datastore.user','roles/serviceusage.serviceUsageConsumer',`projects/${P}/roles/aogakuAccountAuthCleanup`],'POST','POST');
+  await bind(`https://storage.googleapis.com/storage/v1/b/${B}/iam?optionsRequestedPolicyVersion=3`,
+    `https://storage.googleapis.com/storage/v1/b/${B}/iam`,member,[`projects/${P}/roles/aogakuAccountStorageCleanup`],'PUT');
+  const queue=`https://cloudtasks.googleapis.com/v2/projects/${P}/locations/${R}/queues/aiProcessSource`;
+  await bind(`${queue}:getIamPolicy`,`${queue}:setIamPolicy`,member,['roles/cloudtasks.taskDeleter'],'POST','POST');
+}
+if(require.main===module) (process.argv[2]==='account-deletion' ? accountDeletionRuntime() : process.argv[2]==='deletion' ? deletionBindings() : process.argv[2]==='runtime' ? provision() : process.argv[2]==='invoke' ? invokeBindings() : Promise.reject(Error('Usage: provision_dev.cjs runtime|invoke|account-deletion')))
   .catch(e=>{console.error(e.message);process.exitCode=1;});

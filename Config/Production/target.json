@@ -1,0 +1,14 @@
+{
+  "projectId": "forta-aogaku",
+  "projectNumber": "505828754933",
+  "bucket": "forta-aogaku.firebasestorage.app",
+  "bundleId": "com.forta2k25.Aogaku",
+  "functionRegion": "asia-northeast1",
+  "databaseLocation": "asia-northeast1",
+  "storageLocation": "US-CENTRAL1",
+  "eventRegion": "us-central1",
+  "runtimeServiceAccount": "aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+  "sharingEnabled": false,
+  "functionsCodebase": "aogaku-ai",
+  "aiDatabaseId": "aogaku-ai"
+}

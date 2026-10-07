@@ -6,7 +6,9 @@ from pathlib import Path
 from firebase_dev import ROOT, validate_approved
 
 project = validate_approved()
-state = json.loads((ROOT / 'scripts/output-dev/e2e-state.json').read_text())
+v2_state = ROOT / 'scripts/output-dev/e2e-state-named-v1.json'
+if not v2_state.exists(): raise SystemExit('Named-database Dev fixtures must be prepared first; no legacy fallback')
+state = json.loads(v2_state.read_text())
 user = state['users']['owner']
 destination = ROOT / 'AogakuTests/DevFixtures'
 destination.mkdir(parents=True, exist_ok=True)

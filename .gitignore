@@ -22,3 +22,11 @@ Config/firebase-development.json
 functions/.env.forta-aogaku-dev
 scripts/output-dev/
 AogakuTests/DevFixtures/
+
+# Production operator approval/cohort data and runtime parameters stay private.
+Config/firebase-production.local.json
+Config/production-deploy-approval*.json
+functions/.env.forta-aogaku
+
+# Recovered historical Functions are compiled for regression only.
+functions/lib-recovered/

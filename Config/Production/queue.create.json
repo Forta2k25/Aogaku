@@ -1,0 +1,13 @@
+{
+  "name": "projects/forta-aogaku/locations/asia-northeast1/queues/aiProcessSource",
+  "rateLimits": {
+    "maxConcurrentDispatches": 3,
+    "maxDispatchesPerSecond": 500
+  },
+  "retryConfig": {
+    "maxAttempts": 4,
+    "maxDoublings": 16,
+    "minBackoff": "30s",
+    "maxBackoff": "300s"
+  }
+}

@@ -1,0 +1,195 @@
+{
+  "projectId": "forta-aogaku",
+  "serviceAccount": "aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+  "createKey": false,
+  "customRoles": {
+    "aogakuAIAuthRead": [
+      "firebaseauth.users.get"
+    ],
+    "aogakuAIFunctionMetadata": [
+      "cloudfunctions.functions.get"
+    ],
+    "aogakuAISignBlob": [
+      "iam.serviceAccounts.signBlob"
+    ],
+    "aogakuAIStorageIO": [
+      "storage.objects.get",
+      "storage.objects.list",
+      "storage.objects.create",
+      "storage.objects.delete"
+    ]
+  },
+  "additiveBindings": [
+    {
+      "scope": "projects/forta-aogaku",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "roles/datastore.user",
+        "roles/serviceusage.serviceUsageConsumer",
+        "roles/eventarc.eventReceiver",
+        "projects/forta-aogaku/roles/aogakuAIAuthRead"
+      ]
+    },
+    {
+      "scope": "projects/forta-aogaku/locations/asia-northeast1/queues/aiProcessSource",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "roles/cloudtasks.enqueuer",
+        "roles/cloudtasks.taskDeleter"
+      ]
+    },
+    {
+      "scope": "projects/forta-aogaku/serviceAccounts/aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "roles/iam.serviceAccountUser",
+        "projects/forta-aogaku/roles/aogakuAISignBlob"
+      ]
+    },
+    {
+      "scope": "buckets/forta-aogaku.firebasestorage.app",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "projects/forta-aogaku/roles/aogakuAIStorageIO"
+      ],
+      "note": "Existing bucket uses ACLs (UBLA disabled); bucket-scope binding without conditions. Application restricts AI prefixes. Do not enable UBLA or change existing ACLs."
+    },
+    {
+      "scope": "projects/forta-aogaku/secrets/GROQ_API_KEY",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "roles/secretmanager.secretAccessor"
+      ],
+      "allowCreateSecret": false,
+      "allowAddVersion": false
+    },
+    {
+      "scope": "projects/forta-aogaku",
+      "member": "serviceAccount:service-505828754933@gs-project-accounts.iam.gserviceaccount.com",
+      "roles": [
+        "roles/pubsub.publisher"
+      ],
+      "note": "Required Storage event publication; preserve all current policy bindings."
+    },
+    {
+      "scope": "projects/forta-aogaku/locations/asia-northeast1/services/aiprocesssource",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "roles/run.invoker"
+      ],
+      "note": "Verify actual Cloud Run service name from its corresponding AI function metadata; never bind project-wide Run Invoker."
+    },
+    {
+      "scope": "projects/forta-aogaku/locations/asia-northeast1/services/airejectlateupload",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "roles/run.invoker"
+      ],
+      "note": "Verify actual Cloud Run service name from its corresponding AI function metadata; never bind project-wide Run Invoker."
+    },
+    {
+      "scope": "projects/forta-aogaku/locations/asia-northeast1/services/aireconcileinputs",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "roles/run.invoker"
+      ],
+      "note": "Verify actual Cloud Run service name from its corresponding AI function metadata; never bind project-wide Run Invoker."
+    },
+    {
+      "scope": "projects/forta-aogaku/locations/asia-northeast1/functions/aiProcessSource",
+      "member": "serviceAccount:aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+      "roles": [
+        "projects/forta-aogaku/roles/aogakuAIFunctionMetadata"
+      ]
+    }
+  ],
+  "managedServiceAgents": [
+    {
+      "serviceAccount": "service-505828754933@gcp-sa-cloudtasks.iam.gserviceaccount.com",
+      "role": "roles/cloudtasks.serviceAgent"
+    },
+    {
+      "serviceAccount": "service-505828754933@gcp-sa-cloudscheduler.iam.gserviceaccount.com",
+      "role": "roles/cloudscheduler.serviceAgent"
+    },
+    {
+      "serviceAccount": "service-505828754933@gcp-sa-eventarc.iam.gserviceaccount.com",
+      "role": "roles/eventarc.serviceAgent"
+    },
+    {
+      "serviceAccount": "service-505828754933@gcp-sa-pubsub.iam.gserviceaccount.com",
+      "role": "roles/pubsub.serviceAgent"
+    },
+    {
+      "serviceAccount": "service-505828754933@gcf-admin-robot.iam.gserviceaccount.com",
+      "role": "roles/cloudfunctions.serviceAgent"
+    }
+  ],
+  "apis": [
+    "firestore.googleapis.com",
+    "storage.googleapis.com",
+    "cloudfunctions.googleapis.com",
+    "run.googleapis.com",
+    "cloudtasks.googleapis.com",
+    "cloudscheduler.googleapis.com",
+    "vision.googleapis.com",
+    "eventarc.googleapis.com",
+    "pubsub.googleapis.com",
+    "secretmanager.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "serviceusage.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "identitytoolkit.googleapis.com",
+    "logging.googleapis.com",
+    "firebase.googleapis.com",
+    "firebaserules.googleapis.com",
+    "firebasestorage.googleapis.com",
+    "firebaseextensions.googleapis.com",
+    "cloudresourcemanager.googleapis.com"
+  ],
+  "provisionPolicy": "plan only; merge IAM with etag/version=3, never replace policies; queue/service bindings after resource creation; managed agents only on their own serviceAgent roles; no Editor/Owner on runtime",
+  "deployer": "Human/CI identity separate from runtime: Functions Developer + Service Account User on the AI SA; narrowly scoped IAM/API/setup administration separately; Cloud Build identity must be discovered and granted build/source/image permissions only, no runtime Editor.",
+  "apiNotes": "Firebase CLI may enable Extensions API for metadata discovery; no extension installation or existing extension change is planned.",
+  "accountDeletionRuntime": {
+    "serviceAccount": "aogaku-ai-account-deletion@forta-aogaku.iam.gserviceaccount.com",
+    "createKey": false,
+    "customRoles": {
+      "aogakuAccountAuthCleanup": [
+        "firebaseauth.users.get",
+        "firebaseauth.users.delete"
+      ],
+      "aogakuAccountStorageCleanup": [
+        "storage.objects.get",
+        "storage.objects.list",
+        "storage.objects.delete"
+      ]
+    },
+    "additiveBindings": [
+      {
+        "scope": "projects/forta-aogaku",
+        "roles": [
+          "roles/datastore.user",
+          "roles/serviceusage.serviceUsageConsumer",
+          "projects/forta-aogaku/roles/aogakuAccountAuthCleanup"
+        ]
+      },
+      {
+        "scope": "buckets/forta-aogaku.firebasestorage.app",
+        "roles": [
+          "projects/forta-aogaku/roles/aogakuAccountStorageCleanup"
+        ]
+      },
+      {
+        "scope": "projects/forta-aogaku/locations/asia-northeast1/queues/aiProcessSource",
+        "roles": [
+          "roles/cloudtasks.taskDeleter"
+        ]
+      }
+    ],
+    "secretAccess": false,
+    "visionAccess": false,
+    "note": "Separate authorized maintenance deployment only. Preserve existing generation/region. Never grant Auth deletion to AI provider runtime."
+  }
+}

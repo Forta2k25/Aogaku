@@ -3,27 +3,50 @@ import {onCall, HttpsError} from "firebase-functions/v2/https";
 import {onTaskDispatched} from "firebase-functions/v2/tasks";
 import {onSchedule} from "firebase-functions/v2/scheduler";
 import {onObjectFinalized} from "firebase-functions/v2/storage";
-import {defineString} from "firebase-functions/params";
+import {defineString, defineBoolean} from "firebase-functions/params";
 import {getFunctions} from "firebase-admin/functions";
+import {beginAIAccountDeletion, continueAIAccountDeletion, purge} from "./account-deletion";
+export {beginAIAccountDeletion, continueAIAccountDeletion} from "./account-deletion";
 import {randomUUID, createHash} from "node:crypto";
 import {mkdtemp, rm, readFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {PIPELINE, InputError, validateCreate, id, str, integer, hash, canRead, mayPublish, chunksFor, weekKey, selectContext, Extraction} from "./domain";
+import {PIPELINE, InputError, validateCreate, id, offeringId, syllabusYear, courseSnapshot, CourseSnapshot, str, integer, hash, canRead, mayPublish, chunksFor, weekKey, selectContext, Extraction} from "./domain";
 import {extractAudio, extractImage, extractPDF, audioDuration} from "./extractors";
+import {AI_COLLECTIONS as collections} from "./schema";
+import {aiDatabase as db, defaultDatabase, aiDatabaseId, accountDeletionFence, rawPrefix, derivedPrefix} from "./databases";
 
 const region = "asia-northeast1";
 const runtimeAccount = defineString("AI_RUNTIME_SERVICE_ACCOUNT");
-const db = () => admin.firestore();
+const pilotUIDs = defineString("AI_INPUT_ALLOWED_UIDS", {default: "[]"});
+export function productionInputsAllowed(uid: string) {
+  if (runtimeProject() !== "forta-aogaku") return true;
+  try { const allowed = JSON.parse(pilotUIDs.value()); return Array.isArray(allowed) && allowed.includes(uid); }
+  catch { return false; }
+}
+// A closed production deployment must not start background maintenance either.
+export function productionClosed() {
+  if (runtimeProject() !== "forta-aogaku") return false;
+  try {
+    const allowed = JSON.parse(pilotUIDs.value());
+    return !Array.isArray(allowed) || !allowed.length || allowed.some(uid => typeof uid !== "string" || !uid);
+  } catch { return true; }
+}
+const sharingFlag = defineBoolean("AI_SHARING_ENABLED", {default: false});
+// Initial production is private-only, even if a flag is accidentally enabled.
+export function sharingEnabled() { return runtimeProject() !== "forta-aogaku" && sharingFlag.value(); }
+const owners = () => db().collection(collections.owners);
 const bucket = () => admin.storage().bucket();
-const sources = () => db().collection("aiSources");
+const sources = () => db().collection(collections.sources);
 const now = () => Date.now();
 const terminal = ["ready", "partial_ready", "failed", "deleting", "deleted"];
 const queue = () => getFunctions().taskQueue(`locations/${region}/functions/aiProcessSource`);
 function callable(fn: (uid: string, data: any) => Promise<any>) {
-  return onCall({region, serviceAccount: runtimeAccount, timeoutSeconds: 120, maxInstances: 10}, async request => {
+  return onCall({region, serviceAccount: runtimeAccount, cpu: "gcf_gen1", timeoutSeconds: 120, maxInstances: 10}, async request => {
     if (!request.auth) throw new HttpsError("unauthenticated", "ログインしてください");
-    try { if (!request.data || typeof request.data !== "object") throw new InputError("INVALID_REQUEST");
+    try { if (!productionInputsAllowed(request.auth.uid)) throw new InputError("AI_INPUT_NOT_ENABLED");
+      if (!request.data || typeof request.data !== "object") throw new InputError("INVALID_REQUEST");
+      await assertAccountActive(request.auth.uid);
       return await fn(request.auth.uid, request.data); }
     catch (e) {
       if (e instanceof HttpsError) throw e;
@@ -34,7 +57,8 @@ function callable(fn: (uid: string, data: any) => Promise<any>) {
   });
 }
 async function verified(uid: string, courseId: string) {
-  const s = await db().doc(`aiCourseOfferings/${courseId}/memberships/${uid}`).get();
+  if (!sharingEnabled()) return false;
+  const s = await db().doc(`${collections.offerings}/${courseId}/${collections.memberships}/${uid}`).get();
   return s.get("status") === "verified" && s.get("active") === true;
 }
 async function owned(uid: string, sourceId: unknown) {
@@ -46,7 +70,8 @@ async function owned(uid: string, sourceId: unknown) {
 }
 function publicSource(s: any) {
   const {sourceId, sourceType, title, courseOfferingId, lectureId, dayID, status, error, coverage, rawVisibility, knowledgeVisibility, createdAt, activeRun, sourceVersion} = s;
-  return {sourceId, sourceType, title, courseOfferingId, lectureId, dayID, status, error: error || null,
+  return {databaseId: aiDatabaseId(), sourceId, sourceType, title, courseOfferingId, lectureId, dayID, status, courseSnapshot: s.courseSnapshot || null,
+    canonicalSnapshot: s.canonicalSnapshot || null, sharingEnabled: sharingEnabled(), linkingEnabled: runtimeProject() !== "forta-aogaku", error: error || null,
     coverage: coverage || null, rawVisibility, knowledgeVisibility, createdAt, sourceVersion, activeVersion: activeRun || null};
 }
 function runtimeProject() {
@@ -83,10 +108,50 @@ async function groqSecret() {
   if (!key) throw new InputError("ASR_NOT_CONFIGURED");
   return key;
 }
+// Durable task IDs permit deletion, including enqueue/delete races.
 async function enqueue(sourceId: string) {
-  await queue().enqueue({sourceId}, {dispatchDeadlineSeconds: 1800, uri: await taskTarget()});
-  await sources().doc(sourceId).update({lastEnqueuedAt: now()});
+  const ref = sources().doc(sourceId), taskId = hash(sourceId, randomUUID());
+  const job = ref.collection(collections.jobs).doc(taskId);
+  const accepted = await db().runTransaction(async tx => {
+    const s = (await tx.get(ref)).data();
+    if (!s || s.status !== "queued" || !productionInputsAllowed(s.ownerUserId)) return false;
+    const owner = await tx.get(owners().doc(s.ownerUserId));
+    if (["deleting", "deleted"].includes(owner.get("state"))) return false;
+    tx.set(job, {taskId, createdAt: now()}); return true;
+  });
+  if (!accepted) return;
+  await queue().enqueue({sourceId, taskId, databaseId: aiDatabaseId()}, {id: taskId, dispatchDeadlineSeconds: 1800, uri: await taskTarget()});
+  const latest = (await ref.get()).data();
+  if (!latest || ["deleting", "deleted"].includes(latest.status)) { await queue().delete(taskId); await job.delete(); return; }
+  await ref.update({lastEnqueuedAt: now()});
 }
+export async function assertAccountActive(uid: string) {
+  const [marker, fence] = await Promise.all([owners().doc(uid).get(), accountDeletionFence(uid).get()]);
+  if ([marker, fence].some(s => ["deleting", "deleted"].includes(s.get("state")))) throw new InputError("ACCOUNT_DELETED");
+  try { const user = await admin.auth().getUser(uid); if (user.disabled) throw new InputError("ACCOUNT_DISABLED"); }
+  catch (e: any) {
+    if (e.code !== "auth/user-not-found") throw e;
+    await owners().doc(uid).set({state: "deleting", updatedAt: now()}, {merge: true});
+    await accountDeletionFence(uid).set({state: "deleting", updatedAt: now()}, {merge: true});
+    throw new InputError("ACCOUNT_DELETED");
+  }
+}
+async function reconcileAccounts() {
+  // Continue interrupted deletion first; bounded work per scheduled invocation.
+  const pending = await owners().where("state", "==", "deleting").limit(10).get();
+  for (const owner of pending.docs) await continueAIAccountDeletion(owner.id);
+  const cursor = db().doc(`${collections.maintenance}/accountSweep`), previous = await cursor.get();
+  let query = owners().orderBy(admin.firestore.FieldPath.documentId()).limit(25);
+  if (previous.get("after")) query = query.startAfter(previous.get("after"));
+  const page = await query.get();
+  for (const owner of page.docs) {
+    if (owner.get("state") !== "active") continue;
+    try { await assertAccountActive(owner.id); }
+    catch (e) { if (e instanceof InputError && e.code === "ACCOUNT_DELETED") await continueAIAccountDeletion(owner.id); else if (!(e instanceof InputError && e.code === "ACCOUNT_DISABLED")) throw e; }
+  }
+  await cursor.set({after: page.size === 25 ? page.docs.at(-1)!.id : null, updatedAt: now()});
+}
+
 async function uploadInfo(source: any) {
   if (source.sourceType === "note" || source.status !== "awaiting_upload") return null;
   const [url] = await bucket().file(source.storagePath).getSignedUrl({version: "v4", action: "write", expires: now() + 10 * 60 * 1000,
@@ -94,25 +159,47 @@ async function uploadInfo(source: any) {
   return {url, headers: {"Content-Type": source.mime, "x-goog-if-generation-match": "0"}};
 }
 
-async function resolveContext(uid: string, context: ReturnType<typeof validateCreate>["context"]) {
-  const c = context;
-  if (c.classDocId?.includes("/")) throw new InputError("INVALID_CLASS");
-  const classExists = c.classDocId ? (await db().collection("classes").doc(c.classDocId).get()).exists : false;
-  if (c.classDocId && !classExists) throw new InputError("CLASS_NOT_FOUND");
-  const courseOfferingId = hash(classExists ? c.classDocId : [uid, c.localCourseId], c.year, c.semester);
-  return {courseOfferingId, lectureId: hash(courseOfferingId, c.dayID, c.occurrenceKey)};
-
+async function resolveContext(uid: string, context: ReturnType<typeof validateCreate>["context"], creating = false) {
+  let c = {...context};
+  // Validate before constructing a document path. Lookup always uses the frozen client context.
+  courseSnapshot(uid, c);
+  if (creating && c.classDocId) {
+    const catalog = await defaultDatabase().collection("classes").doc(c.classDocId).get();
+    if (!catalog.exists) {
+      const archived = courseSnapshot(uid, c);
+      if (archived.resolution !== "canonical" || !(await db().doc(`${collections.offerings}/${archived.courseOfferingId}`).get()).exists) throw new InputError("CLASS_NOT_FOUND");
+    } else if (!c.syllabusUrl) {
+      const url = catalog.get("url") || catalog.get("syllabusURL") || "";
+      const catalogYear = syllabusYear(url);
+      // Never attach an old timetable to a recycled current-year document silently.
+      if (catalogYear !== null && c.year !== undefined && c.year !== catalogYear) throw new InputError("CLASS_YEAR_MISMATCH");
+      c = {...c, syllabusUrl: url, courseName: c.courseName || catalog.get("class_name") || catalog.get("title") || "",
+        teacherName: c.teacherName || catalog.get("teacher_name") || ""};
+    }
+  }
+  const snapshot = courseSnapshot(uid, c);
+  const courseOfferingId = snapshot.courseOfferingId;
+  return {courseOfferingId, lectureId: hash(courseOfferingId, c.semester, c.dayID, c.occurrenceKey), snapshot};
 }
 
 export const aiCreateSource = callable(async (uid, data) => {
   const input = validateCreate(data);
   const c = input.context;
-  const {courseOfferingId, lectureId} = await resolveContext(uid, c);
   const sourceId = hash(uid, input.clientRequestId);
   const ref = sources().doc(sourceId), fingerprint = hash(input);
+  // Retry an existing receipt without re-resolving live classes, including legacy Dev receipts.
+  const accepted = await ref.get();
+  if (accepted.exists) {
+    if (accepted.get("fingerprint") !== fingerprint) throw new InputError("REQUEST_CONFLICT");
+    if (["deleted", "deleting"].includes(accepted.get("status"))) throw new InputError("SOURCE_DELETED");
+    const existing = accepted.data()!;
+    if (existing.status === "queued") await enqueue(sourceId);
+    return {...publicSource(existing), upload: await uploadInfo(existing)};
+  }
+  const {courseOfferingId, lectureId, snapshot} = await resolveContext(uid, c, true);
   const day = new Date(now() + 9 * 3600000).toISOString().slice(0, 10);
-  const usageRef = db().doc(`aiUsage/${uid}/periods/day-${day}`);
-  const audioRef = db().doc(`aiUsage/${uid}/periods/week-${weekKey(new Date())}`);
+  const usageRef = db().doc(`${collections.usage}/${uid}/${collections.periods}/day-${day}`);
+  const audioRef = db().doc(`${collections.usage}/${uid}/${collections.periods}/week-${weekKey(new Date())}`);
   const source = await db().runTransaction(async tx => {
     const existing = await tx.get(ref);
     if (existing.exists) {
@@ -120,22 +207,28 @@ export const aiCreateSource = callable(async (uid, data) => {
       if (["deleted", "deleting"].includes(existing.get("status"))) throw new InputError("SOURCE_DELETED");
       return existing.data()!;
     }
-    const [daily, weekly] = await Promise.all([tx.get(usageRef), tx.get(audioRef)]);
+    const offeringRef = db().doc(`${collections.offerings}/${courseOfferingId}`);
+    const ownerRef = owners().doc(uid);
+    const [daily, weekly, offering, owner] = await Promise.all([tx.get(usageRef), tx.get(audioRef), tx.get(offeringRef), tx.get(ownerRef)]);
+    if (["deleting", "deleted"].includes(owner.get("state"))) throw new InputError("ACCOUNT_DELETED");
     const bytes = daily.get("bytes") || 0, count = daily.get("count") || 0, seconds = weekly.get("seconds") || 0;
     const reservation = input.durationSeconds || 0;
     if (count >= 100 || bytes + input.size > 500 * 1024 ** 2 || seconds + reservation > 10800) throw new InputError("QUOTA_EXCEEDED");
-    const source = {sourceId, sourceVersion: 1, schemaVersion: 1, pipelineVersion: PIPELINE,
-      fingerprint, ownerUserId: uid, courseOfferingId, lectureId, dayID: c.dayID,
+    const source = {sourceId, sourceVersion: 1, schemaVersion: 3, pipelineVersion: PIPELINE,
+      fingerprint, ownerUserId: uid, courseOfferingId, lectureId, dayID: c.dayID, courseSnapshot: snapshot,
+      occurrenceKey: c.occurrenceKey,
       sourceType: input.type, title: input.title, mime: input.mime, declaredSize: input.size,
       declaredDuration: reservation, audioUsagePath: audioRef.path,
       rawVisibility: "private", knowledgeVisibility: "private", status: input.type === "note" ? "queued" : "awaiting_upload",
-      storagePath: `ai-inputs/${uid}/${sourceId}/${input.type === "audio" ? "audio/original.m4a" : "original"}`, createdAt: now(), updatedAt: now(), attempts: 0,
+      databaseId: aiDatabaseId(), storagePath: `${rawPrefix(uid, sourceId)}${input.type === "audio" ? "audio/original.m4a" : "original"}`, createdAt: now(), updatedAt: now(), attempts: 0,
       ...(input.text ? {noteText: input.text} : {})};
     tx.set(ref, source);
+    if (!owner.exists) tx.set(ownerRef, {state: "active", createdAt: now()});
     tx.set(usageRef, {bytes: bytes + input.size, count: count + 1});
     if (reservation) tx.set(audioRef, {seconds: seconds + reservation});
-    tx.set(db().doc(`aiCourseOfferings/${courseOfferingId}`), {year: c.year, semester: c.semester, classDocId: c.classDocId || null}, {merge: true});
-    tx.set(db().doc(`aiCourseOfferings/${courseOfferingId}/lectures/${lectureId}`), {dayID: c.dayID, occurrenceKey: c.occurrenceKey}, {merge: true});
+    // Offering metadata is first-write only. Each source keeps its own immutable snapshot.
+    if (!offering.exists) tx.set(offeringRef, {...snapshot, createdAt: now()});
+    tx.set(db().doc(`${collections.offerings}/${courseOfferingId}/${collections.lectures}/${lectureId}`), {dayID: c.dayID, occurrenceKey: c.occurrenceKey}, {merge: true});
     return source;
   });
   if (source.status === "queued") await enqueue(sourceId);
@@ -164,7 +257,7 @@ export const aiGetSource = callable(async (uid, data) => {
 });
 export const aiListSources = callable(async (uid, data) => {
   const resolved = data.context ? await resolveContext(uid, validateCreate({clientRequestId: "resolve", type: "note", title: "resolve", mime: "text/plain", text: "resolve", context: data.context}).context) : null;
-  const course = resolved?.courseOfferingId || id(data.courseOfferingId);
+  const course = resolved?.courseOfferingId || offeringId(data.courseOfferingId);
   const lecture = data.lectureId || (data.onlyLecture ? resolved?.lectureId : undefined);
   const after = data.after ? id(data.after) : undefined;
   let query = sources().where("courseOfferingId", "==", course).orderBy(admin.firestore.FieldPath.documentId()).limit(101);
@@ -178,7 +271,7 @@ export const aiGetEvidence = callable(async (uid, data) => {
   const ref = sources().doc(id(data.sourceId)), source = (await ref.get()).data();
   if (!source || !canRead(source, uid, await verified(uid, source.courseOfferingId))) throw new InputError("NOT_FOUND");
   if (!source.activeRun) return {items: [], status: source.status, nextCursor: null};
-  let q = ref.collection("runs").doc(source.activeRun).collection("chunks").orderBy("chunkId").limit(21);
+  let q = ref.collection(collections.runs).doc(source.activeRun).collection(collections.chunks).orderBy("chunkId").limit(21);
   if (data.after) q = q.startAfter(id(data.after));
   const chunks = await q.get();
   const latest = (await ref.get()).data();
@@ -205,26 +298,65 @@ export const aiUpdateSource = callable(async (uid, data) => {
   for (const key of ["rawVisibility", "knowledgeVisibility"]) {
     if (data[key] === undefined) continue;
     if (!["private", "course"].includes(data[key])) throw new InputError("INVALID_VISIBILITY");
-    if (data[key] === "course" && !(await verified(uid, source.courseOfferingId))) throw new InputError("MEMBERSHIP_NOT_VERIFIED");
     changes[key] = data[key];
   }
   await db().runTransaction(async tx => {
     const s = (await tx.get(ref)).data()!;
     if (["deleting", "deleted"].includes(s.status)) throw new InputError("SOURCE_DELETED");
+    if (changes.rawVisibility === "course" || changes.knowledgeVisibility === "course") {
+      if (!sharingEnabled()) throw new InputError("SHARING_DISABLED");
+      if (s.courseSnapshot && s.courseSnapshot.resolution !== "canonical" && !s.canonicalSnapshot) throw new InputError("OFFERING_UNRESOLVED");
+      const member = await tx.get(db().doc(`${collections.offerings}/${s.courseOfferingId}/${collections.memberships}/${uid}`));
+      if (member.get("status") !== "verified" || member.get("active") !== true) throw new InputError("MEMBERSHIP_NOT_VERIFIED");
+    }
     tx.update(ref, changes);
   });
   return publicSource((await ref.get()).data());
 });
 
-async function purge(ref: admin.firestore.DocumentReference) {
-  const source = (await ref.get()).data();
-  if (!source || !["deleting", "deleted"].includes(source.status)) return;
-  for (const prefix of [`ai-inputs/${source.ownerUserId}/${ref.id}/`, `ai-derived/${source.ownerUserId}/${ref.id}/`]) {
-    await bucket().deleteFiles({prefix, force: true});
+// An explicit owner action only; never a catalog-driven migration. Receipt and original snapshot stay intact.
+export const aiLinkSourceOffering = callable(async (uid, data) => {
+  if (runtimeProject() === "forta-aogaku") throw new InputError("LINKING_DISABLED");
+  const {ref, source} = await owned(uid, data.sourceId);
+  const classDocId = str(data.classDocId, "CLASS", 5);
+  if (!/^\d{5}$/.test(classDocId)) throw new InputError("INVALID_CLASS");
+  if (source.canonicalSnapshot) {
+    if (source.canonicalSnapshot.classDocId !== classDocId ||
+        (data.year !== undefined && data.year !== source.canonicalSnapshot.year)) throw new InputError("OFFERING_ALREADY_LINKED");
+    return publicSource(source);
   }
-  await db().recursiveDelete(ref.collection("runs"));
-  await ref.update({status: "deleted", title: "削除済み", originalHash: admin.firestore.FieldValue.delete(), noteText: admin.firestore.FieldValue.delete(), activeRun: admin.firestore.FieldValue.delete(), updatedAt: now()});
-}
+  const catalog = await defaultDatabase().doc(`classes/${classDocId}`).get();
+  if (!catalog.exists) throw new InputError("CLASS_NOT_FOUND");
+  const original: CourseSnapshot | undefined = source.courseSnapshot;
+  const c = validateCreate({clientRequestId: "link", type: "note", title: "link", mime: "text/plain", text: "link",
+    context: {localCourseUUID: original?.localCourseUUID || data.localCourseUUID, classDocId,
+      syllabusUrl: catalog.get("url") || catalog.get("syllabusURL") || "", year: original?.year ?? data.year,
+      semester: original?.semester || data.semester, dayID: source.dayID,
+      courseName: catalog.get("class_name") || catalog.get("title") || "", teacherName: catalog.get("teacher_name") || ""}}).context;
+  const target = courseSnapshot(uid, c);
+  if (target.resolution !== "canonical") throw new InputError("OFFERING_UNRESOLVED");
+  if (original?.year !== null && original?.year !== undefined && original.year !== target.year) throw new InputError("CLASS_YEAR_MISMATCH");
+  const lectureId = hash(target.courseOfferingId, target.semester, source.dayID, source.occurrenceKey || "default");
+  await db().runTransaction(async tx => {
+    const latest = await tx.get(ref);
+    const s = latest.data()!;
+    const offeringRef = db().doc(`${collections.offerings}/${target.courseOfferingId}`);
+    const offering = await tx.get(offeringRef);
+    if (!["ready", "partial_ready", "failed", "awaiting_upload"].includes(s.status)) throw new InputError("SOURCE_BUSY");
+    if (s.canonicalSnapshot) {
+      if (s.canonicalSnapshot.courseOfferingId !== target.courseOfferingId) throw new InputError("OFFERING_ALREADY_LINKED");
+      return; // a racing/repeated link never replaces the first link snapshot
+    }
+    if (s.courseSnapshot?.resolution === "canonical" && s.courseOfferingId !== target.courseOfferingId) throw new InputError("OFFERING_ALREADY_LINKED");
+    tx.update(ref, {courseOfferingId: target.courseOfferingId, lectureId, canonicalSnapshot: target,
+      linkedFromOfferingId: s.linkedFromOfferingId || s.courseOfferingId, linkedAt: now(), updatedAt: now(),
+      rawVisibility: "private", knowledgeVisibility: "private"});
+    if (!offering.exists) tx.set(offeringRef, {...target, createdAt: now()});
+    tx.set(offeringRef.collection(collections.lectures).doc(lectureId), {dayID: source.dayID, occurrenceKey: source.occurrenceKey || "default"}, {merge: true});
+  });
+  return publicSource((await ref.get()).data());
+});
+
 export const aiDeleteSource = callable(async (uid, data) => {
   const {ref} = await owned(uid, data.sourceId);
   await ref.update({status: "deleting", leaseToken: null, updatedAt: now()});
@@ -233,7 +365,7 @@ export const aiDeleteSource = callable(async (uid, data) => {
 });
 
 export const aiRetrieveContext = callable(async (uid, data) => {
-  const course = id(data.courseOfferingId);
+  const course = offeringId(data.courseOfferingId);
   const lectureIds: string[] = data.lectureIds === undefined ? [] : data.lectureIds;
   if (!Array.isArray(lectureIds) || lectureIds.length > 30) throw new InputError("INVALID_LECTURES");
   lectureIds.forEach(id);
@@ -249,7 +381,7 @@ export const aiRetrieveContext = callable(async (uid, data) => {
   const candidates: any[] = [];
   let truncated = snap.size > 30;
   for (const s of visible.filter(s => ["ready", "partial_ready"].includes(s.status) && s.activeRun)) {
-    const chunks = await sources().doc(s.sourceId).collection("runs").doc(s.activeRun).collection("chunks").orderBy("chunkId").limit(81).get();
+    const chunks = await sources().doc(s.sourceId).collection(collections.runs).doc(s.activeRun).collection(collections.chunks).orderBy("chunkId").limit(81).get();
     if (chunks.size > 80) truncated = true;
     for (const chunk of chunks.docs.slice(0, 80)) candidates.push({...chunk.data(), sourceId: s.sourceId, sourceVersion: s.sourceVersion,
       lectureId: s.lectureId, sourceType: s.sourceType, activeVersion: s.activeRun, run: s.activeRun});
@@ -271,19 +403,32 @@ export const aiRetrieveContext = callable(async (uid, data) => {
 
 export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtimeAccount, timeoutSeconds: 1800, memory: "2GiB", maxInstances: 3,
   retryConfig: {maxAttempts: 4, minBackoffSeconds: 30, maxBackoffSeconds: 300}, rateLimits: {maxConcurrentDispatches: 3}}, async request => {
+  // Old default-DB deliveries cannot touch the new namespace, even on ID reuse.
+  if (request.data.databaseId !== aiDatabaseId()) return;
+  if (productionClosed()) throw new InputError("AI_INPUT_NOT_ENABLED");
   const ref = sources().doc(id(request.data.sourceId)), token = randomUUID();
   const source = await db().runTransaction(async tx => {
     const s = (await tx.get(ref)).data();
-    if (!s || terminal.includes(s.status) || s.status === "awaiting_upload") return null;
+    if (!s || terminal.includes(s.status) || s.status === "awaiting_upload" || !productionInputsAllowed(s.ownerUserId)) return null;
     if ((s.leaseUntil || 0) > now()) throw new InputError("BUSY", true);
     if (s.attempts >= 6) { tx.update(ref, {status: "failed", error: {code: "RETRY_LIMIT", retryable: false}}); return null; }
     tx.update(ref, {status: "extracting", leaseToken: token, leaseUntil: now() + 1900000, attempts: s.attempts + 1, updatedAt: now()});
     return s;
   });
-  if (!source) return;
+  if (!source) { if (request.data.taskId) await ref.collection(collections.jobs).doc(id(request.data.taskId)).delete(); return; }
+  try { await assertAccountActive(source.ownerUserId); }
+  catch (e) {
+    if (e instanceof InputError && e.code === "ACCOUNT_DELETED") { await ref.update({status: "deleting", leaseToken: null}); await purge(ref); return; }
+    throw e;
+  }
+  const ownerUID = source.ownerUserId;
   const dir = await mkdtemp(join(tmpdir(), "ai-input-"));
-  const derived = `ai-derived/${source.ownerUserId}/${ref.id}`;
-  async function alive() { if (!mayPublish((await ref.get()).data(), token)) throw new InputError("CANCELLED"); }
+  const derived = derivedPrefix(source.ownerUserId, ref.id).replace(/\/$/, "");
+  async function alive() {
+    if (!productionInputsAllowed(ownerUID)) throw new InputError("CANCELLED");
+    const marker = await owners().doc(ownerUID).get();
+    if (["deleting", "deleted"].includes(marker.get("state")) || !mayPublish((await ref.get()).data(), token)) throw new InputError("CANCELLED");
+  }
   const cp = {
     alive,
     load: async (key: string) => { try { const [b] = await bucket().file(`${derived}/checkpoints/${PIPELINE}/${key}.json`).download(); return JSON.parse(b.toString()); } catch (e: any) { if (e.code === 404) return undefined; throw e; } },
@@ -317,11 +462,14 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
     await bucket().file(`${derived}/runs/${token}/extraction.json`).save(JSON.stringify(extraction), {contentType: "application/json"});
     for (let offset = 0; offset < chunks.length; offset += 200) {
       await alive(); const batch = db().batch();
-      chunks.slice(offset, offset + 200).forEach(c => batch.set(ref.collection("runs").doc(token).collection("chunks").doc(c.chunkId), c));
+      chunks.slice(offset, offset + 200).forEach(c => batch.set(ref.collection(collections.runs).doc(token).collection(collections.chunks).doc(c.chunkId), c));
       await batch.commit();
     }
+    await assertAccountActive(source.ownerUserId);
     await db().runTransaction(async tx => {
-      const s = (await tx.get(ref)).data(); if (!mayPublish(s, token)) throw new InputError("CANCELLED");
+      const s = (await tx.get(ref)).data();
+      const owner = await tx.get(owners().doc(source.ownerUserId));
+      if (!productionInputsAllowed(source.ownerUserId) || ["deleting", "deleted"].includes(owner.get("state")) || !mayPublish(s, token)) throw new InputError("CANCELLED");
       tx.update(ref, {activeRun: token, originalHash, processingMs: now() - processingStartedAt, status: extraction.failedUnits.length ? "partial_ready" : "ready", leaseToken: null, leaseUntil: 0,
         coverage: {totalUnits: extraction.totalUnits, processedUnits: extraction.totalUnits - extraction.failedUnits.length, failedUnits: extraction.failedUnits},
         error: null, updatedAt: now()});
@@ -336,13 +484,16 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
     });
     if (error.retryable) throw error;
   } finally {
+    if (request.data.taskId) await ref.collection(collections.jobs).doc(id(request.data.taskId)).delete();
     await rm(dir, {recursive: true, force: true});
     const current = (await ref.get()).data();
     if (current && ["deleting", "deleted"].includes(current.status)) await purge(ref);
   }
 });
 
-export const aiReconcileInputs = onSchedule({region, serviceAccount: runtimeAccount, schedule: "every 15 minutes", timeoutSeconds: 540}, async () => {
+export const aiReconcileInputs = onSchedule({region, serviceAccount: runtimeAccount, cpu: "gcf_gen1", schedule: "every 15 minutes", timeoutSeconds: 540}, async () => {
+  if (productionClosed()) return;
+  await reconcileAccounts();
   const cutoff = now() - 15 * 60000;
   const jobs = await sources().where("status", "in", ["queued", "extracting", "indexing", "deleting", "awaiting_upload", "failed", "partial_ready"]).where("updatedAt", "<", cutoff).limit(100).get();
   for (const doc of jobs.docs) {
@@ -369,12 +520,15 @@ export const aiReconcileInputs = onSchedule({region, serviceAccount: runtimeAcco
   }
 });
 // A signed upload URL can finish after deletion. Remove late objects too.
-export const aiRejectLateUpload = onObjectFinalized({region, serviceAccount: runtimeAccount}, async event => {
+export const aiRejectLateUpload = onObjectFinalized({region, serviceAccount: runtimeAccount, cpu: "gcf_gen1", maxInstances: 3, retry: true}, async event => {
   const name = event.data.name || "";
-  const match = /^ai-inputs\/([^/]+)\/([a-f0-9]{64})\/(?:original|audio\/original\.m4a)$/.exec(name);
+  const match = /^ai-inputs\/aogaku-ai\/([^/]+)\/([a-f0-9]{64})\/(?:original|audio\/original\.m4a)$/.exec(name);
   if (!match) return;
   const s = (await sources().doc(match[2]).get()).data();
-  if (!s || s.ownerUserId !== match[1] || ["deleting", "deleted"].includes(s.status)) {
+  const owner = await owners().doc(match[1]).get();
+  let accountDeleted = ["deleting", "deleted"].includes(owner.get("state"));
+  if (!accountDeleted && s) { try { await assertAccountActive(match[1]); } catch (e) { if (e instanceof InputError && e.code === "ACCOUNT_DELETED") accountDeleted = true; else throw e; } }
+  if (!s || accountDeleted || s.ownerUserId !== match[1] || ["deleting", "deleted"].includes(s.status)) {
     await admin.storage().bucket(event.data.bucket).file(name, {generation: Number(event.data.generation)}).delete({ignoreNotFound: true});
   }
 });

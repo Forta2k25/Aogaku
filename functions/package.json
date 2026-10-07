@@ -5,7 +5,11 @@
   "scripts": {
     "test": "npm run build && node --test test/domain.test.cjs",
     "build": "tsc",
-    "test:emulator": "npm run build && node --test test/emulator.test.cjs"
+    "test:emulator": "npm run build && node --test test/emulator.test.cjs",
+    "test:production-emulator": "npm run build && node --test test/emulator.test.cjs test/production.test.cjs test/legacy.test.cjs",
+    "build:recovered": "tsc -p tsconfig.recovered.json",
+    "test:account-deletion-emulator": "npm run build && npm run build:recovered && node --test test/emulator.test.cjs test/production.test.cjs test/legacy.test.cjs test/recovered-legacy.test.cjs test/deployed-legacy.test.cjs",
+    "test:rollout-emulator": "npm run build && npm run build:recovered && AI_FIRESTORE_DATABASE_ID=aogaku-ai node --test --test-concurrency=1 test/emulator.test.cjs test/production.test.cjs test/legacy.test.cjs test/recovered-legacy.test.cjs test/deployed-legacy.test.cjs test/rollout-artifacts.test.cjs"
   },
   "keywords": [],
   "author": "",

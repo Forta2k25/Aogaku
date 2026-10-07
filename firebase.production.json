@@ -1,0 +1,35 @@
+{
+  "functions": [
+    {
+      "source": "build/production-functions",
+      "codebase": "aogaku-ai",
+      "runtime": "nodejs22",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "*-debug.log",
+        ".env.*",
+        ".secret.*"
+      ],
+      "predeploy": [
+        "python3 \"$PROJECT_DIR/scripts/firebase_production.py\" hook --project \"$GCLOUD_PROJECT\""
+      ]
+    }
+  ],
+  "firestore": [
+    {
+      "database": "aogaku-ai",
+      "rules": "Config/AI/firestore.rules",
+      "indexes": "Config/AI/firestore.indexes.json",
+      "predeploy": [
+        "python3 \"$PROJECT_DIR/scripts/firebase_production.py\" hook --project \"$GCLOUD_PROJECT\""
+      ]
+    }
+  ],
+  "storage": {
+    "rules": "Config/Production/storage.rules",
+    "predeploy": [
+      "python3 \"$PROJECT_DIR/scripts/firebase_production.py\" hook --project \"$GCLOUD_PROJECT\""
+    ]
+  }
+}

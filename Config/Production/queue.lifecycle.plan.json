@@ -1,0 +1,19 @@
+{
+  "projectId": "forta-aogaku",
+  "queueName": "projects/forta-aogaku/locations/asia-northeast1/queues/aiProcessSource",
+  "createBody": "Config/Production/queue.create.json",
+  "requiredState": "PAUSED",
+  "stateIsOutputOnly": true,
+  "afterCreateCommand": [
+    "gcloud",
+    "tasks",
+    "queues",
+    "pause",
+    "aiProcessSource",
+    "--location=asia-northeast1",
+    "--project=forta-aogaku"
+  ],
+  "verification": "GET exact queue and require PAUSED before any following phase",
+  "existingQueuePolicy": "Reject unknown ownership; explicitly approve pause first; deploy refuses RUNNING/DISABLED",
+  "cloudMutationExecuted": false
+}

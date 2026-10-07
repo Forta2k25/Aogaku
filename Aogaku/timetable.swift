@@ -31,7 +31,7 @@ private func slotHash(_ c: Course, colorKey: String?) -> String {
         c.id, c.title, c.room, c.teacher,
         c.credits.map(String.init) ?? "",
         c.campus ?? "", c.category ?? "", c.syllabusURL ?? "",
-        colorKey ?? ""
+        colorKey ?? "", c.localCourseUUID ?? "", c.firestoreDocID ?? ""
     ].joined(separator: "|")
 }
 // Encode / Decode
@@ -44,10 +44,11 @@ private func encodeCourseMap(_ c: Course, colorKey: String?) -> [String: Any] {
     if let v = c.category       { m["category"] = v }
     if let v = c.syllabusURL    { m["syllabusURL"] = v }
     if let v = c.firestoreDocID { m["firestoreDocID"] = v }
+    if let v = c.localCourseUUID { m["localCourseUUID"] = v }
     if let v = colorKey         { m["colorKey"] = v }
     return m
 }
-private func decodeCourseMap(_ m: [String: Any]) -> Course {
+private func decodeCourseMap(_ m: [String: Any], record: String) -> Course {
     var id      = (m["id"] as? String) ?? ""
     let title   = (m["title"] as? String) ?? "（無題）"
     let room    = (m["room"] as? String) ?? ""
@@ -67,6 +68,8 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
     var c = Course(id: id, title: title, room: room, teacher: teacher,
                    credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
     c.firestoreDocID = docID
+    c.localCourseUUID = (m["localCourseUUID"] as? String).flatMap(UUID.init(uuidString:))?.uuidString.lowercased()
+        ?? PersistentCourseIdentity.uuid(record: record + "|" + (m["__aiRevision"] as? String ?? "legacy"))
     return c
 }
 
@@ -80,6 +83,12 @@ private struct TimetableRemoteStore {
     let uid: String
     let termID: String
     let term: TermKey
+    private static func identityMap(_ map: [String: Any], revision: Any?) -> [String: Any] {
+        var value = map
+        if let stamp = revision as? Timestamp { value["__aiRevision"] = "\(stamp.seconds):\(stamp.nanoseconds)" }
+        return value
+    }
+
     private let db = Firestore.firestore()
     private var doc: DocumentReference {
         db.collection("users").document(uid).collection("timetable").document(termID)
@@ -111,7 +120,7 @@ private struct TimetableRemoteStore {
             for (k, v) in data {
                 guard k.hasPrefix("cells.d"),
                       let m = v as? [String: Any] else { continue }
-                out[k] = m
+                out[k] = Self.identityMap(m, revision: data[k + ".u"])
             }
             return out
         } catch {
@@ -133,7 +142,7 @@ private struct TimetableRemoteStore {
             var out: [String:[String:Any]] = [:]
             for (k, v) in data {
                 guard k.hasPrefix("cells.d"), let m = v as? [String: Any] else { continue }
-                out[k] = m
+                out[k] = Self.identityMap(m, revision: data[k + ".u"])
             }
             return out
         } catch {
@@ -148,7 +157,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
             var dict: [String:[String:Any]] = [:]
             for (k, v) in data {
                 guard k.hasPrefix("cells.d"), let m = v as? [String: Any] else { continue }
-                dict[k] = m
+                dict[k] = Self.identityMap(m, revision: data[k + ".u"])
             }
             onChange(dict)
         }
@@ -324,7 +333,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
 
                 let idx = (period - 1) * columns + day
                 if assigned.indices.contains(idx) {
-                    assigned[idx] = decodeCourseMap(m)
+                    assigned[idx] = decodeCourseMap(Self.identityMap(m, revision: data[key + ".u"]), record: "\(uid)|\(term.storageKey)|\(key)")
                 }
                 if let color = m["colorKey"] as? String {
                     let loc = SlotLocation(day: day, period: period)
@@ -584,7 +593,14 @@ final class timetable: UIViewController,
             let k = "\(onlineKeyPrefix).d\(day)"
             if let data = UserDefaults.standard.data(forKey: k),
                let arr = try? JSONDecoder().decode([Course].self, from: data) {
-                onlineSlots[day] = arr
+                onlineSlots[day] = arr.enumerated().map { index, value in
+                    var course = value
+                    if course.localCourseUUID == nil {
+                        course.localCourseUUID = PersistentCourseIdentity.uuid(record: "\(AppBackend.currentUID ?? "local")|\(k)|item:\(index)")
+                    }
+                    return course
+                }
+                saveOnline(for: day)
             } else {
                 onlineSlots[day] = []
             }
@@ -624,7 +640,7 @@ final class timetable: UIViewController,
                   let parsed = parseCellKey(absKey),
                   parsed.period == 0 else { continue }
 
-            let course = decodeCourseMap(m)
+            let course = decodeCourseMap(m, record: "\(remoteStore?.uid ?? AppBackend.currentUID ?? "local")|\(currentTerm.storageKey)|\(absKey)")
             var arr = onlineSlots[parsed.day] ?? []
             let k = onlineCourseKey(course)
             if let i = arr.firstIndex(where: { onlineCourseKey($0) == k }) {
@@ -972,7 +988,14 @@ final class timetable: UIViewController,
         let key = term.storageKey
         if let data = UserDefaults.standard.data(forKey: key),
            let loaded = try? JSONDecoder().decode([Course?].self, from: data) {
-            assigned = loaded
+            assigned = loaded.enumerated().map { index, value in
+                guard var course = value else { return nil }
+                if course.localCourseUUID == nil {
+                    course.localCourseUUID = PersistentCourseIdentity.uuid(record: "\(AppBackend.currentUID ?? "local")|\(key)|slot:\(index)")
+                }
+                return course
+            }
+            if let encoded = try? JSONEncoder().encode(assigned) { UserDefaults.standard.set(encoded, forKey: key) }
         } else {
             assigned = Array(repeating: nil, count: dayLabels.count * periodLabels.count)
         }
@@ -1124,7 +1147,7 @@ final class timetable: UIViewController,
                     if self.remoteHashes[absKey] == remoteH { continue } // 変化なしはスキップ
                     self.remoteHashes[absKey] = remoteH
 
-                    let course = decodeCourseMap(m)
+                    let course = decodeCourseMap(m, record: "\(store.uid)|\(store.term.storageKey)|\(absKey)")
                     let color  = m["colorKey"] as? String
 
                     if parsed.period == 0 {

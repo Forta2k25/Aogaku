@@ -56,6 +56,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     private var timer: Timer?
     private var committedAtStart: TimeInterval = 0
     private var tickCount = 0
+    private var startGeneration = 0
 
     /// ロック画面に出す授業名と回(録音を始める前に設定する)
     var inputContext: AIInputContext?
@@ -88,6 +89,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     }
 
     func start(completion: @escaping (Result<Void, StartError>) -> Void) {
+        let generation = startGeneration
         guard NoteRecordingUsage.committedSeconds < NoteRecordingUsage.limitSeconds else {
             completion(.failure(.limitReached))
             return
@@ -95,6 +97,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self else { return }
+                guard self.startGeneration == generation else { completion(.failure(.failed)); return }
                 guard granted else {
                     completion(.failure(.permissionDenied))
                     return
@@ -194,6 +197,18 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
               AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
         let result = stop()
         DispatchQueue.main.async { self.onAutoStopped?(result) }
+    }
+    /// Stop without staging a new recording or invoking a callback that could retain attachments.
+    func discardForAccountDeletion(uid: String) {
+        guard inputContext?.ownerUID == uid else { return }
+        startGeneration += 1
+        let url = recorder?.url
+        recorder?.stop(); recorder = nil
+        timer?.invalidate(); timer = nil
+        onLevel = nil; onTick = nil; onAutoStopped = nil; inputContext = nil
+        NoteRecordingActivityController.shared.end()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if let url { try? FileManager.default.removeItem(at: url) }
     }
 }
 

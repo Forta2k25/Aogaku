@@ -81,7 +81,7 @@ Dev設定検査、Blaze/API/IAM、GROQ_API_KEY、AI関数12個/Rules/indexのDev
 | F4 upload中削除 | 署名URL発行済みで削除、削除後に遅延PUTも実行 | 以後取得/検索不可。遅延uploadをaiRejectLateUploadが削除し資料が復活しない |
 | F5 解析中削除 | OCR/ASR中・chunk書込直前に削除、Tasksを再配信 | run公開不可、抽出物/原本清掃、deletedを上書きしない。reconcileでも復活しない |
 | F6 共有/撤回 | Aが共有 → Bが一覧/本文/検索取得 → Aが撤回 → Bが同API再取得 | 共有時のみ本文を取得。撤回後は一覧/本文/検索/次ページから除外または拒否。原本は共有しない。既に取得した本文の回収は対象外 |
-| F7 所属/別授業 | Bのmembership無効化、Cの他授業、翌年度/別学期から取得 | owner以外の取得不可。見かけのlocalCourseId一致だけで混ざらない |
+| F7 所属/別授業 | Bのmembership無効化、Cの他授業、翌年度から取得、学期指定のlectureIdsで対象回を限定 | owner以外の取得不可。見かけのcode一致だけで混ざらない。年度別IDには学期を含めず、同じ年間offering内の回はlectureIdで分ける |
 | F8 外部API失敗 | Vision/Groqの429/5xx/1単位失敗 | retryable/partial_ready/coverageが正しい。再試行で既存checkpointを再利用、再公開時にversion対応 |
 | F9 取り残し | lease失効、enqueue後の一時障害、awaiting_upload放置 | 15分reconcileで必要な再投入/期限処理。削除済み・終端状態は復活せず、再試行上限を守る |
 | F10 入力上限 | 10MiB超画像、20MiB/50ページ超PDF、暗号PDF、100MiB/90分超音声、空/超長メモ | 意図した拒否。ローカルファイルが勝手に失われず、原本/usage/失敗状態が整合 |
@@ -104,3 +104,13 @@ Firestore/Storage Emulatorの権限検証6件は前回合格済み。再実行�
 # 2026-10-06 Dev実施結果
 
 [DEV_CONNECTION_AND_RESULTS.md](DEV_CONNECTION_AND_RESULTS.md) に現在の実証結果を記録。4入力・17分分割・Simulatorの実保存/送信サービス・共有撤回・他授業アクセス拒否・中断再送・upload中/解析中削除・遅延upload削除は成功。以下のチェックリストをすべて実施済みとは扱わず、実機のマイク録音・着信・強制終了・圏外などは残課題とする。
+
+## 年度別授業識別（追加）
+
+- URL YRが時間割年度より優先され、両方欠損時はunresolved（現在年を使わない）。
+- 同じ5桁docIDを翌年度の別授業に更新しても、旧snapshot・旧一覧・旧検索・受付再送を保持する。
+- #####等の同じ仮codeでdocID欠損の授業を、異なる永続UUIDで分離する。再起動後もUUIDを保持する。
+- ownerの明示的紐付けのみ許可し、旧snapshot／sourceId／本文を保持してcanonicalへ移す。共有はprivateへ戻す。
+- 一度紐付けた資料の同じ操作の再送でも、最初のcanonicalSnapshotを保持する。
+- 既知年度不一致、別ownerの紐付け、未解決資料の共有を拒否する。
+- 旧端末資料は保存履歴から見られ、正しい授業へ確認付きコピーできる。元データは残す。

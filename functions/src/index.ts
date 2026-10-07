@@ -1,8 +1,9 @@
 import * as functions from "firebase-functions/v1";
 import * as admin from "firebase-admin";
+import {getFirestore} from "firebase-admin/firestore";
 admin.initializeApp();
 
-const db = admin.firestore();
+const db = getFirestore(admin.app(), "(default)");
 const region = "asia-northeast1";
 
 /** 指定ユーザーの iOS FCM トークン一覧を取得 */
@@ -156,4 +157,4 @@ export const onIncomingRequestDeleted = functions
 
 
 export {aiCreateSource, aiCompleteSource, aiGetSource, aiListSources, aiRetrySource, aiUpdateSource,
-  aiDeleteSource, aiGetEvidence, aiRetrieveContext, aiProcessSource, aiReconcileInputs, aiRejectLateUpload} from "./ai";
+  aiDeleteSource, aiGetEvidence, aiRetrieveContext, aiLinkSourceOffering, aiProcessSource, aiReconcileInputs, aiRejectLateUpload} from "./ai";

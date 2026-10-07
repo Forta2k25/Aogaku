@@ -1,0 +1,32 @@
+{
+  "rule": [
+    {
+      "action": {
+        "type": "Delete"
+      },
+      "condition": {
+        "age": 1,
+        "matchesPrefix": [
+          "users/"
+        ],
+        "matchesSuffix": [
+          ".m4a"
+        ]
+      }
+    },
+    {
+      "action": {
+        "type": "Delete"
+      },
+      "condition": {
+        "age": 2,
+        "matchesPrefix": [
+          "ai-inputs/"
+        ],
+        "matchesSuffix": [
+          ".m4a"
+        ]
+      }
+    }
+  ]
+}

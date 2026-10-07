@@ -1,0 +1,50 @@
+{
+  "projectId": "forta-aogaku",
+  "projectNumber": "505828754933",
+  "databaseId": "aogaku-ai",
+  "createDatabaseRequiresSeparateApproval": true,
+  "cloudMutationExecuted": false,
+  "body": {
+    "locationId": "asia-northeast1",
+    "type": "FIRESTORE_NATIVE",
+    "deleteProtectionState": "DELETE_PROTECTION_ENABLED"
+  },
+  "defaultDatabaseChanges": [],
+  "defaultIndexesRetained": 4,
+  "defaultFieldOverridesRetained": 8,
+  "namedRules": "Config/AI/firestore.rules",
+  "namedIndexes": "Config/AI/firestore.indexes.json",
+  "namedCompositeIndexes": 1,
+  "namedFieldOverrides": 1,
+  "migration": "none",
+  "initialInputs": "closed",
+  "sharing": false,
+  "rollback": "keep named database deny, pause processing, never fall back to default",
+  "existingIAMBindings": "retain; tightening requires separate approval",
+  "minimumIAMDesign": [
+    {
+      "principals": [
+        "aogaku-ai-runtime",
+        "aogaku-ai-account-deletion"
+      ],
+      "role": "roles/datastore.user",
+      "condition": "resource.name == \"projects/forta-aogaku/databases/aogaku-ai\""
+    },
+    {
+      "principal": "aogaku-ai-runtime",
+      "database": "(default)",
+      "customPermissions": [
+        "datastore.entities.get",
+        "datastore.entities.create",
+        "datastore.entities.update"
+      ],
+      "purpose": "catalog lookup + accountDeletionFences; IAM cannot isolate individual collections"
+    },
+    {
+      "principal": "aogaku-ai-account-deletion",
+      "database": "(default)",
+      "role": "roles/datastore.user",
+      "purpose": "legacy users/privateUsage cleanup + fence"
+    }
+  ]
+}

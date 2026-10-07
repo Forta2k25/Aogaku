@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "recovered",
+    "outDir": "lib-recovered"
+  },
+  "include": [
+    "recovered/**/*.ts"
+  ],
+  "exclude": [
+    "src",
+    "lib",
+    "lib-recovered",
+    "node_modules"
+  ]
+}

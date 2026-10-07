@@ -1,8 +1,14 @@
+> 2026-10-06: Phase2bはnamed database分離案へ変更。最新構成は [NAMED_DATABASE_ARCHITECTURE.md](NAMED_DATABASE_ARCHITECTURE.md) を参照。本書のdefaultへのAI Rules追加案・過去receiptは本番反映に使用しない。
+
 # AI入力基盤（input-v1）
+
+最新の本番反映結果: [PHASE3A_PRODUCTION_RESULT.md](PHASE3A_PRODUCTION_RESULT.md)。2026-10-07にPhase 1・2・3a完全成功。旧AI3件だけを個別更新し、他Functions/Secret/IAM/Rules等は保持。Phase 3bは追加承認待ちで未実行。
 
 現在の対象: 最新 `origin/main` の `9d596f7` に統合した `codex/ai-input-main-integration`。元のAI実装は `47d54c8` を基点とし、`ed4e424` に保存済み。
 
 統合・再検証の結果と現在開く作業コピーは [MAIN_INTEGRATION_RESULTS.md](MAIN_INTEGRATION_RESULTS.md) を参照。通常は統合コピーの `Aogaku.xcodeproj` をScheme `Aogaku-Dev` / Debugで開く。
+
+現在の授業識別仕様と今回のDev検証は [COURSE_IDENTITY_AND_RESULTS.md](COURSE_IDENTITY_AND_RESULTS.md) を参照。2026-10-06に年度別IDとsnapshot対応を追加した。
 
 ## この実装でできること
 
@@ -26,6 +32,8 @@ Swiftは `Aogaku/AIInput/`、サーバーは `functions/src/ai/`。`functions/sr
 
 保存先は `aiSources/{sourceId}/runs/{runId}/chunks/{chunkId}`、`aiCourseOfferings/{id}/memberships/{uid}`、`aiUsage/{uid}/periods/{period}`。これらはクライアントから直接読み書きせずCallableを通す。既存の公開 `entries` とユーザー下位コレクションの許可には依存しない。
 
+collection名と11種類のpathは `functions/src/ai/schema.ts` に集約している。実保存schemaには `entries` はない。ただし既存Rulesはschema外の任意 `entries` 作成を許すため、全AI領域の遮断を保証できずPhase 2bは停止中。[schema監査・Emulator / Dev結果](SCHEMA_COLLISION_AUDIT.md)を参照。
+
 ## 動作確認
 
 Node.js 22とnpm、Firebase CLI、Java 21以上、Xcodeを使用する。
@@ -45,7 +53,7 @@ xcodebuild -project Aogaku.xcodeproj -scheme Aogaku -configuration Debug -destin
 
 現在の `.firebaserc` は空です。Debugは既定で通信なしの確認用アプリになり、本番のplistは同梱しません。Simulatorでは `Aogaku-AI-Local` Schemeを使います。開発用設定が未登録の場合、`Aogaku-Dev` は接続せず設定エラーを表示します。
 
-具体的な設定・サービス・IAM・Secretの手順は [SIMULATOR_AND_DEVELOPMENT.md](SIMULATOR_AND_DEVELOPMENT.md)、確認項目とE2E計画は [E2E_CHECKLIST.md](E2E_CHECKLIST.md) にまとめています。この作業ではクラウドへ接続・デプロイしていません。
+具体的な設定・サービス・IAM・Secretの手順は [SIMULATOR_AND_DEVELOPMENT.md](SIMULATOR_AND_DEVELOPMENT.md)、確認項目とE2E計画は [E2E_CHECKLIST.md](E2E_CHECKLIST.md) にまとめています。初期のローカル準備段階ではクラウド操作を行わず、その後の明示許可でDevのみ接続・検証した。最新結果は上記の年度別授業検証記録を参照。
 
 開発用の実際のproject IDとiOS plistを登録し、ローカル検査を通してから、利用者の指示で開発専用ラッパーを使います。汎用 `firebase deploy` や `gcloud storage` コマンドはここでは実行しません。ライフサイクル・soft delete・versioningの設定も開発バケットだけで別途確認します。
 
@@ -69,7 +77,7 @@ xcodebuild -project Aogaku.xcodeproj -scheme Aogaku -configuration Debug -destin
 
 初期状態は本人のみ。共有するには、管理側で `aiCourseOfferings/{courseOfferingId}/memberships/{uid}` に `{"status":"verified","active":true}` を設定する。クライアントが時間割へ追加したことだけで共有権限を付与しない。検証済みの所属を登録する自動処理は別途接続する。
 
-年度・学期は授業IDの一部。共通の `classDocId` がない手入力授業は利用者別のIDになる。`localCourseId` が同じでも他人の授業と混ざらない。授業回は表示番号ではなく日本時間の `dayID` と `occurrenceKey` で識別する。現行UIは1日1回の `default` を使用する。
+授業IDは年度＋5桁classDocId（例 `2026:00004`）。学期は資料snapshotと授業回に保存し、年間offering IDには含めない。年度はsyllabus URLのYRを優先し、時間割年度が次点、両方なければunresolved。docID欠損は所有者・永続localCourseUUID・年度で分離し、codeや授業名では識別しない。授業回は学期、日本時間の `dayID` と `occurrenceKey` で識別する。現行UIは1日1回の `default` を使用する。
 
 UIの「この授業に共有」は抽出本文の `knowledgeVisibility` を変更する。原本の `rawVisibility` は本人のまま。一般公開は扱わない。権限取消・共有撤回後は新しい本文取得を拒否する。既に人が閲覧した本文や既に生成した回答を回収する機能は入力基盤に含まれない。
 

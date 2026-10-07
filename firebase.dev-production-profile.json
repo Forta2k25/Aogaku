@@ -1,0 +1,32 @@
+{
+  "functions": {
+    "source": "functions",
+    "predeploy": [
+      "python3 \"$PROJECT_DIR/scripts/check_firebase_deploy_target.py\" \"$GCLOUD_PROJECT\"",
+      "npm --prefix \"$RESOURCE_DIR\" run build"
+    ],
+    "ignore": [
+      "node_modules",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      "recovered",
+      "lib-recovered",
+      "test",
+      "tsconfig.recovered.json"
+    ]
+  },
+  "firestore": {
+    "rules": "Config/Production/firestore.rules",
+    "indexes": "Config/Production/firestore.indexes.json",
+    "predeploy": [
+      "python3 \"$PROJECT_DIR/scripts/check_firebase_deploy_target.py\" \"$GCLOUD_PROJECT\""
+    ]
+  },
+  "storage": {
+    "rules": "Config/Development/production-profile.storage.rules",
+    "predeploy": [
+      "python3 \"$PROJECT_DIR/scripts/check_firebase_deploy_target.py\" \"$GCLOUD_PROJECT\""
+    ]
+  }
+}

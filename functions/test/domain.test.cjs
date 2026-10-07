@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {validateCreate, hash, canRead, mayPublish, chunksFor, selectContext, weekKey} = require('../lib/ai/domain');
+const {validateCreate, hash, canRead, mayPublish, chunksFor, selectContext, weekKey, syllabusYear, courseSnapshot, offeringId} = require('../lib/ai/domain');
 const {mergeSegments} = require('../lib/ai/extractors');
 const valid = () => ({clientRequestId:'request-1',type:'note',title:'授業メモ',mime:'text/plain',text:'社会思想の資料',context:{localCourseId:'c1',year:2026,semester:'fall',dayID:20730}});
 test('all four inputs have explicit type/size validation', () => {
@@ -70,4 +70,35 @@ test('audio overlap keeps continuation and converts to original timestamps', () 
 test('no speech does not become fabricated lecture content', () => {
   assert.deepEqual(mergeSegments([{offset:0,coreStart:0,result:{segments:[{start:0,end:1,text:'ご視聴ありがとうございました',no_speech_prob:.99}]}}],10),[]);
   assert.throws(()=>mergeSegments([{offset:0,coreStart:0,result:{text:'missing timestamps'}}],10));
+});
+
+const uuidA='11111111-1111-4111-8111-111111111111';
+const uuidB='22222222-2222-4222-8222-222222222222';
+const context=()=>({localCourseId:'#####',localCourseUUID:uuidA,classDocId:'00004',year:2025,semester:'fall',dayID:20730,occurrenceKey:'default',syllabusUrl:'https://syllabus.aoyama.ac.jp/shousai.ashx?YR=2026&FN=1611020-0004',courseName:'授業A',teacherName:'教員A'});
+test('offering year is URL YR, then explicit timetable year, otherwise unresolved',()=>{
+  assert.equal(syllabusYear(context().syllabusUrl),2026);
+  for(const url of ['not a URL','https://example.test/?YR=x','https://example.test/?YR=2026&YR=2027','https://example.test/?YR=20','https://example.test/?YR=9999','javascript:?YR=2026'])assert.equal(syllabusYear(url),null);
+  const canonical=courseSnapshot('alice',context());
+  assert.equal(canonical.courseOfferingId,'2026:00004');assert.equal(canonical.yearSource,'syllabus');
+  assert.equal(courseSnapshot('alice',{...context(),syllabusUrl:''}).courseOfferingId,'2025:00004');
+  const unknown=courseSnapshot('alice',{...context(),syllabusUrl:'',year:undefined});
+  assert.equal(unknown.year,null);assert.equal(unknown.resolution,'unresolved');assert.ok(unknown.courseOfferingId.startsWith('local:'));
+});
+test('five-digit class identity is annual, preserves leading zeros and ignores code/name/semester',()=>{
+  const a=courseSnapshot('alice',context());
+  assert.equal(courseSnapshot('bob',{...context(),semester:'spring',courseName:'別の表示名',localCourseId:'+++++',localCourseUUID:uuidB}).courseOfferingId,a.courseOfferingId);
+  assert.notEqual(courseSnapshot('alice',{...context(),syllabusUrl:'https://example.test/?YR=2027'}).courseOfferingId,a.courseOfferingId);
+  for(const classDocId of ['4','000004','../00004','abcde'])assert.throws(()=>courseSnapshot('alice',{...context(),classDocId}),/INVALID_CLASS/);
+  assert.equal(offeringId('2026:00004'),'2026:00004');
+  for(const value of ['2026:4','2026:00004/evil','../other'])assert.throws(()=>offeringId(value));
+});
+test('missing class IDs are scoped by persistent UUID and owner, never placeholder codes or names',()=>{
+  const c={...context(),classDocId:undefined};
+  const a=courseSnapshot('alice',c);
+  assert.equal(a.resolution,'local');
+  assert.notEqual(a.courseOfferingId,courseSnapshot('alice',{...c,localCourseUUID:uuidB}).courseOfferingId);
+  assert.notEqual(a.courseOfferingId,courseSnapshot('bob',c).courseOfferingId);
+  assert.equal(a.courseOfferingId,courseSnapshot('alice',{...c,localCourseId:'',courseName:'編集後',teacherName:'編集後'}).courseOfferingId);
+  assert.throws(()=>courseSnapshot('alice',{...c,localCourseUUID:undefined}),/LOCAL_COURSE_UUID_REQUIRED/);
+  assert.equal(a.courseName,'授業A');assert.equal(a.teacherName,'教員A');
 });

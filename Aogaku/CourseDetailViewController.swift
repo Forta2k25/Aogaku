@@ -195,8 +195,14 @@ final class CourseDetailViewController: UIViewController {
         guard let uid = aiSessionUID, AppBackend.currentUID == uid else {
             throw AIInputError.message("ログインして授業画面を開き直してください")
         }
-        return AIInputContext(ownerUID: uid, localCourseId: course.id, classDocId: course.firestoreDocID,
-                              year: term.year, semester: term.semester == .spring ? "spring" : "fall", dayID: day)
+        guard let uuid = course.localCourseUUID, UUID(uuidString: uuid) != nil else {
+            throw AIInputError.message("授業の保存IDを確認できませんでした。時間割を開き直してください")
+        }
+        let context = AIInputContext(ownerUID: uid, localCourseId: uuid, classDocId: course.firestoreDocID,
+                                     year: term.year, semester: term.semester == .spring ? "spring" : "fall", dayID: day,
+                                     localCourseUUID: uuid, syllabusUrl: course.syllabusURL,
+                                     courseName: course.title, teacherName: course.teacher)
+        return try SourceIngestionService.shared.store(uid: uid).contextForInput(context)
     }
 
     private func stageAIPhoto(_ photo: CapturedPhoto, context: AIInputContext) throws -> AIStoredSource {
@@ -254,6 +260,27 @@ final class CourseDetailViewController: UIViewController {
             }
         } catch { showNoteAlert(title: "保存した資料を読み込めませんでした", message: error.localizedDescription) }
     }
+    @objc private func eraseDeletedAIAccount(_ notification: Notification) {
+        guard let uid = notification.object as? String, aiSessionUID == uid else { return }
+        aiSessionUID = nil
+        noteChatMessagesBySession.removeAll(); aiMessageIDs.removeAll(); noteLastSentAt.removeAll()
+        noteChatPendingBySession.values.forEach { $0.items.removeAll() }
+        noteChatPendingBySession.removeAll(); noteChatPendingRecordingsBySession.removeAll()
+        noteChatEditingIndex = nil; noteChatTextField.text = ""
+        noteChatMessageStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        noteChatAttachmentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        noteCardStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        noteSchedule.removeAll()
+        noteChatSendButton.isEnabled = false
+        NoteAudioPlayer.shared.stop()
+        presentedViewController?.dismiss(animated: false)
+    }
+#if DEBUG
+    var hasRetainedAIInput: Bool {
+        !noteChatMessagesBySession.isEmpty || !noteChatPendingBySession.isEmpty ||
+        !noteChatPendingRecordingsBySession.isEmpty || !aiMessageIDs.isEmpty || !(noteChatTextField.text ?? "").isEmpty
+    }
+#endif
 
     private func openAISources(allDays: Bool) {
         do {
@@ -441,6 +468,7 @@ final class CourseDetailViewController: UIViewController {
             sheet.prefersGrabberVisible = true
         }
         aiSessionUID = AppBackend.currentUID
+        NotificationCenter.default.addObserver(self, selector: #selector(eraseDeletedAIAccount(_:)), name: .aiAccountDeleted, object: nil)
         buildLayout()
         restoreAIInput()
         if showsSyllabusActions {

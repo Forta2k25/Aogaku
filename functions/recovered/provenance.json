@@ -1,0 +1,13 @@
+{
+  "gitCommit": "04cfb4adcb1ad0e0f6ccb1c0ca64037d0190ba4b",
+  "path": "functions/src/index.ts",
+  "sha256": "0eea4c61a5bbc0ca5cc666d5f9422ea253c970d7142fafaa465b224ab3fd2404",
+  "localCompiledCopyMatchesCommit": true,
+  "productionVersionVerified": false,
+  "missing": [
+    "onAuthUserDelete",
+    "preDeleteCleanup",
+    "deleteAccountServerSide"
+  ],
+  "deployable": false
+}

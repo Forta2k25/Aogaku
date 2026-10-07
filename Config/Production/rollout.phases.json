@@ -1,0 +1,226 @@
+{
+  "target": {
+    "projectId": "forta-aogaku",
+    "projectNumber": "505828754933",
+    "bucket": "forta-aogaku.firebasestorage.app",
+    "bundleId": "com.forta2k25.Aogaku",
+    "functionRegion": "asia-northeast1",
+    "databaseLocation": "asia-northeast1",
+    "storageLocation": "US-CENTRAL1",
+    "eventRegion": "us-central1",
+    "runtimeServiceAccount": "aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+    "sharingEnabled": false,
+    "functionsCodebase": "aogaku-ai",
+    "aiDatabaseId": "aogaku-ai"
+  },
+  "cloudMutationExecuted": false,
+  "status": "NAMED_DATABASE_DEV_VERIFICATION_PENDING_PRODUCTION_APPROVAL",
+  "phases": [
+    {
+      "id": 1,
+      "name": "APIs, isolated IAM and paused queue",
+      "changes": {
+        "enableOnlyMissingAPIs": [
+          "cloudtasks.googleapis.com",
+          "cloudscheduler.googleapis.com",
+          "vision.googleapis.com"
+        ],
+        "createServiceAccounts": [
+          "aogaku-ai-runtime@forta-aogaku.iam.gserviceaccount.com",
+          "aogaku-ai-account-deletion@forta-aogaku.iam.gserviceaccount.com"
+        ],
+        "iamPlan": "Config/Production/iam.plan.json",
+        "queueBody": "Config/Production/queue.create.json",
+        "secretVersionsChanged": false,
+        "queueLifecyclePlan": "Config/Production/queue.lifecycle.plan.json"
+      },
+      "approval": "API enabling, named SA/custom-role creation, additive etag-protected bindings, named empty queue creation/pause. No user documents.",
+      "checks": [
+        "fresh project ID/number/bucket/bundle",
+        "API enabled and agents ready",
+        "queue absent or verified AI-owned before creation; current 403 means API disabled, NOT absence",
+        "roles on exact resource only; no runtime key/Editor/Owner",
+        "queue PAUSED; no purge"
+      ],
+      "rollback": [
+        "keep APIs enabled, never disable shared APIs",
+        "remove only newly added unused bindings with current etag",
+        "retain queue paused and service agents; no deleting shared resources"
+      ],
+      "commands": [
+        "gcloud tasks queues create aiProcessSource --location=asia-northeast1 --project=forta-aogaku --max-concurrent-dispatches=3 --max-dispatches-per-second=500 --max-attempts=4 --min-backoff=30s --max-backoff=300s --max-doublings=16",
+        "gcloud tasks queues pause aiProcessSource --location=asia-northeast1 --project=forta-aogaku"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Named AI database: preserve default, named index READY then deny Rules",
+      "changes": {
+        "newDatabase": "aogaku-ai",
+        "location": "asia-northeast1",
+        "type": "FIRESTORE_NATIVE",
+        "deleteProtectionState": "DELETE_PROTECTION_ENABLED",
+        "defaultIndexesRetained": 4,
+        "defaultFieldOverridesRetained": 8,
+        "defaultRulesChanged": false,
+        "namedIndexCount": 1,
+        "namedRules": "Config/AI/firestore.rules",
+        "storageRules": "Config/Production/storage.rules"
+      },
+      "commands": [
+        "python3 scripts/firebase_production.py deploy --project forta-aogaku --phase indexes --profile closed --approval PRIVATE_PHASE2_INDEXES",
+        "python3 scripts/firebase_production.py deploy --project forta-aogaku --phase rules --profile closed --approval PRIVATE_PHASE2_RULES"
+      ],
+      "checks": [
+        "Fresh target identity and database ID",
+        "Default Rules byte-identical; default4 indexes/8 fieldOverrides unchanged",
+        "Named1 index READY before Rules/Functions",
+        "Named Rules exact blanket deny including arbitrary entries",
+        "Default entries anonymous read and collectionGroup unchanged",
+        "Existing Storage permissions preserved"
+      ],
+      "rollback": [
+        "Keep named database, deny Rules and index; no delete/migration",
+        "Keep inputs closed, queue/Scheduler paused; do not fall back to default",
+        "Restore approved Storage Rules release if regression after drift review"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Targeted existing quota updates then deletion hooks",
+      "changes": {
+        "quota": [
+          "askCourseAI",
+          "transcribeLectureAudio",
+          "generateReactionPaper"
+        ],
+        "deletion": [
+          "preDeleteCleanup",
+          "deleteAccountServerSide",
+          "onAuthUserDelete"
+        ],
+        "allCodebases": "default",
+        "runtime": "nodejs22",
+        "generationMigration": false
+      },
+      "commands": [
+        "python3 scripts/firebase_legacy_production.py deploy --project forta-aogaku --group quota --mode candidate --approval PRIVATE_PHASE3_QUOTA",
+        "python3 scripts/firebase_legacy_production.py deploy --project forta-aogaku --group deletion --mode candidate --approval PRIVATE_PHASE3_DELETION"
+      ],
+      "checks": [
+        "source and generation/SA/Secret-version verifier passes for each three-function subphase",
+        "old quota bindings pinned to original version1",
+        "deletion removes unused IMPORT_API_KEY binding only; never rotates key",
+        "friend/import/reindex/wipe functions unchanged",
+        "internal disposable UID deletion test only after separate data-write/delete approval"
+      ],
+      "rollback": [
+        "before ANY AI input, approved Node22 rollback-before-pilot targeted package",
+        "after AI input, close input first, safety-recovery only; retain tombstones/cleanup/quota guards",
+        "already-deleted Auth/data are irreversible; never reconstruct from rollback"
+      ],
+      "riskContext": {
+        "legacyAI3": "No entry point in current App Store app; unpublished to general users, but deployed endpoint contracts remain protected",
+        "accountDeletion3": "Existing user account deletion may depend on these; existing user impact remains"
+      }
+    },
+    {
+      "id": 4,
+      "name": "AI12 closed bootstrap and event delivery",
+      "changes": {
+        "AI_INPUT_ALLOWED_UIDS": [],
+        "AI_SHARING_ENABLED": false,
+        "functionsCount": 12,
+        "storageTriggerRegion": "us-central1",
+        "destinationRegion": "asia-northeast1"
+      },
+      "commands": [
+        "node scripts/deploy_production_phase4.cjs create EXACT_AI_ALLOWLIST_NAME"
+      ],
+      "checks": [
+        "all thirteen legacy installed full-source manifests verified again",
+        "exact AI12 codebase; no legacy/link function replacement",
+        "existing queue PAUSED and configuration untouched by exact-create wrapper",
+        "pause new Scheduler after deployment and verify OIDC identity + private invoker IAM",
+        "Eventarc bucket exactly forta-aogaku.firebasestorage.app/us-central1; Run destination Tokyo",
+        "only intended services gain resource-scoped invoker",
+        "all general and internal UIDs rejected while cohort empty"
+      ],
+      "rollback": [
+        "stay closed; retain cleanup/Eventarc and necessary IAM",
+        "roll back same-name AI12 to last safe artifact; never delete Functions/queue/tasks/data",
+        "Scheduler immediately paused; closed handler returns before any DB access during any brief initial tick"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Explicit pilot UID activation and internal E2E",
+      "changes": {
+        "privateUIDFile": "Config/firebase-production.local.json",
+        "publicRollout": false,
+        "sharingEnabled": false,
+        "queueStateAfterExplicitResume": "RUNNING",
+        "scheduler": "firebase-schedule-aiReconcileInputs-asia-northeast1"
+      },
+      "commands": [
+        "python3 scripts/firebase_production.py deploy --project forta-aogaku --phase functions --profile pilot --approval PRIVATE_PHASE5",
+        "gcloud tasks queues resume aiProcessSource --location=asia-northeast1 --project=forta-aogaku",
+        "gcloud scheduler jobs resume firebase-schedule-aiReconcileInputs-asia-northeast1 --location=asia-northeast1 --project=forta-aogaku"
+      ],
+      "checks": [
+        "nonempty explicitly supplied production UID list; Auth existence checked without Auth mutation",
+        "deploy guard keeps queue PAUSED until named resume",
+        "IAM/URL/OIDC/state after redeploy correct",
+        "ordinary/anonymous/Dev token denied across9 callables; direct data denied; private worker rejects unauthorized invocation",
+        "pilot photo/PDF/note/audio/evidence, retry/dedupe/own permission and 3 deletion paths on disposable internal UID",
+        "only fictional input and disposable internal users; E2E writes/deletes explicitly authorized"
+      ],
+      "rollback": [
+        "redeploy closed AI12 cohort[], pause queue to stop new processing",
+        "keep/restart Scheduler + deletion cleanup as needed to finish deletions",
+        "already-issued signed upload URL remains max10min; delete affected source/account only on separate explicit authorization; finalize/tombstone prevents resurrection",
+        "no blanket data cleanup; retain task/content tombstones"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "AI audio lifecycle addition after successful E2E",
+      "changes": {
+        "appendRule": {
+          "action": {
+            "type": "Delete"
+          },
+          "condition": {
+            "age": 2,
+            "matchesPrefix": [
+              "ai-inputs/"
+            ],
+            "matchesSuffix": [
+              ".m4a"
+            ]
+          }
+        },
+        "preserveExistingLifecycle": true,
+        "softDeleteUnchanged": true
+      },
+      "checks": [
+        "re-read metageneration and complete live lifecycle",
+        "only append exact AI audio rule; conditional PATCH with ifMetagenerationMatch",
+        "before/after manifest proves existing users/ rule and7-day soft-delete retained"
+      ],
+      "rollback": [
+        "remove only added rule using current live merge + metageneration and explicit approval",
+        "cannot undo object versions already expired; no blanket restoration"
+      ]
+    }
+  ],
+  "preserved": [
+    "production user data outside explicit disposable internal E2E",
+    "existing friend/notification/import/wipe functions",
+    "existing 3 indexes and 8 fieldOverrides",
+    "GROQ/OPENAI/IMPORT Secret versions",
+    "existing storage ACL/UBLA/soft-delete/lifecycle",
+    "main/App Store/GitHub/Aogaku-clean"
+  ],
+  "approvalPolicy": "Distinct private, short-lived target/artifact/inventory-bound approval for each subphase; no blanket execution approval; unknown drift or partially failed phase stops following phases."
+}

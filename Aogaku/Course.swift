@@ -27,6 +27,7 @@ struct Course: Codable, Equatable {
 
     // classes コレクションの Firestore document ID。レビューキーとして使用。
     var firestoreDocID: String?
+    var localCourseUUID: String?
 
     init(id: String,
          title: String,
@@ -50,6 +51,7 @@ struct Course: Codable, Equatable {
         self.timeDay = nil
         self.periods = nil
         self.firestoreDocID = nil
+        self.localCourseUUID = UUID().uuidString.lowercased()
     }
 
     /// Firestore のドキュメントから生成

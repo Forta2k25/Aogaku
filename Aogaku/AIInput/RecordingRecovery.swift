@@ -21,6 +21,11 @@ enum RecordingRecovery {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try JSONDecoder().decode(Receipt.self, from: Data(contentsOf: url))
     }
+    static func erase(uid: String) throws {
+        guard let receipt = try load(), receipt.context.ownerUID == uid else { return }
+        if FileManager.default.fileExists(atPath: receipt.fileURL.path) { try FileManager.default.removeItem(at: receipt.fileURL) }
+        try FileManager.default.removeItem(at: receiptURL())
+    }
     @discardableResult
     static func finish(uid: String) throws -> URL? {
         guard let receipt = try load(), receipt.context.ownerUID == uid else { return nil }

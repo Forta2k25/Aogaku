@@ -24,6 +24,47 @@ export function id(value: unknown): string {
   if (!/^[\w-]+$/.test(result)) throw new InputError("INVALID_ID");
   return result;
 }
+// Offering IDs have their own grammar; never loosen source/receipt/path IDs.
+export function offeringId(value: unknown): string {
+  const result = str(value, "OFFERING", 128);
+  if (!/^(?:\d{4}:\d{5}|local:[a-f0-9]{64}|[\w-]+)$/.test(result)) throw new InputError("INVALID_OFFERING");
+  return result; // old hashed offerings remain readable, never silently migrated
+}
+export function syllabusYear(url: unknown): number | null {
+  if (typeof url !== "string" || !url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!["https:", "http:"].includes(parsed.protocol)) return null;
+    const years = parsed.searchParams.getAll("YR");
+    if (years.length !== 1 || !/^\d{4}$/.test(years[0])) return null;
+    const year = Number(years[0]);
+    return year >= 2000 && year <= 2100 ? year : null;
+  } catch { return null; }
+}
+export interface OfferingContext {
+  classDocId?: string; localCourseId: string; localCourseUUID?: string;
+  year?: number; semester: string; dayID: number; occurrenceKey: string;
+  syllabusUrl?: string; courseName?: string; teacherName?: string;
+}
+export interface CourseSnapshot {
+  courseOfferingId: string; classDocId: string | null; year: number | null;
+  semester: string; syllabusUrl: string | null; courseName: string; teacherName: string;
+  localCourseUUID: string; resolution: "canonical" | "local" | "unresolved";
+  yearSource: "syllabus" | "timetable" | "unresolved";
+}
+export function courseSnapshot(uid: string, c: OfferingContext): CourseSnapshot {
+  if (c.classDocId && !/^\d{5}$/.test(c.classDocId)) throw new InputError("INVALID_CLASS");
+  if (!c.localCourseUUID || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(c.localCourseUUID)) throw new InputError("LOCAL_COURSE_UUID_REQUIRED");
+  const fromURL = syllabusYear(c.syllabusUrl);
+  const year = fromURL ?? c.year ?? null;
+  const uuid = c.localCourseUUID.toLowerCase();
+  const canonical = !!c.classDocId && year !== null;
+  return {courseOfferingId: canonical ? `${year}:${c.classDocId}` : `local:${hash(uid, uuid, year)}`,
+    classDocId: c.classDocId || null, year, semester: c.semester, syllabusUrl: c.syllabusUrl || null,
+    courseName: c.courseName || "", teacherName: c.teacherName || "", localCourseUUID: uuid,
+    resolution: canonical ? "canonical" : year === null ? "unresolved" : "local",
+    yearSource: fromURL !== null ? "syllabus" : year !== null ? "timetable" : "unresolved"};
+}
 export function integer(value: unknown, name: string, min: number, max: number): number {
   if (!Number.isSafeInteger(value) || Number(value) < min || Number(value) > max) throw new InputError(`INVALID_${name}`);
   return Number(value);
@@ -31,7 +72,7 @@ export function integer(value: unknown, name: string, min: number, max: number):
 export interface CreateInput {
   clientRequestId: string; type: SourceType; title: string; size: number;
   mime: string; text?: string; durationSeconds?: number;
-  context: {classDocId?: string; localCourseId: string; year: number; semester: string; dayID: number; occurrenceKey: string};
+  context: OfferingContext;
 }
 export function validateCreate(data: any): CreateInput {
   if (!data || typeof data !== "object") throw new InputError("INVALID_REQUEST");
@@ -51,11 +92,20 @@ export function validateCreate(data: any): CreateInput {
     ...(type === "audio" ? {durationSeconds: integer(data.durationSeconds, "DURATION", 1, 5400)} : {}),
     context: {
       ...(c.classDocId ? {classDocId: str(c.classDocId, "CLASS", 300)} : {}),
-      localCourseId: str(c.localCourseId, "COURSE", 300),
-      year: integer(c.year, "YEAR", 2000, 2100), semester: c.semester,
+      localCourseId: c.localCourseUUID ? str(c.localCourseUUID, "COURSE_UUID", 36) : str(c.localCourseId, "COURSE", 300),
+      ...(c.localCourseUUID ? {localCourseUUID: str(c.localCourseUUID, "COURSE_UUID", 36)} : {}),
+      ...(c.year !== undefined && c.year !== null ? {year: integer(c.year, "YEAR", 2000, 2100)} : {}), semester: c.semester,
+      ...(c.syllabusUrl !== undefined ? {syllabusUrl: optionalText(c.syllabusUrl, 2000)} : {}),
+      ...(c.courseName !== undefined ? {courseName: optionalText(c.courseName, 200)} : {}),
+      ...(c.teacherName !== undefined ? {teacherName: optionalText(c.teacherName, 200)} : {}),
       dayID: integer(c.dayID, "DAY", 10000, 50000), occurrenceKey: c.occurrenceKey ? id(c.occurrenceKey) : "default"
     }
   };
+}
+function optionalText(value: unknown, max: number): string {
+  if (value === null) return "";
+  if (typeof value !== "string" || value.length > max) throw new InputError("INVALID_COURSE_METADATA");
+  return value.trim();
 }
 export function canRead(source: any, uid: string, verified: boolean, raw = false): boolean {
   return !["deleting", "deleted"].includes(source.status) &&

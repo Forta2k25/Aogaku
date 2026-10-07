@@ -8,15 +8,22 @@ final class LocalSourceStore {
         var schemaVersion = 1
         var sources: [AIStoredSource] = []
         var messages: [AIChatSnapshot] = []
+        var offeringBindings: [String: AICourseSnapshot]? = nil
     }
     private let root: URL
     private let uid: String
+    private let base: URL
+    private var erased = false
     private(set) var ledger: Ledger
 
     init(uid: String, baseURL: URL? = nil) throws {
         self.uid = uid
         let userKey = SHA256.hash(data: Data(uid.utf8)).map { String(format: "%02x", $0) }.joined()
         let base = try baseURL ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        self.base = base
+        guard !FileManager.default.fileExists(atPath: Self.deletionMarker(uid: uid, base: base).path) else {
+            throw AIInputError.message("削除したアカウントの資料は復元できません")
+        }
         root = base.appendingPathComponent("AIInput/\(userKey)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let index = root.appendingPathComponent("ledger.json")
@@ -33,16 +40,19 @@ final class LocalSourceStore {
         }
     }
     private func commit(_ value: Ledger) throws {
+        try requireActive()
         let data = try JSONEncoder().encode(value)
         try data.write(to: root.appendingPathComponent("ledger.json"), options: .atomic)
         ledger = value
     }
     func fileURL(_ source: AIStoredSource) -> URL? {
+        guard !erased else { return nil }
         guard let name = source.fileName else { return nil }
         return root.appendingPathComponent(name)
     }
     func stage(context: AIInputContext, kind: AISourceKind, title: String, mime: String,
                data: Data? = nil, fileURL: URL? = nil, text: String? = nil, duration: TimeInterval? = nil) throws -> AIStoredSource {
+        try requireActive()
         guard context.ownerUID == uid else { throw AIInputError.message("アカウントが変わりました。画面を開き直してください") }
         let contents = try data ?? fileURL.map { try Data(contentsOf: $0, options: .mappedIfSafe) } ?? Data((text ?? "").utf8)
         let maximum = kind == .audio ? 100 * 1024 * 1024 : kind == .pdf ? 20 * 1024 * 1024 : kind == .image ? 10 * 1024 * 1024 : 80000
@@ -57,23 +67,26 @@ final class LocalSourceStore {
         if let name { try contents.write(to: root.appendingPathComponent(name), options: .atomic) }
         let source = AIStoredSource(id: identifier, context: context, kind: kind, title: String(title.prefix(200)), mime: mime,
                                     byteCount: contents.count, durationSeconds: duration.map { Int(ceil($0)) }, text: text,
-                                    fileName: name, checksum: checksum, createdAt: Date(), submitted: false, localState: "draft")
+                                    fileName: name, checksum: checksum, createdAt: Date(), submitted: false, localState: "draft", courseSnapshot: context.snapshot)
         var value = ledger; value.sources.append(source)
         do { try commit(value) } catch { if let name { try? FileManager.default.removeItem(at: root.appendingPathComponent(name)) }; throw error }
         return source
     }
     func update(_ source: AIStoredSource) throws {
         guard source.context.ownerUID == uid, let i = ledger.sources.firstIndex(where: { $0.id == source.id }) else { throw AIInputError.message("保存した資料が見つかりません") }
+        guard source.context == ledger.sources[i].context, source.courseSnapshot == ledger.sources[i].courseSnapshot else {
+            throw AIInputError.message("資料保存時の授業情報は変更できません")
+        }
         var value = ledger; value.sources[i] = source; try commit(value)
     }
     func submit(context: AIInputContext, snapshots: [AIChatSnapshot], replacingFrom messageID: String? = nil) throws {
-        guard context.ownerUID == uid, snapshots.allSatisfy({ $0.context == context }) else { throw AIInputError.message("保存先が一致しません") }
+        guard context.ownerUID == uid, snapshots.allSatisfy({ sameSession($0.context, context) }) else { throw AIInputError.message("保存先が一致しません") }
         var value = ledger
-        if let messageID, let start = value.messages.firstIndex(where: { $0.id == messageID && $0.context == context }) {
-            for i in start..<value.messages.count where value.messages[i].context == context { value.messages[i].hidden = true }
+        if let messageID, let start = value.messages.firstIndex(where: { $0.id == messageID && sameSession($0.context, context) }) {
+            for i in start..<value.messages.count where sameSession(value.messages[i].context, context) { value.messages[i].hidden = true }
         }
         for sourceID in snapshots.flatMap(\.sourceIDs) {
-            guard let i = value.sources.firstIndex(where: { $0.id == sourceID && $0.context == context && !$0.wantsDeletion }) else { throw AIInputError.message("添付資料が見つかりません") }
+            guard let i = value.sources.firstIndex(where: { $0.id == sourceID && sameSession($0.context, context) && !$0.wantsDeletion }) else { throw AIInputError.message("添付資料が見つかりません") }
             if !value.sources[i].submitted { value.sources[i].submitted = true; value.sources[i].localState = "queued" }
         }
         value.messages.append(contentsOf: snapshots); try commit(value)
@@ -92,9 +105,61 @@ final class LocalSourceStore {
         for source in removed { if let url = fileURL(source) { try? FileManager.default.removeItem(at: url) } }
     }
     func sources(context: AIInputContext, includeOtherDays: Bool = false) -> [AIStoredSource] {
-        ledger.sources.filter { $0.context.courseKey == context.courseKey && (includeOtherDays || $0.context.dayID == context.dayID) }
+        ledger.sources.filter {
+            let sameLocalCourse = context.localCourseUUID != nil && $0.context.localCourseUUID == context.localCourseUUID &&
+                $0.context.snapshot?.year == context.snapshot?.year
+            return (contextForInput($0.context).courseKey == contextForInput(context).courseKey || sameLocalCourse) &&
+                (includeOtherDays || ($0.context.dayID == context.dayID && $0.context.semester == context.semester))
+        }
+    }
+    private func bindingKey(_ context: AIInputContext) -> String? {
+        context.localCourseUUID.map { $0 + ":" + (context.snapshot?.year.map(String.init) ?? "unresolved") }
+    }
+    func rememberBinding(context: AIInputContext, snapshot: AICourseSnapshot) throws {
+        guard context.ownerUID == uid, let key = bindingKey(context) else { return }
+        var value = ledger
+        var bindings = value.offeringBindings ?? [:]
+        if let existing = bindings[key], existing.courseOfferingId != snapshot.courseOfferingId {
+            throw AIInputError.message("この授業は既に別の授業IDへ紐付けられています")
+        }
+        bindings[key] = snapshot; value.offeringBindings = bindings; try commit(value)
+    }
+    func contextForInput(_ original: AIInputContext) -> AIInputContext {
+        guard original.ownerUID == uid, let key = bindingKey(original), let snapshot = ledger.offeringBindings?[key] else { return original }
+        return AIInputContext(ownerUID: uid, localCourseId: snapshot.localCourseUUID, classDocId: snapshot.classDocId,
+                              year: snapshot.year, semester: original.semester, dayID: original.dayID,
+                              localCourseUUID: snapshot.localCourseUUID, syllabusUrl: snapshot.syllabusUrl,
+                              courseName: snapshot.courseName, teacherName: snapshot.teacherName)
     }
     func messages(context: AIInputContext) -> [AIChatSnapshot] {
-        ledger.messages.filter { $0.context == context && !$0.hidden }
+        ledger.messages.filter { sameSession($0.context, context) && !$0.hidden }
+    }
+    private func sameSession(_ a: AIInputContext, _ b: AIInputContext) -> Bool {
+        a.ownerUID == b.ownerUID && contextForInput(a).courseKey == contextForInput(b).courseKey &&
+            a.dayID == b.dayID && a.semester == b.semester
+    }
+    private static func deletionMarker(uid: String, base: URL) -> URL {
+        let key = SHA256.hash(data: Data(uid.utf8)).map { String(format: "%02x", $0) }.joined()
+        return base.appendingPathComponent("AIInput/deleted-\(key)")
+    }
+    private func requireActive() throws {
+        guard !erased, !FileManager.default.fileExists(atPath: Self.deletionMarker(uid: uid, base: base).path) else {
+            throw AIInputError.message("削除したアカウントへ資料を保存できません")
+        }
+    }
+    /// Retained store references and delayed upload callbacks cannot recreate the ledger.
+    func eraseAccount() throws {
+        erased = true
+        ledger = Ledger()
+        try Self.eraseAccount(uid: uid, baseURL: base)
+    }
+    static func eraseAccount(uid: String, baseURL: URL? = nil) throws {
+        let base = try baseURL ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let marker = deletionMarker(uid: uid, base: base)
+        try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("deleted".utf8).write(to: marker, options: .atomic)
+        let key = SHA256.hash(data: Data(uid.utf8)).map { String(format: "%02x", $0) }.joined()
+        let root = base.appendingPathComponent("AIInput/\(key)", isDirectory: true)
+        if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
     }
 }

@@ -1,0 +1,17 @@
+{
+  "functions": [
+    {
+      "source": "build/development-account-functions",
+      "codebase": "aogaku-account-delete",
+      "runtime": "nodejs22",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "*.local.json"
+      ],
+      "predeploy": [
+        "python3 \"$PROJECT_DIR/scripts/check_firebase_deploy_target.py\" \"$GCLOUD_PROJECT\""
+      ]
+    }
+  ]
+}

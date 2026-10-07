@@ -1,6 +1,8 @@
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
+import UIKit
 import GoogleSignIn
 
 enum AuthError: LocalizedError {
@@ -226,6 +228,30 @@ final class AuthManager {
                 accessToken: googleUser.accessToken.tokenString
             )
             try await user.reauthenticate(with: credential)
+        } else {
+            let token = try await user.getIDTokenResult(forcingRefresh: true)
+            if Date().timeIntervalSince(token.authDate) > 240 {
+                guard let email = user.email else { throw AuthError.unknown }
+                let password: String = try await withCheckedThrowingContinuation { continuation in
+                    Task { @MainActor in
+                        let alert = UIAlertController(title: "削除前の本人確認", message: "現在のパスワードを入力してください。", preferredStyle: .alert)
+                        alert.addTextField { $0.isSecureTextEntry = true; $0.textContentType = .password }
+                        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel) { _ in continuation.resume(throwing: AuthError.unknown) })
+                        alert.addAction(UIAlertAction(title: "確認", style: .default) { _ in continuation.resume(returning: alert.textFields?.first?.text ?? "") })
+                        vc.present(alert, animated: true)
+                    }
+                }
+                try await user.reauthenticate(with: EmailAuthProvider.credential(withEmail: email, password: password))
+            }
+        }
+
+        await MainActor.run { SourceIngestionService.shared.pauseForAccountDeletion(uid: uid) }
+        // This response proves the tombstone was committed BEFORE Auth deletion.
+        // Missing/older cleanup must stop deletion; do not fall back to Auth-only deletion.
+        let prepared = try await Functions.functions(region: "asia-northeast1").httpsCallable("preDeleteCleanup").call(["uid": uid])
+        guard let result = prepared.data as? [String: Any], result["ok"] as? Bool == true,
+              result["aiAccountDeletionVersion"] as? Int == 1 else {
+            throw NSError(domain: "AogakuAccountDeletion", code: 1, userInfo: [NSLocalizedDescriptionKey: "削除の準備が完了していません。時間を置いて再試行してください。"])
         }
 
         // Aogaku IDを取得してusernamesも一緒に削除
@@ -237,12 +263,17 @@ final class AuthManager {
             try? await db.collection("usernames").document(id.lowercased()).delete()
         }
 
-        // Firebase Authアカウント削除
+        // Preparation is monotonic. If Auth deletion fails, keep uploads paused and allow deletion retry.
         try await user.delete()
-
-        // Googleセッションもサインアウト
-        GIDSignIn.sharedInstance.signOut()
         clearCachedUID()
+        GIDSignIn.sharedInstance.signOut()
+        try await MainActor.run {
+            NoteRecorder.shared.discardForAccountDeletion(uid: uid)
+            let recording = Result { try RecordingRecovery.erase(uid: uid) }
+            let sources = Result { try SourceIngestionService.shared.eraseDeletedAccount(uid: uid) }
+            try sources.get()
+            try recording.get()
+        }
     }
 
     // Set up Aogaku ID for a new Google Sign-In user.

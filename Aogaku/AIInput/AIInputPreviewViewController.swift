@@ -5,7 +5,7 @@ import UIKit
 @MainActor
 final class AIInputPreviewViewController: UITableViewController {
     private let context = AIInputContext(ownerUID: "local-ai-preview-v1", localCourseId: "local-preview-course", classDocId: nil,
-                                         year: 2026, semester: "fall", dayID: 20732)
+                                         year: 2026, semester: "fall", dayID: 20732, localCourseUUID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "AI入力・ローカル確認"
@@ -26,8 +26,9 @@ final class AIInputPreviewViewController: UITableViewController {
         do {
             switch indexPath.row {
             case 0:
-                let course = Course(id: context.localCourseId, title: "AI入力確認用の授業", room: "ローカル", teacher: "確認用",
+                var course = Course(id: context.localCourseId, title: "AI入力確認用の授業", room: "ローカル", teacher: "確認用",
                                     credits: nil, campus: "青山", category: nil, syllabusURL: nil, term: "後期")
+                course.localCourseUUID = context.localCourseUUID
                 let vc = CourseDetailViewController(course: course, location: SlotLocation(day: 1, period: 1), term: TermKey(year: 2026, semester: .fall),
                     showsAttendanceControls: false, allowsCourseManagement: false, showsEnrolledFriends: false, showsMoodleAssignments: false, showsLectureNotes: true)
                 present(vc, animated: true)

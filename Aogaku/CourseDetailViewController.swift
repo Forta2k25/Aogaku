@@ -141,6 +141,11 @@ final class CourseDetailViewController: UIViewController {
     private let noteChatActionRow = UIStackView()
     private let noteChatGuideContainer = UIView()
     private let noteChatMessageStack = UIStackView()
+    private let detectionView = AIDetectionResultView()
+    private var detectionSourceID: String?
+    private var detectionTask: Task<Void, Never>?
+    private var aiSessionTask: Task<Void, Never>?
+
     private let noteChatTextField = UITextField()
     /// チャットの1メッセージ。写真は表示用の縮小版と、送信用の高画質JPEGを両方持つ。
     private enum NoteChatMessage {
@@ -167,6 +172,7 @@ final class CourseDetailViewController: UIViewController {
             }
         }
     }
+    private var aiAuthHandle: AuthStateDidChangeListenerHandle?
     private var aiSessionUID: String?
     private var aiMessageIDs: [Int: [String]] = [:]
     private var noteChatMessagesBySession: [Int: [NoteChatMessage]] = [:]
@@ -193,7 +199,7 @@ final class CourseDetailViewController: UIViewController {
 
     private func aiContext(day: Int) throws -> AIInputContext {
         guard let uid = aiSessionUID, AppBackend.currentUID == uid else {
-            throw AIInputError.message("ログインして授業画面を開き直してください")
+            throw AIInputError.message("資料の接続を準備しています。少し待ってもう一度お試しください")
         }
         guard let uuid = course.localCourseUUID, UUID(uuidString: uuid) != nil else {
             throw AIInputError.message("授業の保存IDを確認できませんでした。時間割を開き直してください")
@@ -205,6 +211,85 @@ final class CourseDetailViewController: UIViewController {
         return try SourceIngestionService.shared.store(uid: uid).contextForInput(context)
     }
 
+    deinit { if let handle = aiAuthHandle { Auth.auth().removeStateDidChangeListener(handle) } }
+
+    private func prepareAIInputSession() {
+        guard aiSessionTask == nil else { return }
+        aiSessionTask = Task { [weak self] in
+            do {
+                let uid = try await AIInputSession.shared.ensure()
+                try Task.checkCancellation()
+                guard let self, AppBackend.currentUID == uid else { return }
+                self.aiSessionUID = uid; self.restoreAIInput(); self.updateDetectionSources(restart: true)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.detectionView.showState("接続を準備できませんでした。通信を確認し、授業を開き直してください。")
+            }
+            self?.aiSessionTask = nil
+        }
+    }
+    @objc private func aiDetectionSourcesChanged() { updateDetectionSources(restart: false) }
+    private func updateDetectionSources(restart: Bool) {
+        guard noteShowsChatDetail, let context = try? aiContext(day: noteChatCurrentSession),
+              let store = try? SourceIngestionService.shared.store(uid: context.ownerUID) else { return }
+        let sources = store.ledger.sources.filter {
+            $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID && $0.submitted && !$0.wantsDeletion &&
+                !["deleted", "deleting"].contains($0.remote?.status ?? "")
+        }.sorted { $0.createdAt < $1.createdAt }
+        let prior = detectionSourceID
+        if !sources.contains(where: { $0.id == detectionSourceID }) { detectionSourceID = sources.last?.id }
+        guard let source = sources.first(where: { $0.id == detectionSourceID }) else { detectionTask?.cancel(); detectionView.clear(); return }
+        detectionView.selector.setTitle(source.title + (sources.count > 1 ? " ▾" : ""), for: .normal)
+        detectionView.selector.menu = UIMenu(children: sources.map { item in
+            UIAction(title: item.title, state: item.id == source.id ? .on : .off) { [weak self] _ in
+                self?.detectionSourceID = item.id; self?.updateDetectionSources(restart: true)
+            }
+        })
+        if restart || prior != detectionSourceID || detectionTask == nil { beginDetection(source, uid: context.ownerUID) }
+    }
+    private func beginDetection(_ selected: AIStoredSource, uid: String) {
+        detectionTask?.cancel()
+        if AppBackend.isOffline {
+            detectionView.showState("ローカル確認モードです。本文の解析はDev接続で確認できます。")
+            return
+        }
+        detectionView.showState("AIが資料を読み取っています…")
+        let localID = selected.id
+        detectionTask = Task { [weak self] in
+            let deadline = Date().addingTimeInterval(360)
+            while !Task.isCancelled && Date() < deadline {
+                guard let self, self.detectionSourceID == localID, AppBackend.currentUID == uid,
+                      let store = try? SourceIngestionService.shared.store(uid: uid),
+                      let item = store.ledger.sources.first(where: { $0.id == localID }), !item.wantsDeletion else { return }
+                if item.localState == "failed" || item.remote?.status == "failed" {
+                    self.detectionView.showState("読み取りに失敗しました。再試行してください。", retry: true); return
+                }
+                do {
+                    if let remote = item.remote, ["ready", "partial_ready"].contains(remote.status) {
+                        let result = try await SourceIngestionService.shared.detectionResult(sourceId: remote.sourceId, uid: uid)
+                        try Task.checkCancellation()
+                        guard self.detectionSourceID == localID, AppBackend.currentUID == uid else { return }
+                        self.detectionView.show(result)
+                        return
+                    }
+                    await SourceIngestionService.shared.refreshSource(localID: localID, uid: uid)
+                    try await Task.sleep(nanoseconds: 3_000_000_000)
+                } catch {
+                    if Task.isCancelled { return }
+                    self.detectionView.showState("本文を読み込めませんでした。再試行してください。", retry: true); return
+                }
+            }
+            if !Task.isCancelled { self?.detectionView.showState("解析を続けています。後でもう一度確認してください。", retry: true) }
+        }
+    }
+    @objc private func retryDetection() {
+        guard let uid = aiSessionUID, let store = try? SourceIngestionService.shared.store(uid: uid),
+              let item = store.ledger.sources.first(where: { $0.id == detectionSourceID }) else { return }
+        Task { [weak self] in
+            do { try await SourceIngestionService.shared.retry(item); self?.updateDetectionSources(restart: true) }
+            catch { self?.detectionView.showState(error.localizedDescription, retry: true) }
+        }
+    }
     private func stageAIPhoto(_ photo: CapturedPhoto, context: AIInputContext) throws -> AIStoredSource {
         try SourceIngestionService.shared.store(uid: context.ownerUID).stage(context: context, kind: .image, title: "授業の写真", mime: "image/jpeg", data: photo.jpeg)
     }
@@ -263,6 +348,7 @@ final class CourseDetailViewController: UIViewController {
     @objc private func eraseDeletedAIAccount(_ notification: Notification) {
         guard let uid = notification.object as? String, aiSessionUID == uid else { return }
         aiSessionUID = nil
+        aiSessionTask?.cancel(); detectionTask?.cancel(); detectionSourceID = nil; detectionView.clear()
         noteChatMessagesBySession.removeAll(); aiMessageIDs.removeAll(); noteLastSentAt.removeAll()
         noteChatPendingBySession.values.forEach { $0.items.removeAll() }
         noteChatPendingBySession.removeAll(); noteChatPendingRecordingsBySession.removeAll()
@@ -468,8 +554,25 @@ final class CourseDetailViewController: UIViewController {
             sheet.prefersGrabberVisible = true
         }
         aiSessionUID = AppBackend.currentUID
+        if showsLectureNotes { prepareAIInputSession() }
         NotificationCenter.default.addObserver(self, selector: #selector(eraseDeletedAIAccount(_:)), name: .aiAccountDeleted, object: nil)
         buildLayout()
+        if showsLectureNotes && !AppBackend.isOffline {
+            aiAuthHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+                guard let self, self.aiSessionUID != user?.uid else { return }
+                if let previousUID = self.aiSessionUID {
+                    let recorder = NoteRecorder.shared
+                    if recorder.inputContext?.ownerUID == previousUID {
+                        _ = recorder.stop() // Preserve the old account's recovery receipt, never attach it to the new UID.
+                        recorder.inputContext = nil; recorder.onLevel = nil; recorder.onTick = nil; recorder.onAutoStopped = nil
+                    }
+                    self.eraseDeletedAIAccount(Notification(name: .aiAccountDeleted, object: previousUID))
+                }
+                self.aiSessionUID = user?.uid
+                if user != nil { self.restoreAIInput(); self.updateDetectionSources(restart: true) }
+            }
+        }
+        NotificationCenter.default.addObserver(self, selector: #selector(aiDetectionSourcesChanged), name: .aiSourcesChanged, object: nil)
         restoreAIInput()
         if showsSyllabusActions {
             buildSyllabusActionButtons()
@@ -517,6 +620,7 @@ final class CourseDetailViewController: UIViewController {
         super.viewWillDisappear(animated)
         view.endEditing(true)
         if isBeingDismissed || isMovingFromParent {
+            detectionTask?.cancel(); aiSessionTask?.cancel()
             // 授業詳細を閉じたら、録音と再生も止める(使用時間は加算される)
             noteRecordingStopped(NoteRecorder.shared.stop(), auto: false)
             NoteAudioPlayer.shared.stop()
@@ -526,6 +630,7 @@ final class CourseDetailViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         restoreAIInput()
+        updateDetectionSources(restart: true)
         if let uid = aiSessionUID { SourceIngestionService.shared.resume(uid: uid) }
         if #available(iOS 16.0, *),
            let sheet = sheetPresentationController {
@@ -2553,6 +2658,8 @@ final class CourseDetailViewController: UIViewController {
         noteChatMessageStack.spacing = 12
         noteChatMessageStack.isHidden = true
         noteChatContainer.addArrangedSubview(noteChatMessageStack)
+        noteChatContainer.addArrangedSubview(detectionView)
+        detectionView.retryButton.addTarget(self, action: #selector(retryDetection), for: .touchUpInside)
 
         let inputBar = makeNoteInputBar()
         inputBar.isHidden = true
@@ -2629,6 +2736,8 @@ final class CourseDetailViewController: UIViewController {
             noteChatPendingRecordingsBySession[noteChatCurrentSession] = []
             reloadNoteChatAttachments(animated: true)
             appendNoteChatMessages(messages)
+            detectionSourceID = snapshots.flatMap(\.sourceIDs).last
+            updateDetectionSources(restart: true)
             updateNoteChatSendButton(animated: true)
             SourceIngestionService.shared.resume(uid: context.ownerUID)
         } catch { showNoteAlert(title: "保存できませんでした", message: error.localizedDescription) }
@@ -4176,6 +4285,7 @@ final class CourseDetailViewController: UIViewController {
         noteChatActionsCompact = !isEmpty
         noteChatMorphing = false
         showNoteChatDetail(true)
+        detectionSourceID = nil; updateDetectionSources(restart: true)
     }
 
     /// チャット表示中は、緑の帯に「第N回授業 · 9/29 火」を小さく出す(どの回のチャットか分かるように)。

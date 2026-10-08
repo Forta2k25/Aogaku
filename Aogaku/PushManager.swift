@@ -70,10 +70,11 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate, MessagingDe
 
     // Firestoreに保存：users/{uid}/fcmTokens/{token}
     private func saveFCMToken(_ token: String) {
-        guard let uid = Auth.auth().currentUser?.uid else {
+        guard let user = Auth.auth().currentUser, !user.isAnonymous else {
             print("Skip saveFCMToken: no signed-in user")
             return
         }
+        let uid = user.uid
         let ref = db.collection("users").document(uid).collection("fcmTokens").document(token)
         ref.setData([
             "platform": "ios",

@@ -36,6 +36,7 @@ enum AppBackend {
             throw AIInputError.message("Debug接続先はforta-aogaku-devだけに限定されています")
         }
         #endif
+        AIAppCheck.prepare() // Install before Firebase; server enforcement stays opt-in.
         FirebaseApp.configure(options: options)
     }
 }

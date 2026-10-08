@@ -1,0 +1,21 @@
+{
+  "firestore": {
+    "database": "(default)",
+    "rules": "Config/Production/baseline.firestore.rules"
+  },
+  "storage": {
+    "rules": "Config/Production/storage.rules"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8088
+    },
+    "storage": {
+      "port": 9198
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}

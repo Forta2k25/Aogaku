@@ -5,6 +5,7 @@ const enabled=!!process.env.FIRESTORE_EMULATOR_HOST && !!process.env.STORAGE_EMU
 process.env.AI_SHARING_ENABLED='true';
 const deletedUsers=new Set();
 let originalGetUser, originalDeleteTask;
+let recognitionStatus=200, imageRequests=0, audioRequests=0;
 let app,db,legacyDb,api,taskPrototype,originalEnqueue,originalFetch,credential,originalToken;
 before(()=>{
   if(!enabled)return;
@@ -18,6 +19,15 @@ before(()=>{
     if(String(url)===`https://cloudfunctions.googleapis.com/v2/${name}`) {
       assert.equal(options.headers.Authorization,'Bearer emulator-only');
       return new Response(JSON.stringify({name,serviceConfig:{uri:'https://emulator-worker.a.run.app'}}),{status:200});
+    }
+    if(String(url)==='https://secretmanager.googleapis.com/v1/projects/demo-aogaku-input/secrets/GROQ_API_KEY/versions/latest:access')return new Response(JSON.stringify({payload:{data:Buffer.from('synthetic-test-only').toString('base64')}}));
+    if(String(url)==='https://api.groq.com/openai/v1/models')return new Response(JSON.stringify({data:[{id:'qwen/qwen3.8-27b',active:true}]}));
+    if(String(url)==='https://api.groq.com/openai/v1/chat/completions') {
+      imageRequests++;const body=JSON.parse(options.body);assert.equal(body.model,'qwen/qwen3.8-27b');assert(body.messages[0].content[1].image_url.url.startsWith('data:image/png;base64,'));
+      return new Response(JSON.stringify({model:body.model,usage:{prompt_tokens:2940,completion_tokens:417,total_tokens:3357},choices:[{finish_reason:'stop',message:{content:JSON.stringify({finalText:'親から子へ特徴が遺伝する。'+ '階層を説明する。'.repeat(200)})}}]}),{status:recognitionStatus});
+    }
+    if(String(url)==='https://api.groq.com/openai/v1/audio/transcriptions') {
+      audioRequests++;assert.equal(options.body.get('model'),'whisper-large-v3-turbo');return new Response(JSON.stringify({duration:1,segments:[{start:0,end:1,text:'カントを学ぶ講義。',no_speech_prob:0}]}));
     }
     const u=new URL(url);
     if(u.protocol!=='http:' || !['127.0.0.1','localhost','[::1]'].includes(u.hostname))throw Error('Emulator test attempted a non-local network request');
@@ -253,4 +263,47 @@ test('named database: default deletion fence prevents admission without named ow
 test('named deletion: 101 orphan memberships resume without affecting another UID',{skip:!enabled},async()=>{
  const uid='orphan-paged-owner',batch=db.batch();for(let i=0;i<101;i++)batch.set(db.doc(`aiCourseOfferings/orphan-${i}/memberships/${uid}`),{userId:uid,status:'verified'});batch.set(db.doc('aiCourseOfferings/orphan-0/memberships/orphan-other'),{userId:'orphan-other',status:'verified'});await batch.commit();
  await api.beginAIAccountDeletion(uid);assert.equal((await db.doc('aiInputOwners/'+uid).get()).get('state'),'deleting');await api.continueAIAccountDeletion(uid);assert.equal((await db.doc('aiInputOwners/'+uid).get()).get('state'),'deleted');assert.equal((await db.collectionGroup('memberships').where('userId','==',uid).get()).size,0);assert.equal((await db.doc('aiCourseOfferings/orphan-0/memberships/orphan-other').get()).exists,true);
+});
+
+// Real named/default Firestore + Storage, real worker/chunks/quota; provider transport is mock-only.
+async function recognitionSource(id,owner,type,bytes,mime){
+ const source=await seed(id,owner);const path=`ai-inputs/aogaku-ai/${owner}/${id}/original`;
+ await admin.storage().bucket().file(path).save(bytes,{contentType:mime});
+ await db.doc(`aiSources/${id}`).set({...source,sourceType:type,mime,status:'queued',activeRun:null,attempts:0,storagePath:path,declaredSize:bytes.length,declaredDuration:2});return source;
+}
+test('recognition: AI-only image worker, real evidence overlap/usage/retrieval, old evidence and UID boundaries',{skip:!enabled},async()=>{
+ const bytes=Buffer.from([137,80,78,71,13,10,26,10,0]);await recognitionSource('det-image','det-owner','image',bytes,'image/png');
+ await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'det-image'}});
+ const source=await call('aiGetSource','det-owner',{sourceId:'det-image'});assert.equal(source.status,'ready');assert.equal(source.pipelineVersion,'image-ai-v2');assert.equal(source.recognition.totalTokens,3357);assert.equal((await call('aiListSources','det-owner',{courseOfferingId:source.courseOfferingId})).inputCapabilities.image.model,'qwen/qwen3.8-27b');assert(Math.abs(source.recognition.estimatedCostUSD-.00402)<1e-12);
+ const evidence=await call('aiGetEvidence','det-owner',{sourceId:'det-image'});assert.equal(evidence.activeVersion,source.activeVersion);assert(evidence.items.length>1);assert(evidence.items.every(x=>x.method==='multimodal_ai'&&x.unitIndex===0));
+ let text='',end=0;for(const item of evidence.items){text+=item.text.slice(Math.max(0,end-item.locator.startChar));end=item.locator.endChar;}assert.equal(text,'親から子へ特徴が遺伝する。'+'階層を説明する。'.repeat(200));
+ const r=await call('aiRetrieveContext','det-owner',{courseOfferingId:'course-a',query:'遺伝'});assert(r.items.some(x=>x.sourceId==='det-image'));assert.equal((await legacyDb.doc('aiSources/det-image').get()).exists,false);
+ await assert.rejects(call('aiGetEvidence','det-outsider',{sourceId:'det-image'}),e=>e.code==='not-found');
+ await assert.rejects(call('aiGetSource','det-outsider',{sourceId:'det-image'}),e=>e.code==='permission-denied');
+ const before=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'det-image'}});assert.equal(imageRequests,before,'ready images never reprocess');
+ await seed('det-old-ocr','det-owner');await db.doc('aiSources/det-old-ocr/runs/run-a/chunks/000000').update({method:'vision_ocr'});assert.equal((await call('aiGetEvidence','det-owner',{sourceId:'det-old-ocr'})).items[0].method,'vision_ocr');
+});
+test('recognition: actual audio segmentation, Turbo only, timestamp/cost, original removed after ready',{skip:!enabled},async()=>{
+ const {execFileSync}=require('node:child_process'),{mkdtempSync,readFileSync,rmSync}=require('node:fs'),{tmpdir}=require('node:os'),{join}=require('node:path');const dir=mkdtempSync(join(tmpdir(),'detection-audio-'));
+ try{const path=join(dir,'test.m4a');execFileSync(require('ffmpeg-static'),['-nostdin','-y','-f','lavfi','-i','sine=frequency=440:duration=1','-c:a','aac',path],{stdio:'ignore'});await recognitionSource('det-audio','det-audio-owner','audio',readFileSync(path),'audio/mp4');
+ await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'det-audio'}});const source=await call('aiGetSource','det-audio-owner',{sourceId:'det-audio'});assert.equal(source.status,'ready');assert.equal(source.recognition.model,'whisper-large-v3-turbo');assert.equal(source.recognition.billedAudioSeconds,10);assert.equal(source.recognition.inputTokens,null);assert.equal(source.recognition.estimatedCostUSD,10/3600*.04);
+ const ev=await call('aiGetEvidence','det-audio-owner',{sourceId:'det-audio'});assert.equal(ev.items[0].locator.startMs,0);assert.equal(ev.items[0].locator.endMs,1000);assert.equal((await admin.storage().bucket().file('ai-inputs/aogaku-ai/det-audio-owner/det-audio/original').exists())[0],false);assert.equal(audioRequests,1);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+test('recognition: 429 and 503 stay retryable without OCR, manual retry succeeds; provider budget/rate/App Check fail closed',{skip:!enabled},async()=>{
+ const bytes=Buffer.from([137,80,78,71,13,10,26,10,0]);await recognitionSource('det-retry','det-retry-owner','image',bytes,'image/png');
+ for(const status of [429,503]){recognitionStatus=status;await assert.rejects(api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'det-retry'}}),e=>e.retryable);const s=(await db.doc('aiSources/det-retry').get()).data();assert.equal(s.status,'queued');assert.equal(s.activeRun,null);}
+ recognitionStatus=200;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'det-retry'}});assert.equal((await call('aiGetSource','det-retry-owner',{sourceId:'det-retry'})).status,'ready');
+ await recognitionSource('det-budget','det-budget-owner','image',bytes,'image/png');const day=new Date(Date.now()+9*3600000).toISOString().slice(0,10);await db.doc(`aiUsage/det-budget-owner/periods/day-${day}`).set({providerCalls:100});const previous=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'det-budget'}});assert.equal(imageRequests,previous);assert.equal((await db.doc('aiSources/det-budget').get()).get('error.code'),'PROVIDER_QUOTA_EXCEEDED');
+ await db.doc('aiUsage/det-rate/periods/request-rate').set({slot:Math.floor(Date.now()/60000),count:120});await assert.rejects(call('aiListSources','det-rate',{context:{}}),e=>e.message==='RATE_LIMITED');
+ process.env.AI_INPUT_ADMISSION_MODE='public';process.env.AI_INPUT_REQUIRE_APP_CHECK='true';
+ try{await assert.rejects(call('aiListSources','det-public',{context:{}}),e=>e.message==='APP_CHECK_REQUIRED');assert.equal((await db.doc('aiUsage/det-public/periods/request-rate').get()).exists,false);const result=await api.aiGetSource.run({auth:{uid:'det-owner',token:{}},app:{appId:'synthetic-attested'},data:{sourceId:'det-image'}});assert.equal(result.sourceId,'det-image');}finally{process.env.AI_INPUT_ADMISSION_MODE='pilot';process.env.AI_INPUT_REQUIRE_APP_CHECK='false';}
+});
+test('recognition: existing daily count/bytes/weekly audio limits stay effective and deletion removes new counters',{skip:!enabled},async()=>{
+ const day=new Date(Date.now()+9*3600000).toISOString().slice(0,10),{weekKey}=require('../lib/ai/domain');
+ for(const [uid,values]of [['det-count-limit',{count:100}],['det-bytes-limit',{bytes:500*1024**2}]]){await db.doc(`aiUsage/${uid}/periods/day-${day}`).set(values);await assert.rejects(call('aiCreateSource',uid,makeRequest('limit-check')),e=>e.message==='QUOTA_EXCEEDED');}
+ await db.doc(`aiUsage/det-seconds-limit/periods/week-${weekKey(new Date())}`).set({seconds:10800});
+ await assert.rejects(call('aiCreateSource','det-seconds-limit',{...makeRequest('audio-limit'),type:'audio',mime:'audio/mp4',text:undefined,size:10,durationSeconds:1}),e=>e.message==='QUOTA_EXCEEDED');
+ await api.beginAIAccountDeletion('det-retry-owner');
+ assert.equal((await db.collection('aiUsage/det-retry-owner/periods').get()).size,0);await assert.rejects(call('aiListSources','det-retry-owner',{context:{}}),e=>e.message==='ACCOUNT_DELETED');assert.equal((await db.collection('aiUsage/det-retry-owner/periods').get()).size,0);
 });

@@ -122,6 +122,9 @@ struct AIRemoteSource: Codable {
     let error: AISourceFailure?
     let rawVisibility: String
     let knowledgeVisibility: String
+    var pipelineVersion: String? = nil
+    var recognition: AIRecognitionMetadata? = nil
+    var activeVersion: String? = nil
     var courseSnapshot: AICourseSnapshot? = nil
     var canonicalSnapshot: AICourseSnapshot? = nil
     var sharingEnabled: Bool? = nil

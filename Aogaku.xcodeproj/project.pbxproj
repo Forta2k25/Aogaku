@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10000010000000000000001 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = A10000010000000000000002 /* FirebaseAppCheck */; };
 		A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = A40AACB82E7556BC009104D2 /* GoogleMobileAds */; };
 		A49491AE2E7E7EB60027AA8F /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = A49491AD2E7E7EB60027AA8F /* FirebaseMessaging */; };
 		A49A40622E7BDFCC0036636C /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A49A40612E7BDFCC0036636C /* WidgetKit.framework */; };
@@ -184,6 +185,7 @@
 				B37651392E7E8D3400E77AF2 /* FirebaseFunctions in Frameworks */,
 				B3F9F09C2E79952E00BFB330 /* FirebaseStorage in Frameworks */,
 				B3F9F0962E79546D00BFB330 /* FirebaseAuth in Frameworks */,
+				A10000010000000000000001 /* FirebaseAppCheck in Frameworks */,
 				A4EFF9A12E84E99000135008 /* FirebaseRemoteConfig in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -325,6 +327,7 @@
 				A4FAAA002F00000100A0A0A0 /* FirebaseAnalytics */,
 				A40AACB82E7556BC009104D2 /* GoogleMobileAds */,
 				B3F9F0952E79546D00BFB330 /* FirebaseAuth */,
+				A10000010000000000000002 /* FirebaseAppCheck */,
 				B3F9F09B2E79952E00BFB330 /* FirebaseStorage */,
 				B37651382E7E8D3400E77AF2 /* FirebaseFunctions */,
 				A4EFF9A02E84E99000135008 /* FirebaseRemoteConfig */,
@@ -572,7 +575,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
-				CODE_SIGN_ENTITLEMENTS = Config/Extensions-Debug.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "Config/Extensions-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
@@ -628,7 +631,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
-				CODE_SIGN_ENTITLEMENTS = Config/Extensions-Debug.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "Config/Extensions-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
@@ -692,7 +695,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Config/Aogaku-Debug.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "Config/Aogaku-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
@@ -1036,6 +1039,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A10000010000000000000002 /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
+		};
 		A40AACB82E7556BC009104D2 /* GoogleMobileAds */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */;

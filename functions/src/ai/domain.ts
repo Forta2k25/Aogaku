@@ -1,3 +1,4 @@
+import type {RecognitionMetadata} from "./pricing";
 import {createHash} from "node:crypto";
 
 export const PIPELINE = "input-v1";
@@ -7,8 +8,8 @@ export type Visibility = "private" | "course";
 export type Status = "awaiting_upload" | "queued" | "extracting" | "indexing" | "ready" | "partial_ready" | "failed" | "deleting" | "deleted";
 export type Locator = {pageNumber?: number; startMs?: number; endMs?: number; startChar?: number; endChar?: number; imageIndex?: number};
 export interface Unit {text: string; locator: Locator; method: string; flags: string[]}
-export interface Extraction {units: Unit[]; totalUnits: number; failedUnits: number[]; raw?: unknown}
-export interface Chunk extends Unit {chunkId: string}
+export interface Extraction {units: Unit[]; totalUnits: number; failedUnits: number[]; raw?: unknown; recognition?: RecognitionMetadata}
+export interface Chunk extends Unit {chunkId: string; unitIndex: number}
 export class InputError extends Error {
   constructor(public code: string, public retryable = false) { super(code); }
 }
@@ -116,11 +117,14 @@ export function mayPublish(source: any, token: string): boolean {
 }
 export function chunksFor(units: Unit[]): Chunk[] {
   const chunks: Chunk[] = [];
-  for (const unit of units) {
+  for (const [unitIndex, unit] of units.entries()) {
     for (let start = 0; start < unit.text.length; start += 1300) {
-      const end = Math.min(start + 1500, unit.text.length);
+      // UTF-16 offsets must never split a surrogate pair (emoji, historic scripts).
+      if (start > 0 && /[\uDC00-\uDFFF]/.test(unit.text[start]) && /[\uD800-\uDBFF]/.test(unit.text[start - 1])) start--;
+      let end = Math.min(start + 1500, unit.text.length);
+      if (end < unit.text.length && /[\uDC00-\uDFFF]/.test(unit.text[end]) && /[\uD800-\uDBFF]/.test(unit.text[end - 1])) end--;
       chunks.push({...unit, text: unit.text.slice(start, end), chunkId: String(chunks.length).padStart(6, "0"),
-        locator: unit.method === "note" ? {...unit.locator, startChar: start, endChar: end} : unit.locator});
+        unitIndex, locator: {...unit.locator, startChar: (unit.locator.startChar || 0) + start, endChar: (unit.locator.startChar || 0) + end}});
       if (end === unit.text.length) break;
     }
   }

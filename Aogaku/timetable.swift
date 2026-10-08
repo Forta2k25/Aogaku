@@ -947,6 +947,8 @@ final class timetable: UIViewController,
         if let uid = overrideUID, !uid.isEmpty {
             return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey, term: currentTerm)
         }
+        // Anonymous AI sessions do not opt into legacy timetable cloud sync.
+        guard Auth.auth().currentUser?.isAnonymous != true else { return nil }
         let uid = AuthManager.shared.currentUID ?? UserDefaults.standard.string(forKey: "auth.uid")
         guard let uid, !uid.isEmpty else { return nil }
         return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey, term: currentTerm)

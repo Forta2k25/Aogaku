@@ -14,22 +14,29 @@ import {join} from "node:path";
 import {PIPELINE, InputError, validateCreate, id, offeringId, syllabusYear, courseSnapshot, CourseSnapshot, str, integer, hash, canRead, mayPublish, chunksFor, weekKey, selectContext, Extraction} from "./domain";
 import {extractAudio, extractImage, extractPDF, audioDuration} from "./extractors";
 import {AI_COLLECTIONS as collections} from "./schema";
+import {admissionAllowed, INPUT_QUOTAS} from "./admission";
+import {RecognitionError} from "./recognition";
+import {IMAGE_PIPELINE} from "./pricing";
 import {aiDatabase as db, defaultDatabase, aiDatabaseId, accountDeletionFence, rawPrefix, derivedPrefix} from "./databases";
 
 const region = "asia-northeast1";
 const runtimeAccount = defineString("AI_RUNTIME_SERVICE_ACCOUNT");
 const pilotUIDs = defineString("AI_INPUT_ALLOWED_UIDS", {default: "[]"});
+const admissionMode = defineString("AI_INPUT_ADMISSION_MODE", {default: "pilot"});
+const requireAppCheck = defineBoolean("AI_INPUT_REQUIRE_APP_CHECK", {default: false});
+// Parameter defaults are deployment-time hints; source-only artifacts need explicit safe runtime defaults.
+const inputAdmissionMode = () => process.env.AI_INPUT_ADMISSION_MODE === undefined ? "pilot" : admissionMode.value();
+const appCheckRequired = () => process.env.AI_INPUT_REQUIRE_APP_CHECK === "true" && requireAppCheck.value();
 export function productionInputsAllowed(uid: string) {
-  if (runtimeProject() !== "forta-aogaku") return true;
-  try { const allowed = JSON.parse(pilotUIDs.value()); return Array.isArray(allowed) && allowed.includes(uid); }
-  catch { return false; }
+  return admissionAllowed(runtimeProject(), inputAdmissionMode(), pilotUIDs.value(), appCheckRequired(), uid);
 }
-// A closed production deployment must not start background maintenance either.
 export function productionClosed() {
+  if (inputAdmissionMode() === "public") return !appCheckRequired();
+  if (inputAdmissionMode() !== "pilot") return true;
   if (runtimeProject() !== "forta-aogaku") return false;
   try {
     const allowed = JSON.parse(pilotUIDs.value());
-    return !Array.isArray(allowed) || !allowed.length || allowed.some(uid => typeof uid !== "string" || !uid);
+    return !Array.isArray(allowed) || !allowed.length || allowed.some(uid => !productionInputsAllowed(uid));
   } catch { return true; }
 }
 const sharingFlag = defineBoolean("AI_SHARING_ENABLED", {default: false});
@@ -42,11 +49,13 @@ const now = () => Date.now();
 const terminal = ["ready", "partial_ready", "failed", "deleting", "deleted"];
 const queue = () => getFunctions().taskQueue(`locations/${region}/functions/aiProcessSource`);
 function callable(fn: (uid: string, data: any) => Promise<any>) {
-  return onCall({region, serviceAccount: runtimeAccount, cpu: "gcf_gen1", timeoutSeconds: 120, maxInstances: 10}, async request => {
-    if (!request.auth) throw new HttpsError("unauthenticated", "ログインしてください");
-    try { if (!productionInputsAllowed(request.auth.uid)) throw new InputError("AI_INPUT_NOT_ENABLED");
+  return onCall({region, serviceAccount: runtimeAccount, cpu: "gcf_gen1", timeoutSeconds: 120, maxInstances: 10, enforceAppCheck: process.env.AI_INPUT_REQUIRE_APP_CHECK === "true"}, async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "認証を確認できませんでした。もう一度お試しください");
+    try { if (inputAdmissionMode() === "public" && (!appCheckRequired() || !request.app)) throw new InputError("APP_CHECK_REQUIRED");
+      if (!productionInputsAllowed(request.auth.uid)) throw new InputError("AI_INPUT_NOT_ENABLED");
       if (!request.data || typeof request.data !== "object") throw new InputError("INVALID_REQUEST");
       await assertAccountActive(request.auth.uid);
+      await limitRequests(request.auth.uid);
       return await fn(request.auth.uid, request.data); }
     catch (e) {
       if (e instanceof HttpsError) throw e;
@@ -54,6 +63,29 @@ function callable(fn: (uid: string, data: any) => Promise<any>) {
       console.error("AI input failure", e instanceof Error ? e.name : "unknown");
       throw new HttpsError("internal", "処理に失敗しました。再試行してください", {code: "INTERNAL", retryable: true});
     }
+  });
+}
+// Counters remain in the existing named-DB periods subtree and are removed by account cleanup.
+async function limitRequests(uid: string) {
+  const ref = db().doc(`${collections.usage}/${uid}/${collections.periods}/request-rate`), slot = Math.floor(now() / 60000);
+  await db().runTransaction(async tx => {
+    const [current, owner] = await Promise.all([tx.get(ref), tx.get(owners().doc(uid))]);
+    if (["deleting", "deleted"].includes(owner.get("state"))) throw new InputError("ACCOUNT_DELETED");
+    const count = current.get("slot") === slot ? current.get("count") || 0 : 0;
+    if (count >= INPUT_QUOTAS.requestsPerMinute) throw new InputError("RATE_LIMITED", true);
+    tx.set(ref, {slot, count: count + 1});
+  });
+}
+async function reserveProviderCall(uid: string) {
+  await assertAccountActive(uid);
+  const day = new Date(now() + 9 * 3600000).toISOString().slice(0, 10);
+  const ref = db().doc(`${collections.usage}/${uid}/${collections.periods}/day-${day}`);
+  await db().runTransaction(async tx => {
+    const [current, owner] = await Promise.all([tx.get(ref), tx.get(owners().doc(uid))]);
+    if (["deleting", "deleted"].includes(owner.get("state"))) throw new InputError("ACCOUNT_DELETED");
+    const count = current.get("providerCalls") || 0;
+    if (count >= INPUT_QUOTAS.providerCallsPerDay) throw new InputError("PROVIDER_QUOTA_EXCEEDED");
+    tx.set(ref, {providerCalls: count + 1}, {merge: true});
   });
 }
 async function verified(uid: string, courseId: string) {
@@ -71,7 +103,7 @@ async function owned(uid: string, sourceId: unknown) {
 function publicSource(s: any) {
   const {sourceId, sourceType, title, courseOfferingId, lectureId, dayID, status, error, coverage, rawVisibility, knowledgeVisibility, createdAt, activeRun, sourceVersion} = s;
   return {databaseId: aiDatabaseId(), sourceId, sourceType, title, courseOfferingId, lectureId, dayID, status, courseSnapshot: s.courseSnapshot || null,
-    canonicalSnapshot: s.canonicalSnapshot || null, sharingEnabled: sharingEnabled(), linkingEnabled: runtimeProject() !== "forta-aogaku", error: error || null,
+    canonicalSnapshot: s.canonicalSnapshot || null, pipelineVersion: s.pipelineVersion || "input-v1", recognition: s.recognition || null, processingMs: s.processingMs ?? null, sharingEnabled: sharingEnabled(), linkingEnabled: runtimeProject() !== "forta-aogaku", error: error || null,
     coverage: coverage || null, rawVisibility, knowledgeVisibility, createdAt, sourceVersion, activeVersion: activeRun || null};
 }
 function runtimeProject() {
@@ -99,7 +131,7 @@ async function taskTarget() {
   return workerUri;
 }
 async function groqSecret() {
-  // ADC + secret-scoped IAM. No key is needed for image/PDF/note processing.
+  // ADC + secret-scoped IAM. Image and audio only; never expose the payload to clients.
   const response = await adcRequest(`https://secretmanager.googleapis.com/v1/projects/${runtimeProject()}/secrets/GROQ_API_KEY/versions/latest:access`);
   if (response.status === 404) throw new InputError("ASR_NOT_CONFIGURED");
   if (!response.ok) throw new InputError("ASR_SECRET_UNAVAILABLE", response.status === 429 || response.status >= 500);
@@ -213,8 +245,8 @@ export const aiCreateSource = callable(async (uid, data) => {
     if (["deleting", "deleted"].includes(owner.get("state"))) throw new InputError("ACCOUNT_DELETED");
     const bytes = daily.get("bytes") || 0, count = daily.get("count") || 0, seconds = weekly.get("seconds") || 0;
     const reservation = input.durationSeconds || 0;
-    if (count >= 100 || bytes + input.size > 500 * 1024 ** 2 || seconds + reservation > 10800) throw new InputError("QUOTA_EXCEEDED");
-    const source = {sourceId, sourceVersion: 1, schemaVersion: 3, pipelineVersion: PIPELINE,
+    if (count >= INPUT_QUOTAS.dailyCount || bytes + input.size > INPUT_QUOTAS.dailyBytes || seconds + reservation > INPUT_QUOTAS.weeklyAudioSeconds) throw new InputError("QUOTA_EXCEEDED");
+    const source = {sourceId, sourceVersion: 1, schemaVersion: 4, pipelineVersion: input.type === "image" ? "image-ai-v2" : input.type === "audio" ? "audio-groq-v2" : PIPELINE,
       fingerprint, ownerUserId: uid, courseOfferingId, lectureId, dayID: c.dayID, courseSnapshot: snapshot,
       occurrenceKey: c.occurrenceKey,
       sourceType: input.type, title: input.title, mime: input.mime, declaredSize: input.size,
@@ -265,6 +297,7 @@ export const aiListSources = callable(async (uid, data) => {
   const [snap, member] = await Promise.all([query.get(), verified(uid, course)]);
   const page = snap.docs.slice(0, 100);
   return {items: page.map(d => d.data()).filter(s => canRead(s, uid, member) && (!lecture || s.lectureId === lecture)).map(publicSource),
+    inputCapabilities: {image: IMAGE_PIPELINE},
     courseOfferingId: course, lectureId: resolved?.lectureId || null, nextCursor: snap.size > 100 ? page.at(-1)!.id : null};
 });
 export const aiGetEvidence = callable(async (uid, data) => {
@@ -277,7 +310,7 @@ export const aiGetEvidence = callable(async (uid, data) => {
   const latest = (await ref.get()).data();
   if (!latest || latest.activeRun !== source.activeRun || !canRead(latest, uid, await verified(uid, source.courseOfferingId))) throw new InputError("NOT_FOUND");
   return {items: chunks.docs.slice(0, 20).map(d => ({...d.data(), sourceId: ref.id, lectureId: latest.lectureId})),
-    status: latest.status, coverage: latest.coverage || null, nextCursor: chunks.size > 20 ? chunks.docs[19].id : null};
+    status: latest.status, activeVersion: latest.activeRun, recognition: latest.recognition || null, pipelineVersion: latest.pipelineVersion || "input-v1", processingMs: latest.processingMs ?? null, coverage: latest.coverage || null, nextCursor: chunks.size > 20 ? chunks.docs[19].id : null};
 });
 
 export const aiRetrySource = callable(async (uid, data) => {
@@ -431,6 +464,7 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
   }
   const cp = {
     alive,
+    reserveProviderCall: () => reserveProviderCall(ownerUID),
     load: async (key: string) => { try { const [b] = await bucket().file(`${derived}/checkpoints/${PIPELINE}/${key}.json`).download(); return JSON.parse(b.toString()); } catch (e: any) { if (e.code === 404) return undefined; throw e; } },
     save: async (key: string, value: any) => { await alive(); await bucket().file(`${derived}/checkpoints/${PIPELINE}/${key}.json`).save(JSON.stringify(value), {contentType: "application/json"}); await alive(); }
   };
@@ -447,7 +481,7 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
       if (bytes.length !== source.declaredSize) throw new InputError("UPLOAD_MISMATCH");
       const pdfMagic = bytes.subarray(0, 5).toString() === "%PDF-";
       if (source.sourceType === "pdf" && !pdfMagic) throw new InputError("INVALID_PDF");
-      if (source.sourceType === "image") extraction = await extractImage(path, cp);
+      if (source.sourceType === "image") extraction = await extractImage(path, source.mime, await groqSecret(), cp);
       else if (source.sourceType === "pdf") extraction = await extractPDF(path, `gs://${bucket().name}/${source.storagePath}`, cp);
       else {
         const duration = await audioDuration(path);
@@ -459,7 +493,9 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
     const chunks = chunksFor(extraction.units);
     if (!chunks.length) throw new InputError("SOURCE_UNREADABLE");
     await db().runTransaction(async tx => { const s = (await tx.get(ref)).data(); if (!mayPublish(s, token)) throw new InputError("CANCELLED"); tx.update(ref, {status: "indexing"}); });
-    await bucket().file(`${derived}/runs/${token}/extraction.json`).save(JSON.stringify(extraction), {contentType: "application/json"});
+    // New recognition runs retain metadata here; final text lives in chunks, with checkpoints only for resumable provider work.
+    const runManifest = extraction.recognition ? {totalUnits: extraction.totalUnits, failedUnits: extraction.failedUnits, recognition: extraction.recognition} : extraction;
+    await bucket().file(`${derived}/runs/${token}/extraction.json`).save(JSON.stringify(runManifest), {contentType: "application/json"});
     for (let offset = 0; offset < chunks.length; offset += 200) {
       await alive(); const batch = db().batch();
       chunks.slice(offset, offset + 200).forEach(c => batch.set(ref.collection(collections.runs).doc(token).collection(collections.chunks).doc(c.chunkId), c));
@@ -470,7 +506,7 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
       const s = (await tx.get(ref)).data();
       const owner = await tx.get(owners().doc(source.ownerUserId));
       if (!productionInputsAllowed(source.ownerUserId) || ["deleting", "deleted"].includes(owner.get("state")) || !mayPublish(s, token)) throw new InputError("CANCELLED");
-      tx.update(ref, {activeRun: token, originalHash, processingMs: now() - processingStartedAt, status: extraction.failedUnits.length ? "partial_ready" : "ready", leaseToken: null, leaseUntil: 0,
+      tx.update(ref, {activeRun: token, originalHash, ...(extraction.recognition ? {recognition: extraction.recognition, pipelineVersion: extraction.recognition.pipelineVersion} : {}), processingMs: now() - processingStartedAt, status: extraction.failedUnits.length ? "partial_ready" : "ready", leaseToken: null, leaseUntil: 0,
         coverage: {totalUnits: extraction.totalUnits, processedUnits: extraction.totalUnits - extraction.failedUnits.length, failedUnits: extraction.failedUnits},
         error: null, updatedAt: now()});
     });
@@ -480,7 +516,7 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
     await db().runTransaction(async tx => {
       const s = (await tx.get(ref)).data();
       if (s && mayPublish(s, token)) tx.update(ref, {status: error.retryable && s.attempts < 4 ? "queued" : "failed", leaseToken: null, leaseUntil: 0,
-        error: {code: error.code, retryable: error.retryable}, updatedAt: now()});
+        error: {code: error.code, retryable: error.retryable}, ...(error instanceof RecognitionError && error.recognition ? {recognition: error.recognition} : {}), updatedAt: now()});
     });
     if (error.retryable) throw error;
   } finally {

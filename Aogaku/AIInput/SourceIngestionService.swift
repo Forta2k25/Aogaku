@@ -57,7 +57,9 @@ final class SourceIngestionService {
             case "AI_INPUT_NOT_ENABLED": throw AIInputError.message("AIへの資料追加は現在準備中です")
             case "ACCOUNT_DELETED", "ACCOUNT_DISABLED": throw AIInputError.message("このアカウントで資料を利用できません。ログイン状態を確認してください")
             case "MEMBERSHIP_NOT_VERIFIED": throw AIInputError.message("この授業の参加確認が必要です。今は自分のみで利用できます")
-            case "QUOTA_EXCEEDED": throw AIInputError.message("資料の利用上限に達しました。時間を置いて再試行してください")
+            case "RATE_LIMITED": throw AIInputError.message("短時間の利用上限に達しました。少し待って再試行してください")
+            case "APP_CHECK_REQUIRED": throw AIInputError.message("アプリの確認ができませんでした。最新版で再試行してください")
+            case "QUOTA_EXCEEDED", "PROVIDER_QUOTA_EXCEEDED": throw AIInputError.message("資料の利用上限に達しました。時間を置いて再試行してください")
             case "RETRY_LIMIT", "RAW_EXPIRED": throw AIInputError.message("この資料の再試行期限または回数を超えました。資料を追加し直してください")
             case "SOURCE_DELETED": throw AIInputError.message("この資料は削除済みです")
             case "CLASS_NOT_FOUND": throw AIInputError.message("授業の情報を確認できませんでした。授業を開き直してください")
@@ -106,8 +108,15 @@ final class SourceIngestionService {
     private func upload(_ item: AIStoredSource, store: LocalSourceStore) async throws {
         var source = item
         source.localState = "uploading"; source.lastError = nil; try store.update(source); notify()
+        let readyImage = source.kind == .image && ["ready", "partial_ready"].contains(source.remote?.status ?? "")
+        if source.kind == .image && !readyImage {
+            // Check BEFORE create/upload: old production APIs silently ignore new client fields.
+            let capabilities = try await call("aiListSources", data: ["context": source.context.request, "onlyLecture": true], uid: source.context.ownerUID)
+            try AIImagePipeline.requireCapability(capabilities)
+        }
         let response = try await call("aiCreateSource", data: source.createRequest, uid: source.context.ownerUID)
         source.remote = try decode(response)
+        if source.kind == .image && !readyImage { try AIImagePipeline.requireReceipt(source.remote!) }
         source.wantsDeletion = store.ledger.sources.first { $0.id == source.id }?.wantsDeletion ?? true
         try store.update(source)
         if source.wantsDeletion { try await finishDelete(source, store: store); return }
@@ -137,6 +146,15 @@ final class SourceIngestionService {
         try store.update(source)
         if source.wantsDeletion { try await finishDelete(source, store: store) }
         notify()
+    }
+    func refreshSource(localID: String, uid: String) async {
+        guard !AppBackend.isOffline, let store = try? store(uid: uid),
+              let item = store.ledger.sources.first(where: { $0.id == localID }), !item.wantsDeletion, let remote = item.remote else { return }
+        do {
+            let response = try decode(await call("aiGetSource", data: ["sourceId": remote.sourceId], uid: uid))
+            guard var latest = store.ledger.sources.first(where: { $0.id == localID }), !latest.wantsDeletion else { return }
+            latest.remote = response; try store.update(latest); notify()
+        } catch { /* Keep the durable previous status during network interruption. */ }
     }
     func refresh(uid: String) async {
         guard !AppBackend.isOffline else { return }
@@ -200,6 +218,28 @@ final class SourceIngestionService {
         let store = try store(uid: item.context.ownerUID)
         guard var latest = store.ledger.sources.first(where: { $0.id == item.id }) else { return }
         latest.remote = try decode(result); try store.update(latest); notify()
+    }
+    func detectionResult(sourceId: String, uid: String) async throws -> AIDetectionResult {
+        let baseline = try decode(await call("aiGetSource", data: ["sourceId": sourceId], uid: uid))
+        var chunks: [AIEvidenceChunk] = [], cursor: String?, page: AIEvidencePage?
+        var seen = Set<String>()
+        repeat {
+            var data: [String: Any] = ["sourceId": sourceId]
+            if let cursor { data["after"] = cursor }
+            let value = try await call("aiGetEvidence", data: data, uid: uid)
+            let current = try JSONDecoder().decode(AIEvidencePage.self, from: JSONSerialization.data(withJSONObject: value))
+            if let page { guard current.activeVersion == page.activeVersion else { throw AIInputError.message("資料が更新されました。再読み込みします") } }
+            if let version = current.activeVersion, version != baseline.activeVersion { throw AIInputError.message("資料が更新されました。再読み込みします") }
+            page = current; chunks += current.items; cursor = current.nextCursor
+            if let cursor { guard seen.insert(cursor).inserted, seen.count <= 40 else { throw AIInputError.message("資料の読み込みを完了できませんでした") } }
+        } while cursor != nil
+        let latest = try decode(await call("aiGetSource", data: ["sourceId": sourceId], uid: uid))
+        guard latest.activeVersion == baseline.activeVersion else { throw AIInputError.message("資料が更新されました。再読み込みします") }
+        if latest.sourceType == "image" {
+            try AIImagePipeline.requireEvidence(pipelineVersion: page?.pipelineVersion ?? latest.pipelineVersion, recognition: page?.recognition ?? latest.recognition, chunks: chunks)
+        }
+        return AIDetectionResult(text: AIDetectionResult.cleanText(chunks), recognition: page?.recognition ?? latest.recognition,
+            processingMs: page?.processingMs, method: page?.status == "partial_ready" && latest.sourceType == "audio" ? "partial_audio" : chunks.first?.method, pipelineVersion: page?.pipelineVersion ?? latest.pipelineVersion)
     }
     func retrieveContext(uid: String, courseOfferingId: String, lectureIds: [String], query: String, purpose: String = "question", after: String? = nil) async throws -> [String: Any] {
         var data: [String: Any] = ["courseOfferingId": courseOfferingId, "lectureIds": lectureIds, "query": query, "purpose": purpose, "maxCharacters": 12000]

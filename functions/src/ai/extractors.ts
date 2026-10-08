@@ -4,10 +4,12 @@ import {promisify} from "node:util";
 import {readFile, mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join, dirname} from "node:path";
+import {GroqImageRecognition, ImageRecognitionProvider, assertImageExtraction} from "./recognition";
+import {audioUsage, RECOGNITION_PRICING} from "./pricing";
 import {Extraction, InputError, Unit} from "./domain";
 
 const exec = promisify(execFile);
-type Checkpoint = {load: (key: string) => Promise<any | undefined>; save: (key: string, value: any) => Promise<void>; alive: () => Promise<void>};
+type Checkpoint = {load: (key: string) => Promise<any | undefined>; save: (key: string, value: any) => Promise<void>; alive: () => Promise<void>; reserveProviderCall?: () => Promise<void>};
 let visionClient: ImageAnnotatorClient | undefined;
 const vision = () => visionClient ||= new ImageAnnotatorClient();
 const importModule = new Function("name", "return import(name)") as (name: string) => Promise<any>;
@@ -20,14 +22,15 @@ async function cached(cp: Checkpoint, key: string, fn: () => Promise<any>) {
   await cp.save(key, result);
   return result;
 }
-export async function extractImage(path: string, cp: Checkpoint): Promise<Extraction> {
-  const result = await cached(cp, "image", async () => {
-    const [response] = await vision().documentTextDetection({image: {content: await readFile(path)}});
-    if (response.error?.code) throw new InputError("OCR_UNAVAILABLE", true);
-    return {text: response.fullTextAnnotation?.text || "", annotation: response.fullTextAnnotation || {}};
+export async function extractImage(path: string, mime: string, key: string, cp: Checkpoint, provider: ImageRecognitionProvider = new GroqImageRecognition(key)): Promise<Extraction> {
+  const result = await cached(cp, "image-ai-v2", async () => {
+    await cp.reserveProviderCall?.();
+    const value = await provider.recognize(await readFile(path), mime);
+    assertImageExtraction(value);
+    return value;
   });
-  if (!result.text.trim()) throw new InputError("SOURCE_UNREADABLE");
-  return {units: [{text: result.text, locator: {imageIndex: 1}, method: "vision_ocr", flags: []}], totalUnits: 1, failedUnits: [], raw: result};
+  assertImageExtraction(result);
+  return result;
 }
 export async function extractPDF(path: string, gsURI: string, cp: Checkpoint): Promise<Extraction> {
   const pdfjs = await importModule("pdfjs-dist/legacy/build/pdf.mjs");
@@ -115,29 +118,31 @@ export function mergeSegments(parts: Array<{offset: number; coreStart: number; r
   return units;
 }
 export async function extractAudio(path: string, duration: number, key: string, cp: Checkpoint): Promise<Extraction> {
+  const startedAt = Date.now();
   const directory = await mkdtemp(join(tmpdir(), "ai-audio-"));
   const parts: Array<{offset: number; coreStart: number; result: any}> = [], failedUnits: number[] = [];
   try {
     for (let coreStart = 0, index = 0; coreStart < duration; coreStart += 900, index++) {
       const offset = Math.max(0, coreStart - 2);
       try {
-        const result = await cached(cp, `audio-${index}`, async () => {
+        const result = await cached(cp, `audio-groq-v2-${index}`, async () => {
           const out = join(directory, `${index}.m4a`);
           await exec(require("ffmpeg-static"), ["-nostdin", "-y", "-ss", String(offset), "-i", path, "-t", String(Math.min(900 + coreStart - offset, duration - offset)), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "48k", out], {timeout: 120000, maxBuffer: 1024 ** 2});
-          const first = await groq(out, key, "whisper-large-v3-turbo");
-          const bad = (first.segments || []).some((s: any) => s.avg_logprob < -1 || s.compression_ratio > 2.4);
-          if (!bad) return {...first, selectedModel: "whisper-large-v3-turbo"};
-          try { return {...await groq(out, key, "whisper-large-v3"), firstPass: first, selectedModel: "whisper-large-v3"}; }
-          catch { return {...first, selectedModel: "whisper-large-v3-turbo", retryFailed: true}; }
+          await cp.reserveProviderCall?.();
+          const result = await groq(out, key, RECOGNITION_PRICING.audio.model);
+          return {...result, selectedModel: RECOGNITION_PRICING.audio.model,
+            billedDuration: Math.max(RECOGNITION_PRICING.audio.minimumBillingSeconds,
+              typeof result.duration === "number" && Number.isFinite(result.duration) && result.duration > 0 ? result.duration : await audioDuration(out))};
         });
         parts.push({offset, coreStart, result});
       } catch (e) {
-        if (e instanceof InputError && ["CANCELLED", "ASR_NOT_CONFIGURED"].includes(e.code)) throw e;
+        if (e instanceof InputError && ["CANCELLED", "ACCOUNT_DELETED", "PROVIDER_QUOTA_EXCEEDED", "ASR_NOT_CONFIGURED"].includes(e.code)) throw e;
         failedUnits.push(index + 1);
       }
     }
     const units = mergeSegments(parts, duration);
     if (!units.length) throw new InputError(failedUnits.length ? "ASR_UNAVAILABLE" : "SOURCE_UNREADABLE", failedUnits.length > 0);
-    return {units, totalUnits: Math.ceil(duration / 900), failedUnits, raw: parts};
+    return {units, totalUnits: Math.ceil(duration / 900), failedUnits,
+      recognition: audioUsage(duration, parts.reduce((sum, part) => sum + part.result.billedDuration, 0), Date.now() - startedAt)};
   } finally { await rm(directory, {recursive: true, force: true}); }
 }

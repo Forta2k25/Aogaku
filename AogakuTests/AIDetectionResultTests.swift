@@ -179,4 +179,64 @@ final class AIDetectionResultTests: XCTestCase {
         XCTAssertFalse(view.displayedText.contains("rawText"))
         view.clear(); XCTAssertTrue(view.isHidden); XCTAssertEqual(view.displayedText, "")
     }
+    @MainActor func testRoutedEvidenceMetadataCostPagesAndLegacyCompatibility() throws {
+        let data = Data("""
+        {"status":"ready","pipelineVersion":"pdf-auto-v1","items":[
+          {"chunkId":"000000","unitIndex":0,"text":"原文本文","method":"native_text","locator":{"pageNumber":1}},
+          {"chunkId":"000001","unitIndex":1,"text":"循環の意味","method":"multimodal_ai","locator":{"pageNumber":2}}],
+        "recognition":{"provider":"mixed","model":"qwen/qwen3.8-27b","method":"auto_route","pipelineVersion":"pdf-auto-v1","processingMs":2000,"inputTokens":1000,"outputTokens":100,"totalTokens":1100,"estimatedCostUSD":0.0027,"pricingAsOf":"2026-10-09",
+        "routing":{"routerVersion":"visual-router-v1","counts":{"native_text":1,"vision_ocr":0,"multimodal_ai":1},"ocrUnits":1,"aiCostUSD":0.0012,"ocrCostUSD":0.0015,"pricingAssumption":"standard paid tier","pages":[
+         {"pageNumber":1,"route":"native_text","provider":"pdfjs","model":null,"routingScore":0,"routingReason":["embedded_text_available"],"nativeTextQuality":1,"ocrQuality":0,"visualComplexity":0,"inputTokens":0,"outputTokens":0,"totalTokens":0,"estimatedCostUSD":0,"processingMs":2},
+         {"pageNumber":2,"route":"multimodal_ai","provider":"groq","model":"qwen/qwen3.8-27b","routingScore":0.85,"routingReason":["explicit_relation_marks"],"nativeTextQuality":1,"ocrQuality":1,"visualComplexity":0.85,"inputTokens":1000,"outputTokens":100,"totalTokens":1100,"estimatedCostUSD":0.0027,"processingMs":1998}]}}
+        }
+        """.utf8)
+        let page = try JSONDecoder().decode(AIEvidencePage.self, from: data)
+        XCTAssertNoThrow(try AIImagePipeline.requireEvidence(pipelineVersion: page.pipelineVersion, recognition: page.recognition, chunks: page.items))
+        let result = AIDetectionResult(text: AIDetectionResult.cleanText(page.items, pageHeaders: true), recognition: page.recognition)
+        XCTAssertEqual(result.text, "[p.1]\n原文本文\n[p.2]\n循環の意味")
+        XCTAssertTrue(result.routeSummary?.contains("本文抽出 1ページ / OCR 0 / AI 1") == true)
+        XCTAssertTrue(result.routeDiagnostics?.contains("p.2 AI") == true)
+        XCTAssertTrue(result.costSentence().contains("OCR $0.001500"))
+        let view = AIDetectionResultView(); view.show(result)
+        XCTAssertTrue(view.displayedDetail.contains("Groq / qwen/qwen3.8-27b"))
+        XCTAssertTrue(view.displayedText.contains("[p.2]")); view.clear(); XCTAssertTrue(view.isHidden)
+        var wrong = page.recognition!; wrong.routing!.pages[1].provider = "google_vision"
+        XCTAssertThrowsError(try AIImagePipeline.requireEvidence(pipelineVersion: page.pipelineVersion, recognition: wrong, chunks: page.items))
+        let capability: [String: Any] = ["pipelineVersion":"image-auto-v1", "method":"auto_route", "provider":"groq", "model":"qwen/qwen3.8-27b", "routes":["vision_ocr","multimodal_ai"], "fallback":false]
+        XCTAssertNoThrow(try AIImagePipeline.requireCapability(["inputCapabilities":["image":capability]]))
+    }
+    @MainActor func testFreshDevRouterEvidenceUsesActualMixedRoutes() throws {
+        guard let url = Bundle(for: Self.self).url(forResource: "visual-router-dev-results", withExtension: "json") else { throw XCTSkip("Dev Router results are optional and ignored") }
+        let pages = try JSONDecoder().decode([AIEvidencePage].self, from: Data(contentsOf: url))
+        XCTAssertFalse(pages.isEmpty)
+        for page in pages {
+            try AIImagePipeline.requireEvidence(pipelineVersion: page.pipelineVersion, recognition: page.recognition, chunks: page.items)
+            let result = AIDetectionResult(text: AIDetectionResult.cleanText(page.items, pageHeaders: true), recognition: page.recognition)
+            let view = AIDetectionResultView(); view.show(result)
+            XCTAssertFalse(view.displayedText.isEmpty); XCTAssertNotNil(result.routeSummary)
+            XCTAssertTrue(result.costSentence().contains("$"))
+        }
+    }
+
+    @MainActor func testApprovedCoursePDFDevEvidenceRendersAllThirtyPageRoutes() throws {
+        guard let url = Bundle(for: Self.self).url(forResource: "visual-router-reference-dev-results", withExtension: "json") else { throw XCTSkip("Approved course PDF Dev evidence is private and optional") }
+        let results = try JSONDecoder().decode([AIEvidencePage].self, from: Data(contentsOf: url))
+        XCTAssertEqual(results.count, 1)
+        let page = try XCTUnwrap(results.first)
+        XCTAssertEqual(page.pipelineVersion, "pdf-auto-v1")
+        try AIImagePipeline.requireEvidence(pipelineVersion: page.pipelineVersion, recognition: page.recognition, chunks: page.items)
+        let routes = try XCTUnwrap(page.recognition?.routing?.pages)
+        XCTAssertEqual(routes.count, 30)
+        XCTAssertEqual(routes.first(where: { $0.pageNumber == 4 })?.route, "multimodal_ai")
+        XCTAssertEqual(routes.first(where: { $0.pageNumber == 6 })?.route, "native_text")
+        XCTAssertEqual(routes.first(where: { $0.pageNumber == 27 })?.route, "multimodal_ai")
+        XCTAssertEqual(Set(page.items.compactMap { $0.locator.pageNumber }).count, 30)
+        let result = AIDetectionResult(text: AIDetectionResult.cleanText(page.items, pageHeaders: true), recognition: page.recognition)
+        let view = AIDetectionResultView(); view.show(result)
+        XCTAssertTrue(view.displayedText.contains("[p.4]"))
+        XCTAssertTrue(view.displayedText.contains("[p.30]"))
+        XCTAssertNotNil(result.routeSummary)
+        XCTAssertTrue(result.costSentence().contains("$"))
+    }
+
 }

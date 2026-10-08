@@ -20,7 +20,9 @@ class LabSafety(unittest.TestCase):
     def test_lab_isolated_from_production_settings(self):
         # Production AI source is intentionally integrated on this branch. Lab code
         # still cannot access its databases, enqueue jobs, or change environment config.
-        protected = ['functions/package.json', 'functions/package-lock.json', 'Config/Production', 'Aogaku/GoogleService-Info.plist', 'firebase.production.json', 'firestore.rules', 'storage.rules']
+        # The production pipeline now intentionally has its own PDF renderer
+        # dependency. Lab still uses a separate package; operational config stays protected.
+        protected = ['Config/Production', 'Aogaku/GoogleService-Info.plist', 'firebase.production.json', 'firestore.rules', 'storage.rules']
         self.assertEqual(subprocess.check_output(['git', 'diff', '--name-only', 'HEAD', '--', *protected], cwd=ROOT, text=True), '')
         code = '\n'.join(p.read_text() for p in (ROOT / 'recognition-lab/functions/src').glob('*.ts'))
         for forbidden in ['firebase-admin', 'getFirestore(', 'getStorage(', 'getFunctions(', 'aiCreateSource', 'enqueue(']: self.assertNotIn(forbidden, code)

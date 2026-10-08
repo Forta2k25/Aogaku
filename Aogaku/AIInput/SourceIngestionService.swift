@@ -235,10 +235,10 @@ final class SourceIngestionService {
         } while cursor != nil
         let latest = try decode(await call("aiGetSource", data: ["sourceId": sourceId], uid: uid))
         guard latest.activeVersion == baseline.activeVersion else { throw AIInputError.message("資料が更新されました。再読み込みします") }
-        if latest.sourceType == "image" {
+        if latest.sourceType == "image" || latest.pipelineVersion == "pdf-auto-v1" {
             try AIImagePipeline.requireEvidence(pipelineVersion: page?.pipelineVersion ?? latest.pipelineVersion, recognition: page?.recognition ?? latest.recognition, chunks: chunks)
         }
-        return AIDetectionResult(text: AIDetectionResult.cleanText(chunks), recognition: page?.recognition ?? latest.recognition,
+        return AIDetectionResult(text: AIDetectionResult.cleanText(chunks, pageHeaders: latest.pipelineVersion == "pdf-auto-v1"), recognition: page?.recognition ?? latest.recognition,
             processingMs: page?.processingMs, method: page?.status == "partial_ready" && latest.sourceType == "audio" ? "partial_audio" : chunks.first?.method, pipelineVersion: page?.pipelineVersion ?? latest.pipelineVersion)
     }
     func retrieveContext(uid: String, courseOfferingId: String, lectureIds: [String], query: String, purpose: String = "question", after: String? = nil) async throws -> [String: Any] {

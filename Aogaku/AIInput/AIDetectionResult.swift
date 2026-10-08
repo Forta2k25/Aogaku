@@ -8,6 +8,14 @@ enum AIImagePipeline {
     static let unavailableMessage = "接続先はQwen画像AIに未対応です。画像は送信していません。Dev確認はAogaku-Dev Schemeを使用してください。本番はバックエンド更新が必要です。"
     static func requireCapability(_ response: [String: Any]) throws {
         let image = (response["inputCapabilities"] as? [String: Any])?["image"] as? [String: Any]
+        if image?["pipelineVersion"] as? String == "image-auto-v1" {
+            guard image?["method"] as? String == "auto_route", image?["fallback"] as? Bool == false,
+                  image?["provider"] as? String == provider, image?["model"] as? String == model,
+                  Set(image?["routes"] as? [String] ?? []) == Set(["vision_ocr", "multimodal_ai"]) else {
+                throw AIInputError.message("接続先の画像Router仕様が一致しません")
+            }
+            return
+        }
         guard image?["pipelineVersion"] as? String == version,
               image?["provider"] as? String == provider, image?["model"] as? String == model,
               image?["method"] as? String == method, image?["fallback"] as? Bool == false else {
@@ -15,6 +23,21 @@ enum AIImagePipeline {
         }
     }
     static func requireEvidence(pipelineVersion: String?, recognition: AIRecognitionMetadata?, chunks: [AIEvidenceChunk]) throws {
+        if pipelineVersion == "image-auto-v1" || pipelineVersion == "pdf-auto-v1" {
+            guard let r = recognition, r.pipelineVersion == pipelineVersion, r.method == "auto_route",
+                  let routing = r.routing, !routing.pages.isEmpty, !chunks.isEmpty else {
+                throw AIInputError.message("資料Routerの処理情報を取得できませんでした")
+            }
+            for chunk in chunks {
+                guard let page = routing.pages.first(where: { p in
+                    pipelineVersion == "pdf-auto-v1" ? p.pageNumber == chunk.locator.pageNumber : p.imageIndex == chunk.locator.imageIndex
+                }), page.route == chunk.method, ["native_text", "vision_ocr", "multimodal_ai"].contains(page.route),
+                  page.route != "multimodal_ai" || (page.provider == provider && page.model == model) else {
+                    throw AIInputError.message("資料RouterのEvidenceと処理方式が一致しません")
+                }
+            }
+            return
+        }
         guard pipelineVersion == version else { return } // Stored legacy OCR remains readable.
         guard let r = recognition, r.provider == provider, r.model == model, r.method == method,
               r.pipelineVersion == version, !chunks.isEmpty, chunks.allSatisfy({ $0.method == method }) else {
@@ -22,7 +45,7 @@ enum AIImagePipeline {
         }
     }
     static func requireReceipt(_ source: AIRemoteSource) throws {
-        guard source.sourceType == "image", source.pipelineVersion == version else {
+        guard source.sourceType == "image", [version, "image-auto-v1"].contains(source.pipelineVersion ?? "") else {
             throw AIInputError.message(unavailableMessage)
         }
     }
@@ -42,6 +65,33 @@ struct AIRecognitionMetadata: Codable, Equatable {
     var estimatedCostUSD: Double?
     var pricingAsOf: String?
     var pricingVersion: String?
+    var routing: AIVisualRouting? = nil
+}
+struct AIVisualRouting: Codable, Equatable {
+    var routerVersion: String
+    var pages: [Page]
+    var counts: [String: Int]
+    var ocrUnits: Int
+    var aiCostUSD: Double?
+    var ocrCostUSD: Double
+    var pricingAssumption: String
+    struct Page: Codable, Equatable {
+        var pageNumber: Int?
+        var imageIndex: Int?
+        var route: String
+        var provider: String
+        var model: String?
+        var routingScore: Double
+        var routingReason: [String]
+        var nativeTextQuality: Double
+        var ocrQuality: Double
+        var visualComplexity: Double
+        var inputTokens: Int?
+        var outputTokens: Int?
+        var totalTokens: Int?
+        var estimatedCostUSD: Double?
+        var processingMs: Double
+    }
 }
 struct AIEvidenceChunk: Decodable {
     var chunkId: String
@@ -71,11 +121,12 @@ struct AIDetectionResult {
     var method: String?
     var pipelineVersion: String?
     // Reconstruct from the actual active-run chunks; no second copy of the text is stored.
-    static func cleanText(_ chunks: [AIEvidenceChunk]) -> String {
+    static func cleanText(_ chunks: [AIEvidenceChunk], pageHeaders: Bool = false) -> String {
         var result = "", previousKey: String?, previousEnd: Int?, unitText = ""
         for chunk in chunks.sorted(by: { $0.chunkId < $1.chunkId }) {
             if chunk.unitKey != previousKey {
                 if !result.isEmpty { result += "\n" }
+                if pageHeaders, let page = chunk.locator.pageNumber { result += "[p.\(page)]\n" }
                 result += chunk.text; unitText = chunk.text; previousKey = chunk.unitKey; previousEnd = chunk.locator.endChar
                 continue
             }
@@ -117,11 +168,33 @@ struct AIDetectionResult {
         } ?? ""
         let duration = r.audioDurationSeconds.map { "\(Int($0 / 60))分\(Int($0.truncatingRemainder(dividingBy: 60)))秒の音声処理で" } ?? ""
         let partial = method == "partial_audio" ? "（処理できた部分のみ）" : ""
-        return "Cost: \(duration)推定処理コストは \(usd)\(yen)です。\(partial)"
+        let breakdown = r.routing.map { route in
+            let ai = route.aiCostUSD.map { String(format: "$%.6f", $0) } ?? "不明"
+            return String(format: "\nAI %@ + OCR $%.6f（判定probeを含む・標準有料単価）", ai, route.ocrCostUSD)
+        } ?? ""
+        return "Cost: \(duration)推定処理コストは \(usd)\(yen)です。\(partial)\(breakdown)"
+    }
+    var routeSummary: String? {
+        guard let routing = recognition?.routing else { return nil }
+        return "処理: 本文抽出 \(routing.counts["native_text"] ?? 0)ページ / OCR \(routing.counts["vision_ocr"] ?? 0) / AI \(routing.counts["multimodal_ai"] ?? 0)\nOCR判定・処理: \(routing.ocrUnits)回"
+    }
+    var routeDiagnostics: String? {
+        guard let routing = recognition?.routing else { return nil }
+        return routing.pages.map { page in
+            let label = ["native_text": "本文抽出", "vision_ocr": "OCR", "multimodal_ai": "AI"][page.route] ?? page.route
+            return "\(page.pageNumber.map { "p.\($0)" } ?? "画像") \(label) ・ score \(String(format: "%.2f", page.routingScore))\n理由: \(page.routingReason.joined(separator: ", "))"
+        }.joined(separator: "\n\n")
     }
     var detail: String {
         let model: String
-        if let recognition { model = recognition.provider == "groq" ? "Groq / " + recognition.model : recognition.model }
+        if let recognition {
+            switch recognition.provider {
+            case "groq", "mixed": model = "Groq / " + recognition.model
+            case "google_vision": model = "Google Vision OCR / " + recognition.model
+            case "pdfjs": model = "PDF本文抽出"
+            default: model = recognition.model
+            }
+        }
         else if method == "vision_ocr" { model = "Google Vision OCR（保存済み結果）" }
         else if method == "multimodal_ai" || method == "vision_llm" { model = "画像AI（モデル情報未取得）" }
         else { model = method == "pdf_text" ? "PDF本文抽出" : "保存済み資料" }

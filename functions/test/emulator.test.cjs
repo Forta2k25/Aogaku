@@ -6,9 +6,16 @@ process.env.AI_SHARING_ENABLED='true';
 const deletedUsers=new Set();
 let originalGetUser, originalDeleteTask;
 let recognitionStatus=200, imageRequests=0, audioRequests=0;
+let originalVisionOCR;
 let app,db,legacyDb,api,taskPrototype,originalEnqueue,originalFetch,credential,originalToken;
 before(()=>{
   if(!enabled)return;
+  const vision=require('@google-cloud/vision').ImageAnnotatorClient.prototype;
+  originalVisionOCR=vision.documentTextDetection;
+  vision.documentTextDetection=async()=>{
+    const p=require('../../scripts/visual_router_fixtures.cjs').image('plain').probe;
+    return [{fullTextAnnotation:{text:p.text,pages:[{width:800,height:1000,blocks:[{boundingBox:{vertices:[{x:50,y:50},{x:760,y:50},{x:760,y:700},{x:50,y:700}]},paragraphs:[{words:p.words.map(b=>({confidence:.98,boundingBox:{vertices:[{x:b.x*800,y:b.y*1000},{x:(b.x+b.w)*800,y:b.y*1000},{x:(b.x+b.w)*800,y:(b.y+b.h)*1000},{x:b.x*800,y:(b.y+b.h)*1000}]},symbols:[{text:'x'}]}))}]}]}]}}];
+  };
   credential=admin.credential.applicationDefault();originalToken=credential.getAccessToken;
   credential.getAccessToken=async()=>({access_token:'emulator-only',expires_in:3600});
   app=admin.initializeApp({projectId:'demo-aogaku-input',storageBucket:'demo-aogaku-input.appspot.com',credential});
@@ -40,7 +47,7 @@ before(()=>{
   originalDeleteTask=taskPrototype.delete;taskPrototype.delete=async()=>{};
   originalEnqueue=taskPrototype.enqueue; taskPrototype.enqueue=async()=>{};
 });
-after(async()=>{if(app)admin.auth().getUser=originalGetUser;if(taskPrototype)taskPrototype.delete=originalDeleteTask;if(taskPrototype)taskPrototype.enqueue=originalEnqueue;if(originalFetch)global.fetch=originalFetch;if(credential)credential.getAccessToken=originalToken;if(app)await app.delete()});
+after(async()=>{if(originalVisionOCR)require('@google-cloud/vision').ImageAnnotatorClient.prototype.documentTextDetection=originalVisionOCR;if(app)admin.auth().getUser=originalGetUser;if(taskPrototype)taskPrototype.delete=originalDeleteTask;if(taskPrototype)taskPrototype.enqueue=originalEnqueue;if(originalFetch)global.fetch=originalFetch;if(credential)credential.getAccessToken=originalToken;if(app)await app.delete()});
 const call=(name,uid,data)=>api[name].run({auth:uid?{uid,token:{}}:undefined,data});
 async function seed(id,owner,visibility='private',course='course-a') {
   const source={sourceId:id,sourceVersion:1,ownerUserId:owner,courseOfferingId:course,lectureId:'lecture-a',dayID:20730,
@@ -306,4 +313,28 @@ test('recognition: existing daily count/bytes/weekly audio limits stay effective
  await assert.rejects(call('aiCreateSource','det-seconds-limit',{...makeRequest('audio-limit'),type:'audio',mime:'audio/mp4',text:undefined,size:10,durationSeconds:1}),e=>e.message==='QUOTA_EXCEEDED');
  await api.beginAIAccountDeletion('det-retry-owner');
  assert.equal((await db.collection('aiUsage/det-retry-owner/periods').get()).size,0);await assert.rejects(call('aiListSources','det-retry-owner',{context:{}}),e=>e.message==='ACCOUNT_DELETED');assert.equal((await db.collection('aiUsage/det-retry-owner/periods').get()).size,0);
+});
+
+// New source contract and routed worker are exercised against real local DB/Storage.
+test('visual router: new receipts, native/OCR/AI evidence, retry and deletion boundaries',{skip:!enabled},async()=>{
+ const fixture=require('../../scripts/visual_router_fixtures.cjs');
+ const file=admin.storage().bucket().file('unused'),proto=Object.getPrototypeOf(file),signed=proto.getSignedUrl;
+ proto.getSignedUrl=async()=>['http://localhost/synthetic-only'];
+ try{
+  for(const type of ['image','pdf']){const bytes=type==='image'?fixture.image('plain').bytes:fixture.pdf(['text']);const req={...makeRequest('router-receipt-'+type),type,mime:type==='image'?'image/png':'application/pdf',size:bytes.length,text:undefined};
+   const source=await call('aiCreateSource','router-receipt-owner',req);assert.equal(source.pipelineVersion,type+'-auto-v1');assert.equal((await db.doc('aiSources/'+source.sourceId).get()).get('schemaVersion'),5);assert.equal((await call('aiCreateSource','router-receipt-owner',req)).sourceId,source.sourceId);
+  }
+ }finally{proto.getSignedUrl=signed;}
+ for(const [id,type,bytes,routes]of [
+  ['router-ocr','image',fixture.image('plain').bytes,['vision_ocr']],
+  ['router-diagram','image',fixture.image('arrows').bytes,['multimodal_ai']],
+  ['router-mixed','pdf',fixture.pdf(['text','scanned','diagram']),['native_text','vision_ocr','multimodal_ai']]]){
+  await recognitionSource(id,'router-owner',type,bytes,type==='image'?'image/png':'application/pdf');await db.doc('aiSources/'+id).update({pipelineVersion:type+'-auto-v1',schemaVersion:5});
+  await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});const source=await call('aiGetSource','router-owner',{sourceId:id});assert.equal(source.status,'ready');assert.deepEqual(source.recognition.routing.pages.map(x=>x.route),routes);
+  const all=[];let after;do{const page=await call('aiGetEvidence','router-owner',{sourceId:id,...(after?{after}:{})});all.push(...page.items);after=page.nextCursor;}while(after);assert.deepEqual([...new Set(all.map(x=>x.method))],routes);if(type==='pdf')assert.deepEqual([...new Set(all.map(x=>x.locator.pageNumber))],[1,2,3]);
+  assert.equal((await legacyDb.doc('aiSources/'+id).get()).exists,false);assert((await call('aiRetrieveContext','router-owner',{courseOfferingId:'course-a',purpose:'lecture_summary'})).items.some(x=>x.sourceId===id));const old=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});assert.equal(imageRequests,old);
+ }
+ await recognitionSource('router-retry','router-retry-owner','image',fixture.image('arrows').bytes,'image/png');await db.doc('aiSources/router-retry').update({pipelineVersion:'image-auto-v1'});recognitionStatus=503;
+ try{await assert.rejects(api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'router-retry'}}),e=>e.retryable);const s=(await db.doc('aiSources/router-retry').get()).data();assert.equal(s.status,'queued');assert.equal(s.activeRun,null);assert.equal(s.pipelineVersion,'image-auto-v1');assert.equal(s.recognition,undefined);}finally{recognitionStatus=200;}
+ await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'router-retry'}});assert.equal((await call('aiGetSource','router-retry-owner',{sourceId:'router-retry'})).status,'ready');await api.beginAIAccountDeletion('router-retry-owner');assert.equal((await db.collection('aiSources/router-retry/runs').get()).size,0);assert.equal((await db.collection('aiUsage/router-retry-owner/periods').get()).size,0);await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'router-retry'}});assert.equal((await db.doc('aiSources/router-retry').get()).get('status'),'deleted');
 });

@@ -17,6 +17,8 @@ import {AI_COLLECTIONS as collections} from "./schema";
 import {admissionAllowed, INPUT_QUOTAS} from "./admission";
 import {RecognitionError} from "./recognition";
 import {IMAGE_PIPELINE} from "./pricing";
+import {AUTO_CAPABILITIES} from "./visualRouter";
+import {extractAutoImage, extractAutoPDF} from "./visualExtraction";
 import {aiDatabase as db, defaultDatabase, aiDatabaseId, accountDeletionFence, rawPrefix, derivedPrefix} from "./databases";
 
 const region = "asia-northeast1";
@@ -246,7 +248,7 @@ export const aiCreateSource = callable(async (uid, data) => {
     const bytes = daily.get("bytes") || 0, count = daily.get("count") || 0, seconds = weekly.get("seconds") || 0;
     const reservation = input.durationSeconds || 0;
     if (count >= INPUT_QUOTAS.dailyCount || bytes + input.size > INPUT_QUOTAS.dailyBytes || seconds + reservation > INPUT_QUOTAS.weeklyAudioSeconds) throw new InputError("QUOTA_EXCEEDED");
-    const source = {sourceId, sourceVersion: 1, schemaVersion: 4, pipelineVersion: input.type === "image" ? "image-ai-v2" : input.type === "audio" ? "audio-groq-v2" : PIPELINE,
+    const source = {sourceId, sourceVersion: 1, schemaVersion: 5, pipelineVersion: input.type === "image" ? "image-auto-v1" : input.type === "pdf" ? "pdf-auto-v1" : input.type === "audio" ? "audio-groq-v2" : PIPELINE,
       fingerprint, ownerUserId: uid, courseOfferingId, lectureId, dayID: c.dayID, courseSnapshot: snapshot,
       occurrenceKey: c.occurrenceKey,
       sourceType: input.type, title: input.title, mime: input.mime, declaredSize: input.size,
@@ -297,7 +299,7 @@ export const aiListSources = callable(async (uid, data) => {
   const [snap, member] = await Promise.all([query.get(), verified(uid, course)]);
   const page = snap.docs.slice(0, 100);
   return {items: page.map(d => d.data()).filter(s => canRead(s, uid, member) && (!lecture || s.lectureId === lecture)).map(publicSource),
-    inputCapabilities: {image: IMAGE_PIPELINE},
+    inputCapabilities: AUTO_CAPABILITIES,
     courseOfferingId: course, lectureId: resolved?.lectureId || null, nextCursor: snap.size > 100 ? page.at(-1)!.id : null};
 });
 export const aiGetEvidence = callable(async (uid, data) => {
@@ -481,8 +483,10 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
       if (bytes.length !== source.declaredSize) throw new InputError("UPLOAD_MISMATCH");
       const pdfMagic = bytes.subarray(0, 5).toString() === "%PDF-";
       if (source.sourceType === "pdf" && !pdfMagic) throw new InputError("INVALID_PDF");
-      if (source.sourceType === "image") extraction = await extractImage(path, source.mime, await groqSecret(), cp);
-      else if (source.sourceType === "pdf") extraction = await extractPDF(path, `gs://${bucket().name}/${source.storagePath}`, cp);
+      if (source.sourceType === "image") extraction = source.pipelineVersion === "image-auto-v1" ?
+        await extractAutoImage(path, await groqSecret(), cp) : await extractImage(path, source.mime, await groqSecret(), cp);
+      else if (source.sourceType === "pdf") extraction = source.pipelineVersion === "pdf-auto-v1" ?
+        await extractAutoPDF(path, await groqSecret(), cp) : await extractPDF(path, `gs://${bucket().name}/${source.storagePath}`, cp);
       else {
         const duration = await audioDuration(path);
         if (duration > source.declaredDuration + 1) throw new InputError("DURATION_MISMATCH");
@@ -516,7 +520,7 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
     await db().runTransaction(async tx => {
       const s = (await tx.get(ref)).data();
       if (s && mayPublish(s, token)) tx.update(ref, {status: error.retryable && s.attempts < 4 ? "queued" : "failed", leaseToken: null, leaseUntil: 0,
-        error: {code: error.code, retryable: error.retryable}, ...(error instanceof RecognitionError && error.recognition ? {recognition: error.recognition} : {}), updatedAt: now()});
+        error: {code: error.code, retryable: error.retryable}, ...(error instanceof RecognitionError && error.recognition && !["image-auto-v1", "pdf-auto-v1"].includes(source.pipelineVersion) ? {recognition: error.recognition} : {}), updatedAt: now()});
     });
     if (error.retryable) throw error;
   } finally {

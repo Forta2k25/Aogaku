@@ -1,7 +1,10 @@
+import type {RoutingSummary} from "./visualRouter";
 // Provider rates are snapshots, never client-side token estimates.
 export const RECOGNITION_PRICING = {
   image: {provider: "groq", model: "qwen/qwen3.8-27b", pricingUnit: "million_tokens", inputPricePerMillionTokens: 0.80, outputPricePerMillionTokens: 4.00},
   audio: {provider: "groq", model: "whisper-large-v3-turbo", pricingUnit: "audio_hour", audioPricePerHour: 0.04, minimumBillingSeconds: 10},
+  ocr: {provider: "google_vision", model: "DOCUMENT_TEXT_DETECTION", pricePerThousand: 1.50,
+    freeUnitsPerMonth: 1000, highVolumePricePerThousand: .60, highVolumeStartsAt: 5_000_001, pricingAsOf: "2026-10-09"},
   currency: "USD", pricingAsOf: "2026-10-08", pricingVersion: "groq-2026-10-08-v1"
 } as const;
 export interface RecognitionMetadata {
@@ -9,6 +12,7 @@ export interface RecognitionMetadata {
   inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
   audioDurationSeconds: number | null; billedAudioSeconds: number | null;
   estimatedCostUSD: number | null; pricingAsOf: string; pricingVersion: string;
+  routing?: RoutingSummary;
 }
 function token(v: unknown): number | null { return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null; }
 export function imageUsage(usage: any, model: string, processingMs: number): RecognitionMetadata {

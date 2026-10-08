@@ -30,3 +30,10 @@ functions/.env.forta-aogaku
 
 # Recovered historical Functions are compiled for regression only.
 functions/lib-recovered/
+
+# Recognition Lab: isolated Dev runtime and private operator configuration.
+recognition-lab/functions/node_modules/
+recognition-lab/functions/lib/
+recognition-lab/functions/.env*
+recognition-lab/functions/.secret.local
+Config/recognition-lab.local.json

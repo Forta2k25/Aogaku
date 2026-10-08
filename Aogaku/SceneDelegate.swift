@@ -19,6 +19,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let ws = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: ws)
+        #if DEBUG
+        if RecognitionLabAccess.dedicatedLaunch && RecognitionLabAccess.available {
+            window.rootViewController = UINavigationController(rootViewController: RecognitionLabViewController())
+            window.makeKeyAndVisible(); self.window = window; return
+        }
+        #endif
         if AppBackend.isOffline || AppBackend.configurationError != nil {
             window.rootViewController = UINavigationController(rootViewController: AIInputPreviewViewController())
             window.makeKeyAndVisible(); self.window = window; return

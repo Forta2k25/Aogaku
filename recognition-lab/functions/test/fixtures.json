@@ -1,0 +1,7 @@
+[
+ {"id":"slide","expectedChecks":["heading","printedText"],"ocrFailureMode":"reading order baseline"},
+ {"id":"handwriting","expectedChecks":["handwrittenNotes","uncertainty"],"ocrFailureMode":"side-note omitted or merged with print"},
+ {"id":"arrow","expectedChecks":["parent-to-child","arrow label inheritance"],"ocrFailureMode":"親 子 遺伝 text loses relationship"},
+ {"id":"enclosure","expectedChecks":["grouping","label-to-enclosure"],"ocrFailureMode":"group boundary lost"},
+ {"id":"diagram","expectedChecks":["diagram-to-text","relationship","no invented causality"],"ocrFailureMode":"layout-based sentence ordering lost"}
+]

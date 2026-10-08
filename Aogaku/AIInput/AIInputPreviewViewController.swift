@@ -13,11 +13,11 @@ final class AIInputPreviewViewController: UITableViewController {
         label.text = AppBackend.configurationError ?? "Firebase・広告・外部APIを起動しません。\n追加した資料はこの確認用アプリの端末内だけに保存します。"
         label.frame.size.height = 90; tableView.tableHeaderView = label
     }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { AppBackend.configurationError == nil ? 3 : 0 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { AppBackend.configurationError == nil ? 4 : 0 }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        let titles = ["AI入力画面を開く", "資料一覧・状態サンプル", "写真・PDFの確認用サンプルを作成"]
-        let details = ["授業のAIタブ → 第N回 → ＋メニュー", "未送信・解析中・部分成功・失敗・共有の表示確認", "ローカル生成した資料をFilesで選べます"]
+        let titles = ["AI入力画面を開く", "資料一覧・状態サンプル", "写真・PDFの確認用サンプルを作成", "Recognition Lab"]
+        let details = ["授業のAIタブ → 第N回 → ＋メニュー", "未送信・解析中・部分成功・失敗・共有の表示確認", "ローカル生成した資料をFilesで選べます", "画像OCR / AI・Apple / Groqを比較（開発専用）"]
         cell.textLabel?.text = titles[indexPath.row]; cell.detailTextLabel?.text = details[indexPath.row]
         cell.accessoryType = .disclosureIndicator; cell.accessibilityIdentifier = "ai-preview-\(indexPath.row)"; return cell
     }
@@ -35,6 +35,9 @@ final class AIInputPreviewViewController: UITableViewController {
             case 1:
                 try seedStatuses()
                 present(UINavigationController(rootViewController: SourceLibraryViewController(context: context, allDays: true)), animated: true)
+            case 3:
+                guard RecognitionLabAccess.available else { return }
+                navigationController?.pushViewController(RecognitionLabViewController(), animated: true)
             default:
                 let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("AIInputSamples")
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

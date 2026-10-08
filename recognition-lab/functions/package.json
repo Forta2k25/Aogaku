@@ -1,0 +1,9 @@
+{
+  "name": "aogaku-recognition-lab",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {"node": "22"},
+  "scripts": {"build": "tsc", "test": "npm run build && node --test test/*.test.cjs"},
+  "dependencies": {"@google-cloud/vision": "^6.1.1", "firebase-functions": "^6.4.0", "ffprobe-static": "^3.1.0"},
+  "devDependencies": {"@types/node": "^24.5.2", "typescript": "^5.9.2"}
+}

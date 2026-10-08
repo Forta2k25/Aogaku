@@ -55,6 +55,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>授業の音声を録音するためにマイクを使用します。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>開発専用Recognition Labで録音ファイルをApple Speechにより文字起こしし、認識方式を比較します。</string>
 	<key>NSCameraUsageDescription</key>
 	<string>QRコードの読み取りと、授業資料の撮影のためにカメラを使用します。</string>
 	<key>UIFileSharingEnabled</key>

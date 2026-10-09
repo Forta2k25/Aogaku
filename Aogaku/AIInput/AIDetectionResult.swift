@@ -51,6 +51,38 @@ enum AIImagePipeline {
     }
 }
 
+struct AIVisualLatency: Codable, Equatable {
+    var version: String? = nil
+    var uploadMs: Double? = nil
+    var uploadTimingKind: String? = nil
+    var queueWaitMs: Double? = nil
+    var workerStartupMs: Double? = nil
+    var routerMs: Double? = nil
+    var nativeExtractionMs: Double? = nil
+    var ocrProbeMs: Double? = nil
+    var ocrMs: Double? = nil
+    var aiMs: Double? = nil
+    var persistenceMs: Double? = nil
+    var evidenceMs: Double? = nil
+    var totalProcessingMs: Double? = nil
+    var coldStartMs: Double? = nil
+    var nativePageCount: Int? = nil
+    var ocrPageCount: Int? = nil
+    var aiPageCount: Int? = nil
+    var pageCount: Int? = nil
+    var diagnosticText: String {
+        let stages: [(String, Double?)] = [("Worker total", totalProcessingMs), (uploadTimingKind == "client-transfer" ? "Upload" : "Upload window", uploadMs), ("Queue", queueWaitMs), ("Worker startup", workerStartupMs), ("Router", routerMs), ("Native", nativeExtractionMs), ("OCR probe", ocrProbeMs), ("OCR", ocrMs), ("Qwen", aiMs), ("Save", persistenceMs), ("Evidence read", evidenceMs)]
+        var lines = stages.compactMap { label, ms in ms.map { String(format: "%@: %.2f s", label, $0 / 1000) } }
+        lines.append("Cold start: platform measurement unavailable")
+        if let pageCount { lines.append("Pages: \(pageCount) / Native \(nativePageCount ?? 0) / OCR \(ocrPageCount ?? 0) / AI \(aiPageCount ?? 0)") }
+        return lines.joined(separator: "\n")
+    }
+}
+struct AIPreviewProgress: Codable, Equatable {
+    var completed: Int; var total: Int; var native: Int; var ocr: Int; var ai: Int
+    var caption: String { "解析中 \(completed) / \(total)ページ（途中結果・検索対象外）\n本文 \(native) / OCR \(ocr) / AI \(ai)ページ完了" }
+}
+
 struct AIRecognitionMetadata: Codable, Equatable {
     var provider: String
     var model: String
@@ -66,6 +98,7 @@ struct AIRecognitionMetadata: Codable, Equatable {
     var pricingAsOf: String?
     var pricingVersion: String?
     var routing: AIVisualRouting? = nil
+    var latency: AIVisualLatency? = nil
 }
 struct AIVisualRouting: Codable, Equatable {
     var routerVersion: String
@@ -91,6 +124,8 @@ struct AIVisualRouting: Codable, Equatable {
         var totalTokens: Int?
         var estimatedCostUSD: Double?
         var processingMs: Double
+        var ocrProbeSkipped: Bool? = nil
+        var ocrProbeSkipReason: String? = nil
     }
 }
 struct AIEvidenceChunk: Decodable {
@@ -106,6 +141,10 @@ struct AIEvidenceChunk: Decodable {
     }
 }
 struct AIEvidencePage: Decodable {
+    var preview: Bool? = nil
+    var previewVersion: String? = nil
+    var progress: AIPreviewProgress? = nil
+    var latency: AIVisualLatency? = nil
     var items: [AIEvidenceChunk]
     var status: String
     var nextCursor: String?
@@ -115,6 +154,8 @@ struct AIEvidencePage: Decodable {
     var pipelineVersion: String?
 }
 struct AIDetectionResult {
+    var previewProgress: AIPreviewProgress? = nil
+    var latency: AIVisualLatency? = nil
     var text: String
     var recognition: AIRecognitionMetadata?
     var processingMs: Double?

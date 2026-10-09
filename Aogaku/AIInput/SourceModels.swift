@@ -129,6 +129,10 @@ struct AIRemoteSource: Codable {
     var canonicalSnapshot: AICourseSnapshot? = nil
     var sharingEnabled: Bool? = nil
     var linkingEnabled: Bool? = nil
+    var previewVersion: String? = nil
+    var previewProgress: AIPreviewProgress? = nil
+    var latency: AIVisualLatency? = nil
+    var updatedAt: Double? = nil
 }
 struct AIStoredSource: Codable, Identifiable {
     let id: String

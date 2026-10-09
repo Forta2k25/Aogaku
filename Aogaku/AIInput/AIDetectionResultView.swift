@@ -35,17 +35,18 @@ final class AIDetectionResultView: UIStackView {
         isHidden = false; body.text = text; detail.text = nil; pipeline.text = nil; tokens.text = nil; cost.text = nil; routes.text = nil; diagnostics.text = nil; diagnostics.isHidden = true; metadataButton.isHidden = true; retryButton.isHidden = !retry
     }
     func show(_ result: AIDetectionResult) {
-        isHidden = false; body.text = result.text; detail.text = result.detail; pipeline.text = result.pipelineLabel; tokens.text = result.tokenSentence
+        isHidden = false; body.text = result.text; detail.text = result.previewProgress == nil ? result.detail : "処理中。完了したページの本文を先に表示しています。"; pipeline.text = result.pipelineLabel; tokens.text = result.previewProgress == nil ? result.tokenSentence : "全体のusage / costは解析完了後に表示します。"
         // Optional display-only Remote Config rate; no fixed FX value or server billing conversion.
         let rate = AppBackend.isOffline ? nil : RemoteConfig.remoteConfig()["ai_recognition_usd_jpy"].numberValue.doubleValue
-        cost.text = result.costSentence(usdJPY: rate)
-        if let date = result.recognition?.pricingAsOf { cost.text = (cost.text ?? "") + "\n料金基準: \(date)・請求額ではありません。" }
-        routes.text = result.routeSummary
-        metadataButton.isHidden = result.routeDiagnostics == nil
+        cost.text = result.previewProgress == nil ? result.costSentence(usdJPY: rate) : nil
+        if result.previewProgress == nil, let date = result.recognition?.pricingAsOf { cost.text = (cost.text ?? "") + "\n料金基準: \(date)・請求額ではありません。" }
+        routes.text = result.previewProgress?.caption ?? result.routeSummary
+        let diagnosticText = [result.routeDiagnostics, result.latency?.diagnosticText].compactMap { $0 }.joined(separator: "\n\n")
+        metadataButton.isHidden = diagnosticText.isEmpty
         #if DEBUG
-        diagnostics.text = result.routeDiagnostics; diagnostics.isHidden = result.routeDiagnostics == nil
+        diagnostics.text = diagnosticText; diagnostics.isHidden = diagnosticText.isEmpty
         #else
-        diagnostics.text = result.routeDiagnostics; diagnostics.isHidden = ProcessInfo.processInfo.environment["AOGAKU_ROUTER_DIAGNOSTICS"] != "1" || result.routeDiagnostics == nil
+        diagnostics.text = diagnosticText; diagnostics.isHidden = ProcessInfo.processInfo.environment["AOGAKU_ROUTER_DIAGNOSTICS"] != "1" || diagnosticText.isEmpty
         #endif
         retryButton.isHidden = true
     }

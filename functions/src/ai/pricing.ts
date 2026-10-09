@@ -13,6 +13,7 @@ export interface RecognitionMetadata {
   audioDurationSeconds: number | null; billedAudioSeconds: number | null;
   estimatedCostUSD: number | null; pricingAsOf: string; pricingVersion: string;
   routing?: RoutingSummary;
+  latency?: import("./latency").VisualLatency;
 }
 function token(v: unknown): number | null { return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null; }
 export function imageUsage(usage: any, model: string, processingMs: number): RecognitionMetadata {

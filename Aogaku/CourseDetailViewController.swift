@@ -257,6 +257,7 @@ final class CourseDetailViewController: UIViewController {
         let localID = selected.id
         detectionTask = Task { [weak self] in
             let deadline = Date().addingTimeInterval(360)
+            var poll = 0, previewCount = 0
             while !Task.isCancelled && Date() < deadline {
                 guard let self, self.detectionSourceID == localID, AppBackend.currentUID == uid,
                       let store = try? SourceIngestionService.shared.store(uid: uid),
@@ -273,7 +274,24 @@ final class CourseDetailViewController: UIViewController {
                         return
                     }
                     await SourceIngestionService.shared.refreshSource(localID: localID, uid: uid)
-                    try await Task.sleep(nanoseconds: 3_000_000_000)
+                    let refreshed = try SourceIngestionService.shared.store(uid: uid).ledger.sources.first { $0.id == localID }?.remote
+                    // A ready refresh must be consumed immediately, not after another fixed sleep.
+                    if let refreshed, ["ready", "partial_ready"].contains(refreshed.status) { continue }
+                    if let refreshed, refreshed.pipelineVersion == "pdf-auto-v1", let progress = refreshed.previewProgress,
+                       progress.completed > previewCount, refreshed.previewVersion != nil {
+                        do {
+                            let result = try await SourceIngestionService.shared.detectionResult(sourceId: refreshed.sourceId, uid: uid, preview: true)
+                            try Task.checkCancellation()
+                            guard self.detectionSourceID == localID, AppBackend.currentUID == uid else { return }
+                            self.detectionView.show(result); previewCount = progress.completed
+                        } catch {
+                            if Task.isCancelled { return }
+                            // Preview is optional. A concurrent final publication is read next poll.
+                        }
+                    }
+                    poll += 1
+                    let interval: UInt64 = poll < 10 ? 1_000_000_000 : poll < 30 ? 2_000_000_000 : 3_000_000_000
+                    try await Task.sleep(nanoseconds: interval)
                 } catch {
                     if Task.isCancelled { return }
                     self.detectionView.showState("本文を読み込めませんでした。再試行してください。", retry: true); return

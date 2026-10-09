@@ -25,9 +25,8 @@ test('Archived approvals never authorize changed image routing modules; fresh re
  let packageDir=p.PACKAGE;
  if(routed){const next=require('./production_visual_router_review.cjs');next.contract();assert.throws(()=>p.verifyContract());packageDir=path.join(next.DIR,'package');}
  const files=p.inventory(packageDir),changed=[];for(const [file,expected]of Object.entries(files)){if(!file.startsWith('lib/ai/'))continue;const actual=require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(__dirname,'../functions',file))).digest('hex');if(actual!==expected)changed.push(file);}
- // This image-only candidate is deliberately not approved by the completed
- // ten-Function rollout artifact. Prove exactly its two modules differ; do not
- // overwrite that artifact or treat it as authorization for a new PATCH.
- if(changed.length){assert.deepEqual(changed.sort(),['lib/ai/visualExtraction.js','lib/ai/visualRouter.js']);assert.throws(()=>assert.deepEqual(p.inventory(path.join(__dirname,'../functions/lib/ai')),Object.fromEntries(Object.entries(files).filter(([f])=>f.startsWith('lib/ai/')).map(([f,h])=>[f.slice(7),h]))));}
+ // Later additive latency/preview work also changes the entrypoint module.
+ // The archived rollout is immutable and cannot approve either candidate.
+ if(changed.length){assert(changed.includes('lib/ai/visualExtraction.js'));assert(changed.every(f=>['lib/ai/visualExtraction.js','lib/ai/visualRouter.js','lib/ai/index.js'].includes(f)));const oldGuard=require('./production_image_router_review.cjs');if(changed.includes('lib/ai/index.js'))assert.throws(()=>oldGuard.assertModuleDelta(Object.fromEntries(Object.keys(files).map(k=>[k,'same'])),Object.fromEntries(Object.keys(files).map(k=>[k,changed.includes(k)?'changed':'same']))));assert.throws(()=>assert.deepEqual(p.inventory(path.join(__dirname,'../functions/lib/ai')),Object.fromEntries(Object.entries(files).filter(([f])=>f.startsWith('lib/ai/')).map(([f,h])=>[f.slice(7),h]))));}
  else assert.deepEqual(changed,[]);
 });

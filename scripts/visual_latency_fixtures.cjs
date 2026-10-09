@@ -1,0 +1,11 @@
+// Synthetic binaries are generated only under ignored build/, never source assets.
+const fs=require('node:fs'),path=require('node:path'),old=require('./visual_router_fixtures.cjs'),images=require('./image_router_fixtures.cjs');
+const {PDFDocument,createCanvas}=require('../functions/node_modules/@napi-rs/canvas');
+function pdf(types){const doc=new PDFDocument({title:'Synthetic latency benchmark'});for(const [i,type]of types.entries()){const ctx=doc.beginPage(800,1000);if(type==='text'){ctx.fillStyle='white';ctx.fillRect(0,0,800,1000);ctx.fillStyle='black';ctx.font='22px Arial';for(let row=0;row<8;row++)ctx.fillText(`Page ${i+1}: Synthetic scientific lecture line ${row+1}.`,60,100+row*45);}else if(type==='scanned'){ctx.drawImage(old.image('scanned').canvas,0,0,800,1000);}else old.draw(ctx,type);doc.endPage();}return doc.close();}
+function generate(dir){const all=images.generate(dir),keys=['plain','paragraph','two-label-arrow','short-arrow-flow','nodes','chart','photo-text','table'];const result=keys.map(key=>({...all.find(x=>x.key===key),type:'image'}));
+ const mixed=Array.from({length:30},(_,i)=>[4,15,27].includes(i+1)?'diagram':i===5?'scanned':'text');
+ for(const [key,types]of [['pdf-text-10',Array(10).fill('text')],['pdf-mixed-30',mixed],['pdf-text-50',Array(50).fill('text')],['pdf-scanned',['scanned','scanned','scanned']],['pdf-diagram',['diagram','diagram','diagram']]]){const file=key+'.pdf';fs.writeFileSync(path.join(dir,file),pdf(types));result.push({key,file,type:'pdf',expected:types.map(t=>t==='text'?'native_text':t==='scanned'?'vision_ocr':'multimodal_ai')});}
+ return result;
+}
+function resizeFixture(dir){fs.mkdirSync(dir,{recursive:true});const canvas=createCanvas(4032,3024),ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,4032,3024);ctx.fillStyle='black';ctx.font='74px Arial';ctx.fillText('Synthetic Observation',200,360);ctx.fillText('Synthetic Question',2300,360);ctx.lineWidth=12;ctx.beginPath();ctx.moveTo(1200,330);ctx.lineTo(2100,330);ctx.lineTo(2050,285);ctx.moveTo(2100,330);ctx.lineTo(2050,375);ctx.stroke();ctx.font='30px Arial';ctx.fillText('Visible fine text: sample 72A, unit 19, experimental value 3.14.',250,820);const file=path.join(dir,'resize-original.png');fs.writeFileSync(file,canvas.toBuffer('image/png'));return file;}
+module.exports={generate,pdf,resizeFixture};

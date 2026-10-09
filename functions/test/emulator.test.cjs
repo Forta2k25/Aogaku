@@ -362,3 +362,25 @@ test('image connector geometry: real worker -> named chunks -> Evidence -> retri
   for(const xs of [items,stored,retrieved]){assert.equal(joinChunks(xs),expected);assert(xs.every(x=>x.method==='multimodal_ai'));}assert.equal((await legacyDb.doc('aiSources/'+id).get()).exists,false);
  }finally{routerProbe=undefined;}
 });
+
+test('progressive PDF: owner-only preview precedes ready, excluded from Evidence/RAG, final pages intact',{skip:!enabled},async()=>{
+ const fixture=require('../../scripts/visual_router_fixtures.cjs'),uid='progressive-owner',sid='progressive-pdf';
+ await recognitionSource(sid,uid,'pdf',fixture.pdf(['text','diagram','text']),'application/pdf');await db.doc('aiSources/'+sid).update({pipelineVersion:'pdf-auto-v1'});
+ let release;const barrier=new Promise(r=>release=r),fetchBefore=global.fetch;
+ global.fetch=async(u,o)=>{if(String(u)==='https://api.groq.com/openai/v1/chat/completions')await barrier;return fetchBefore(u,o)};
+ const worker=api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:sid}});
+ try{
+  let source;for(let i=0;i<100;i++){source=await call('aiGetSource',uid,{sourceId:sid});if(source.previewProgress?.completed===2)break;await new Promise(r=>setTimeout(r,20));}
+  assert.equal(source.previewProgress.completed,2);assert.equal(source.previewProgress.total,3);assert.equal(source.previewProgress.native,2);assert.equal(source.status,'extracting');
+  const preview=await call('aiGetEvidence',uid,{sourceId:sid,preview:true});assert.equal(preview.preview,true);assert.deepEqual([...new Set(preview.items.map(x=>x.locator.pageNumber))],[1,3]);assert(preview.items.every(x=>x.method==='native_text'));
+  assert.equal((await call('aiGetEvidence',uid,{sourceId:sid})).items.length,0);assert(!(await call('aiRetrieveContext',uid,{courseOfferingId:'course-a',purpose:'lecture_summary',maxCharacters:30000})).items.some(x=>x.sourceId===sid));
+  await assert.rejects(call('aiGetEvidence','progressive-outsider',{sourceId:sid,preview:true}));
+  release();await worker;const ready=await call('aiGetSource',uid,{sourceId:sid});assert.equal(ready.status,'ready');assert.equal(ready.latency.pageCount,3);assert.equal(ready.latency.nativePageCount,2);assert.equal(ready.latency.aiPageCount,1);assert.equal(ready.previewVersion,null);assert.equal((await call('aiGetEvidence',uid,{sourceId:sid,preview:true})).items.length,0);
+  const final=await call('aiGetEvidence',uid,{sourceId:sid});assert.deepEqual([...new Set(final.items.map(x=>x.locator.pageNumber))],[1,2,3]);assert(final.latency.evidenceMs>=0);assert.equal((await legacyDb.doc('aiSources/'+sid).get()).exists,false);
+  await api.beginAIAccountDeletion(uid);assert.equal((await db.collection('aiSources/'+sid+'/runs').get()).size,0);await assert.rejects(call('aiGetEvidence',uid,{sourceId:sid,preview:true}),e=>e.message==='ACCOUNT_DELETED');
+ }finally{release();await worker.catch(()=>{});global.fetch=fetchBefore;}
+});
+test('upload telemetry: optional, validated owner transfer time; old clients remain compatible',{skip:!enabled},async()=>{
+ const bytes=require('../../scripts/visual_router_fixtures.cjs').pdf(['text']),uid='upload-telemetry-owner',source={sourceId:'upload-telemetry-pdf'};await recognitionSource(source.sourceId,uid,'pdf',bytes,'application/pdf');const ref=db.doc('aiSources/'+source.sourceId);await ref.update({status:'awaiting_upload',pipelineVersion:'pdf-auto-v1'});
+ for(const bad of ['100',-1,3600001,null])await assert.rejects(call('aiCompleteSource',uid,{sourceId:source.sourceId,uploadMs:bad}),e=>e.message==='INVALID_UPLOAD_METRIC');assert.equal((await ref.get()).get('status'),'awaiting_upload');await call('aiCompleteSource',uid,{sourceId:source.sourceId,uploadMs:123.5});await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:source.sourceId}});const ready=await call('aiGetSource',uid,{sourceId:source.sourceId});assert.equal(ready.status,'ready');assert.equal(ready.latency.uploadMs,123.5);assert.equal(ready.latency.uploadTimingKind,'client-transfer');assert.equal(ready.recognition.routing.pages[0].route,'native_text');assert.equal(ready.latency.providerCalls,0);
+});

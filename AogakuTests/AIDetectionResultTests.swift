@@ -6,6 +6,45 @@ import FirebaseAuth
 
 final class AIDetectionResultTests: XCTestCase {
     func chunks(_ json: String) throws -> [AIEvidenceChunk] { try JSONDecoder().decode([AIEvidenceChunk].self, from: Data(json.utf8)) }
+    @MainActor
+    func testProgressivePreviewKeepsPageHeadersAndLatencyOptionalForLegacy() throws {
+        let values = try chunks("""
+        [{"chunkId":"0001-000000","text":"最初の本文","method":"native_text","unitIndex":0,"locator":{"pageNumber":1,"startChar":0,"endChar":5}},
+         {"chunkId":"0003-000000","text":"別ページ本文","method":"native_text","unitIndex":2,"locator":{"pageNumber":3,"startChar":0,"endChar":6}}]
+        """)
+        var result = AIDetectionResult(text: AIDetectionResult.cleanText(values, pageHeaders: true), pipelineVersion: "pdf-auto-v1")
+        result.previewProgress = AIPreviewProgress(completed: 2, total: 3, native: 2, ocr: 0, ai: 0)
+        let view = AIDetectionResultView(); view.show(result)
+        XCTAssertTrue(view.displayedText.contains("[p.1]")); XCTAssertTrue(view.displayedText.contains("[p.3]"))
+        XCTAssertTrue(result.previewProgress!.caption.contains("検索対象外"))
+        let latency = try JSONDecoder().decode(AIVisualLatency.self, from: Data("{\"version\":\"visual-latency-v1\",\"totalProcessingMs\":3420,\"queueWaitMs\":510}".utf8))
+        XCTAssertTrue(latency.diagnosticText.contains("3.42")); XCTAssertTrue(latency.diagnosticText.contains("0.51")); XCTAssertNil(latency.coldStartMs)
+        XCTAssertNil(result.latency)
+    }
+
+    @MainActor
+    func testProductionLatencyPreviewAndReadyUseActualEvidence() throws {
+        guard let url = Bundle(for: Self.self).url(forResource: "visual-latency-production", withExtension: "json") else { throw XCTSkip("Private production synthetic fixture is opt-in") }
+        struct Row: Decodable { let key: String; let evidence: AIEvidencePage; let expectedText: String }
+        let rows = try JSONDecoder().decode([Row].self, from: Data(contentsOf: url))
+        XCTAssertTrue(rows.contains { $0.key == "pdf-mixed-30-preview" })
+        XCTAssertTrue(rows.contains { $0.key == "pdf-mixed-30-ready" })
+        for row in rows {
+            let page = row.evidence
+            var result = AIDetectionResult(text: AIDetectionResult.cleanText(page.items, pageHeaders: true), recognition: page.recognition, processingMs: page.processingMs, method: page.items.first?.method, pipelineVersion: page.pipelineVersion)
+            result.previewProgress = page.preview == true ? page.progress : nil
+            result.latency = page.latency
+            let view = AIDetectionResultView(); view.show(result)
+            XCTAssertEqual(view.displayedText, row.expectedText)
+            if row.key.hasSuffix("preview") {
+                XCTAssertTrue(result.previewProgress!.caption.contains("検索対象外"))
+            } else {
+                XCTAssertNil(result.previewProgress)
+                XCTAssertNotNil(result.latency)
+            }
+        }
+    }
+
     func testNewChunkOffsetsRemoveOverlapButKeepRepeatedDistinctUnits() throws {
         let values = try chunks("""
         [{"chunkId":"000000","text":"親から子へ遺伝する。","method":"multimodal_ai","unitIndex":0,"locator":{"startChar":0,"endChar":10}},

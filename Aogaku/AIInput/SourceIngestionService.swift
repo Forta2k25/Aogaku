@@ -120,6 +120,7 @@ final class SourceIngestionService {
         source.wantsDeletion = store.ledger.sources.first { $0.id == source.id }?.wantsDeletion ?? true
         try store.update(source)
         if source.wantsDeletion { try await finishDelete(source, store: store); return }
+        var transferMs: Double?
         if let upload = response["upload"] as? [String: Any], let address = upload["url"] as? String, let url = URL(string: address) {
             guard let bucket = FirebaseApp.app()?.options.storageBucket,
                   url.scheme == "https",
@@ -132,15 +133,19 @@ final class SourceIngestionService {
             try checkUser(source.context.ownerUID)
             let session = uploadSessions[source.context.ownerUID] ?? URLSession(configuration: .default)
             uploadSessions[source.context.ownerUID] = session
+            let transferStarted = Date()
             let (_, result) = try await session.upload(for: request, fromFile: file)
             try checkUser(source.context.ownerUID)
             guard let http = result as? HTTPURLResponse, (200..<300).contains(http.statusCode) || http.statusCode == 412 else { throw AIInputError.message("送信が中断されました。再試行できます") }
+            if (200..<300).contains(http.statusCode) { transferMs = Date().timeIntervalSince(transferStarted) * 1000 }
         }
         try checkUser(source.context.ownerUID)
         if let latest = store.ledger.sources.first(where: { $0.id == source.id }), latest.wantsDeletion {
             try await finishDelete(latest, store: store); return
         }
-        let complete = try await call("aiCompleteSource", data: ["sourceId": source.remote!.sourceId], uid: source.context.ownerUID)
+        var completeData: [String: Any] = ["sourceId": source.remote!.sourceId]
+        if let transferMs { completeData["uploadMs"] = transferMs }
+        let complete = try await call("aiCompleteSource", data: completeData, uid: source.context.ownerUID)
         source.remote = try decode(complete); source.localState = "uploaded"
         source.wantsDeletion = store.ledger.sources.first { $0.id == source.id }?.wantsDeletion ?? true
         try store.update(source)
@@ -219,26 +224,32 @@ final class SourceIngestionService {
         guard var latest = store.ledger.sources.first(where: { $0.id == item.id }) else { return }
         latest.remote = try decode(result); try store.update(latest); notify()
     }
-    func detectionResult(sourceId: String, uid: String) async throws -> AIDetectionResult {
+    func detectionResult(sourceId: String, uid: String, preview: Bool = false) async throws -> AIDetectionResult {
         let baseline = try decode(await call("aiGetSource", data: ["sourceId": sourceId], uid: uid))
         var chunks: [AIEvidenceChunk] = [], cursor: String?, page: AIEvidencePage?
+        var routingPages: [AIVisualRouting.Page] = []
         var seen = Set<String>()
         repeat {
             var data: [String: Any] = ["sourceId": sourceId]
+            if preview { data["preview"] = true }
             if let cursor { data["after"] = cursor }
             let value = try await call("aiGetEvidence", data: data, uid: uid)
             let current = try JSONDecoder().decode(AIEvidencePage.self, from: JSONSerialization.data(withJSONObject: value))
+            if preview { guard current.preview == true, current.previewVersion == baseline.previewVersion else { throw AIInputError.message("途中結果が更新されました") } }
+            routingPages += current.recognition?.routing?.pages ?? []
             if let page { guard current.activeVersion == page.activeVersion else { throw AIInputError.message("資料が更新されました。再読み込みします") } }
             if let version = current.activeVersion, version != baseline.activeVersion { throw AIInputError.message("資料が更新されました。再読み込みします") }
             page = current; chunks += current.items; cursor = current.nextCursor
             if let cursor { guard seen.insert(cursor).inserted, seen.count <= 40 else { throw AIInputError.message("資料の読み込みを完了できませんでした") } }
         } while cursor != nil
         let latest = try decode(await call("aiGetSource", data: ["sourceId": sourceId], uid: uid))
+        if preview { guard latest.previewVersion == baseline.previewVersion, ["extracting", "indexing"].contains(latest.status) else { throw AIInputError.message("解析状態が更新されました") } }
         guard latest.activeVersion == baseline.activeVersion else { throw AIInputError.message("資料が更新されました。再読み込みします") }
+        if preview, page?.recognition?.routing != nil { page?.recognition?.routing?.pages = routingPages }
         if latest.sourceType == "image" || latest.pipelineVersion == "pdf-auto-v1" {
             try AIImagePipeline.requireEvidence(pipelineVersion: page?.pipelineVersion ?? latest.pipelineVersion, recognition: page?.recognition ?? latest.recognition, chunks: chunks)
         }
-        return AIDetectionResult(text: AIDetectionResult.cleanText(chunks, pageHeaders: latest.pipelineVersion == "pdf-auto-v1"), recognition: page?.recognition ?? latest.recognition,
+        return AIDetectionResult(previewProgress: preview ? page?.progress : nil, latency: page?.latency ?? latest.latency, text: AIDetectionResult.cleanText(chunks, pageHeaders: latest.pipelineVersion == "pdf-auto-v1"), recognition: page?.recognition ?? latest.recognition,
             processingMs: page?.processingMs, method: page?.status == "partial_ready" && latest.sourceType == "audio" ? "partial_audio" : chunks.first?.method, pipelineVersion: page?.pipelineVersion ?? latest.pipelineVersion)
     }
     func retrieveContext(uid: String, courseOfferingId: String, lectureIds: [String], query: String, purpose: String = "question", after: String? = nil) async throws -> [String: Any] {

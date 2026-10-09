@@ -22,6 +22,8 @@ export interface RoutedPage extends RoutingDecision {
   inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
   aiCostUSD: number | null; ocrCostUSD: number; estimatedCostUSD: number | null;
   ocrUnits: number; processingMs: number;
+  ocrProbeSkipped?: boolean; ocrProbeSkipReason?: string;
+  latency?: import("./latency").VisualLatency;
 }
 export interface RoutingSummary {
   routerVersion: string; pages: RoutedPage[];

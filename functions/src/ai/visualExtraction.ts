@@ -7,10 +7,16 @@ import {GroqImageRecognition, ImageRecognitionProvider, assertImageExtraction} f
 import {Box, VisualFeatures, emptyFeatures, clamp, textQuality, layoutFeatures, rasterFeatures,
   chooseVisualRoute, routedPage, aggregateRouting, assertAutoExtraction, imageConnectorFeatures} from "./visualRouter";
 
+import {LatencyMeter, VISUAL_EXECUTION, semaphore, boundedPages} from "./latency";
+import {localConnectorSignal} from "./localVisual";
+
+export type PageResult = {unit: Unit; page: import("./visualRouter").RoutedPage};
+export interface VisualOptions {sequential?: boolean; skipLocalFastPath?: boolean; providerMaxSide?: number}
+
 type Checkpoint = {alive: () => Promise<void>; load: (key: string) => Promise<any>;
-  save: (key: string, value: any) => Promise<void>; reserveProviderCall?: () => Promise<void>};
+  save: (key: string, value: any) => Promise<void>; reserveProviderCall?: () => Promise<void>; pageReady?: (result: PageResult, pageCount: number) => Promise<void>; flushPreview?: () => Promise<void>};
 export interface OCRProbe {text: string; words: Box[]; confidence: number; blocks: Box[]}
-export interface RouterProviders {ocr: (bytes: Buffer) => Promise<OCRProbe>; ai: ImageRecognitionProvider}
+export interface RouterProviders {recorded?: boolean; ocr: (bytes: Buffer) => Promise<OCRProbe>; ai: ImageRecognitionProvider}
 const importModule = new Function("name", "return import(name)") as (name: string) => Promise<any>;
 let vision: ImageAnnotatorClient | undefined;
 export function compactOCR(response: any): OCRProbe {
@@ -47,20 +53,22 @@ async function cache<T>(cp: Checkpoint, key: string, fn: () => Promise<T>): Prom
   await cp.alive(); const old = await cp.load(key); if (old) return old;
   const value = await fn(); await cp.alive(); await cp.save(key, value); return value;
 }
-async function raster(bytes: Buffer, words: Box[], imageOnly = false) {
+async function raster(bytes: Buffer, words: Box[], imageOnly = false, localOnly = false) {
   const image = await loadImage(bytes);
   if (!image.width || !image.height || image.width * image.height > 40_000_000) throw new InputError("IMAGE_DIMENSION_LIMIT");
   const scale = Math.min(1, 640 / Math.max(image.width, image.height)), w = Math.max(1, Math.round(image.width * scale)), h = Math.max(1, Math.round(image.height * scale));
   const canvas = createCanvas(w, h), ctx = canvas.getContext("2d"); ctx.fillStyle = "white"; ctx.fillRect(0, 0, w, h); ctx.drawImage(image, 0, 0, w, h);
   const data = ctx.getImageData(0, 0, w, h).data;
+  if (localOnly) return {...localConnectorSignal(data, w, h), nonTextCoverage: 0, lineScore: 0};
   return {...rasterFeatures(data, w, h, words), ...(imageOnly ? imageConnectorFeatures(data, w, h, words) : {})};
 }
-async function probeFeatures(bytes: Buffer, cp: Checkpoint, providers: RouterProviders, name: string, original: VisualFeatures, kind: "pdf" | "image") {
+async function probeFeatures(bytes: Buffer, cp: Checkpoint, providers: RouterProviders, name: string, original: VisualFeatures, kind: "pdf" | "image", meter: LatencyMeter) {
   // Compact, reusable checkpoint, never raw Vision responses / annotations in Firestore.
   const probe = await cache(cp, name + "-ocr-probe", async () => {
-    await cp.reserveProviderCall?.(); return providers.ocr(bytes);
+    await cp.reserveProviderCall?.(); meter.value.providerCalls++; meter.value.providerBytes += bytes.length;
+    return providers.recorded ? providers.ocr(bytes) : meter.measure("ocrProbeMs", () => providers.ocr(bytes));
   });
-  const layout = layoutFeatures(probe.blocks), pixels = await raster(bytes, probe.words, kind === "image");
+  const layout = layoutFeatures(probe.blocks), pixels = await meter.measure("routerMs", () => raster(bytes, probe.words, kind === "image"));
   return {probe, features: {...original, ...pixels, textCoverage: layout.coverage, textBlockCount: probe.blocks.length,
     blockDispersion: layout.dispersion, readingOrderPenalty: layout.order,
     relationMark: original.relationMark || /[→←↑↓↔⇒⇐⇔↗↘]/.test(probe.text),
@@ -68,12 +76,12 @@ async function probeFeatures(bytes: Buffer, cp: Checkpoint, providers: RouterPro
     ocrQuality: clamp(probe.confidence * textQuality(probe.text)), probeAvailable: true}};
 }
 async function pageResult(bytes: Buffer | undefined, nativeText: string, features: VisualFeatures,
-  locator: {pageNumber?: number; imageIndex?: number}, cp: Checkpoint, providers: RouterProviders, name: string, kind: "pdf" | "image") {
+  locator: {pageNumber?: number; imageIndex?: number}, cp: Checkpoint, providers: RouterProviders, name: string, kind: "pdf" | "image", meter = new LatencyMeter()) {
   const started = Date.now(); let decision = chooseVisualRoute(kind, features), ocrUnits = 0, ocrText = "";
   // Native/simple pages and structurally obvious visuals need no OCR round trip.
   if (decision.route !== "native_text" && decision.visualComplexity < .55) {
     if (!bytes) throw new InputError("MISSING_PAGE_RENDER", true);
-    const probe = await probeFeatures(bytes, cp, providers, name, features, kind);
+    const probe = await probeFeatures(bytes, cp, providers, name, features, kind, meter);
     ocrUnits = 1; ocrText = probe.probe.text; decision = chooseVisualRoute(kind, probe.features);
   }
   let text: string, ai: Extraction | undefined;
@@ -83,33 +91,49 @@ async function pageResult(bytes: Buffer | undefined, nativeText: string, feature
     if (!bytes) throw new InputError("MISSING_PAGE_RENDER", true);
     await cp.alive(); await cp.reserveProviderCall?.();
     // No catch-and-OCR fallback. A selected AI page fails/retries as AI.
-    ai = await providers.ai.recognize(bytes, "image/png");
+    meter.value.providerCalls++; meter.value.providerBytes += bytes.length;
+    ai = await (providers.recorded ? providers.ai.recognize(bytes, "image/png") : meter.measure("aiMs", () => providers.ai.recognize(bytes, "image/png")));
     assertImageExtraction(ai);
     text = ai.units.map(u => u.text).join("\n");
   }
   if (!text.trim()) throw new InputError("SOURCE_UNREADABLE", true);
   const unit: Unit = {text: text.trim(), method: decision.route, locator, flags: []};
-  return {unit, page: routedPage(decision, locator, Date.now() - started, ocrUnits, ai?.recognition)};
+  const page = routedPage(decision, locator, Date.now() - meter.startedAt, ocrUnits, ai?.recognition);
+  page.latency = meter.snapshot();
+  if (decision.route === "vision_ocr") { page.latency.ocrMs = page.latency.ocrProbeMs; page.latency.ocrProbeMs = 0; }
+  return {unit, page};
 }
-export async function extractAutoImage(path: string, key: string, cp: Checkpoint, providers = routerProviders(key)): Promise<Extraction> {
-  const started = Date.now();
+export async function extractAutoImage(path: string, key: string, cp: Checkpoint, providers = routerProviders(key), options: VisualOptions = {}): Promise<Extraction> {
+  const meter = new LatencyMeter(), started = Date.now();
+  let fresh = false;
   const result = await cache(cp, "image-auto-v1-final", async () => {
+    fresh = true;
     const raw = await readFile(path), image = await loadImage(raw);
     if (image.width * image.height > 40_000_000) throw new InputError("IMAGE_DIMENSION_LIMIT");
     // Canonical PNG probe/AI input; preserve full readable layout while bounding model resolution.
-    const scale = Math.min(1, 1800 / Math.max(image.width, image.height));
+    const scale = Math.min(1, (options.providerMaxSide ?? VISUAL_EXECUTION.providerMaxSide) / Math.max(image.width, image.height));
     const canvas = createCanvas(Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
     const ctx = canvas.getContext("2d"); ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    return pageResult(canvas.toBuffer("image/png"), "", emptyFeatures(), {imageIndex: 1}, cp, providers, "image-auto-v1", "image");
+    const bytes = canvas.toBuffer("image/png"), features = emptyFeatures();
+    const local = options.skipLocalFastPath ? null : await meter.measure("routerMs", () => raster(bytes, [], false, true));
+    if (local && (local.connectorComponents || 0) > 0) features.connectorComponents = local.connectorComponents;
+    const result = await pageResult(bytes, "", features, {imageIndex: 1}, cp, providers, "image-auto-v1", "image", meter);
+    if (features.connectorComponents) { result.page.ocrProbeSkipped = true; result.page.ocrProbeSkipReason = "local_connector_signal"; }
+    return result;
   });
   const value = {units: [result.unit], totalUnits: 1, failedUnits: [], recognition: aggregateRouting([result.page], "image", Date.now() - started)};
+  value.recognition.latency = fresh ? result.page.latency! : {...meter.snapshot(), checkpointHits: 1};
+  value.recognition.latency.pageCount = 1;
+  value.recognition.latency.ocrPageCount = result.page.route === "vision_ocr" ? 1 : 0;
+  value.recognition.latency.aiPageCount = result.page.route === "multimodal_ai" ? 1 : 0;
   assertAutoExtraction(value, "image"); return value;
 }
 
 const multiply = (a: number[], b: number[]) => [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
   a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3], a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
-export async function analyzePDFPage(page: any, OPS: any): Promise<{text: string; features: VisualFeatures}> {
+export async function analyzePDFPage(page: any, OPS: any, meter?: LatencyMeter): Promise<{text: string; features: VisualFeatures; rendered?: Buffer}> {
+  let rendered: Buffer | undefined;
   const viewport = page.getViewport({scale: 1}), content = await page.getTextContent(), operators = await page.getOperatorList();
   if (operators.fnArray.length > 200000 || content.items.length > 30000) throw new InputError("PDF_ANALYSIS_LIMIT");
   const items = content.items.filter((x: any) => typeof x.str === "string" && x.str.trim());
@@ -136,12 +160,13 @@ export async function analyzePDFPage(page: any, OPS: any): Promise<{text: string
   // Even a single vector path can contain an arrow or table. Inspect its pixels
   // before declaring embedded text sufficient; this local render makes no API call.
   if (drawingCount && features.nativeTextQuality >= .78) {
-    const pixels = await raster(await renderRouterPage(page), boxes);
+    const inspect = async () => { if (meter) meter.value.renderCount++; rendered = await renderRouterPage(page); return raster(rendered, boxes); };
+    const pixels = meter ? await meter.measure("routerMs", inspect) : await inspect();
     // PDF producers also draw backgrounds and glyph paths. Count only paths with
     // visible ink outside text boxes, rather than treating operator count as meaning.
     features = {...features, ...pixels, drawingScore: features.drawingScore * pixels.nonTextCoverage};
   }
-  return {text, features};
+  return {text, features, rendered};
 }
 export async function openRouterPDF(path: string) {
   const pdfjs = await importModule("pdfjs-dist/legacy/build/pdf.mjs"), assets = dirname(require.resolve("pdfjs-dist/package.json"));
@@ -160,20 +185,52 @@ export async function renderRouterPage(page: any) {
   try { await render.promise; return canvas.toBuffer("image/png"); }
   catch { throw new InputError("PDF_RENDER_UNAVAILABLE", true); } finally { clearTimeout(timer); canvas.width=1; canvas.height=1; }
 }
-export async function extractAutoPDF(path: string, key: string, cp: Checkpoint, providers = routerProviders(key)): Promise<Extraction> {
-  const started = Date.now(), pdf = await openRouterPDF(path), units: Unit[] = [], pages = [];
+export async function extractAutoPDF(path: string, key: string, cp: Checkpoint, providers = routerProviders(key), options: VisualOptions = {}): Promise<Extraction> {
+  const meter = new LatencyMeter(), started = Date.now(), pdf = await openRouterPDF(path);
+  const executed = new Set<number>();
+  const results: PageResult[] = new Array(pdf.doc.numPages), jobs: (() => Promise<void>)[] = [];
+  const ai = semaphore(options.sequential ? 1 : VISUAL_EXECUTION.aiConcurrency), ocr = semaphore(options.sequential ? 1 : VISUAL_EXECUTION.ocrConcurrency);
+  const publish = async (number: number, result: PageResult) => {
+    results[number-1] = result;
+    if (cp.pageReady) await meter.measure("persistenceMs", () => cp.pageReady!(result, pdf.doc.numPages));
+  };
   try {
-    for (let number = 1; number <= pdf.doc.numPages; number++) {
-      const result = await cache(cp, `pdf-auto-v1-page-${number}`, async () => {
-        const p = await pdf.doc.getPage(number), analysis = await analyzePDFPage(p, pdf.OPS);
-        const route = chooseVisualRoute("pdf", analysis.features);
-        const bytes = route.route === "native_text" ? undefined : await renderRouterPage(p);
-        const result = await pageResult(bytes, analysis.text, analysis.features, {pageNumber: number}, cp, providers, `pdf-auto-v1-page-${number}`, "pdf");
-        p.cleanup(); return result;
-      });
-      units.push(result.unit); pages.push(result.page);
+    // Analyze in original order. Native pages are immediately available without
+    // waiting behind provider work. Vector visual inspection remains unchanged.
+    for (let number=1; number<=pdf.doc.numPages; number++) {
+      await cp.alive(); const name=`pdf-auto-v1-page-${number}`, previous=await cp.load(name);
+      if (previous) { meter.value.checkpointHits++; await publish(number,previous); continue; }
+      executed.add(number);
+      const pageMeter=new LatencyMeter(), page=await pdf.doc.getPage(number);
+      let analysis: Awaited<ReturnType<typeof analyzePDFPage>>;
+      try { analysis=await pageMeter.measure("nativeExtractionMs",()=>analyzePDFPage(page,pdf.OPS,pageMeter)); pageMeter.value.nativeExtractionMs = Math.max(0, pageMeter.value.nativeExtractionMs - pageMeter.value.routerMs); }
+      catch(e) { page.cleanup(); throw e; }
+      const process = async () => {
+        try {
+          const route=chooseVisualRoute("pdf",analysis.features);
+          const bytes=route.route==="native_text" ? undefined : analysis.rendered || await pageMeter.measure("routerMs", async()=>{pageMeter.value.renderCount++;return renderRouterPage(page);});
+          const boundedProviders: RouterProviders = {recorded: true, ai: {recognize: (b,m) => ai(() => pageMeter.measure("aiMs", () => providers.ai.recognize(b,m)))}, ocr: b => ocr(() => pageMeter.measure("ocrProbeMs", () => providers.ocr(b)))};
+          const result=await pageResult(bytes,analysis.text,analysis.features,{pageNumber:number},cp,boundedProviders,name,"pdf",pageMeter);
+          await cp.alive(); await cp.save(name,result); await publish(number,result);
+        } finally { page.cleanup(); }
+      };
+      if (options.sequential || chooseVisualRoute("pdf",analysis.features).route==="native_text") await process();
+      else jobs.push(process);
     }
-    const value = {units, totalUnits: pdf.doc.numPages, failedUnits: [], recognition: aggregateRouting(pages, "pdf", Date.now()-started)};
-    assertAutoExtraction(value, "pdf"); return value;
+    if (cp.flushPreview) await meter.measure("persistenceMs", cp.flushPreview);
+    await boundedPages(jobs, options.sequential ? 1 : VISUAL_EXECUTION.pageConcurrency);
+    if (cp.flushPreview) await meter.measure("persistenceMs", cp.flushPreview);
+    const pages=results.map(r=>r.page), value={units:results.map(r=>r.unit),totalUnits:pdf.doc.numPages,failedUnits:[],recognition:aggregateRouting(pages,"pdf",Date.now()-started)};
+    const summary=meter.snapshot();
+    for (const page of pages) if (page.latency && executed.has(page.pageNumber!)) {
+      for (const stage of ["routerMs","nativeExtractionMs","ocrProbeMs","ocrMs","aiMs"] as const) summary[stage]+=page.latency[stage];
+      summary.providerSpans.push(...(page.latency.providerSpans || []));
+      summary.providerCalls+=page.latency.providerCalls; summary.providerBytes+=page.latency.providerBytes; summary.renderCount+=page.latency.renderCount;
+    }
+    summary.pageCount=pages.length; summary.nativePageCount=value.recognition.routing!.counts.native_text;
+    summary.ocrPageCount=value.recognition.routing!.counts.vision_ocr; summary.aiPageCount=value.recognition.routing!.counts.multimodal_ai;
+    summary.pageProcessingMs=pages.map(p=>({pageNumber:p.pageNumber!,processingMs:p.processingMs}));
+    summary.maxPageProcessingMs=Math.max(0,...pages.map(p=>p.processingMs));value.recognition.latency=summary;
+    assertAutoExtraction(value,"pdf");return value;
   } finally { await pdf.destroy(); }
 }

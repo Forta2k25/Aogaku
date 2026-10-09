@@ -1,3 +1,5 @@
+import {LatencyMeter, devVisualOptions} from "./latency";
+import {previewAllowed, previewPublisher, previewResponse} from "./progressive";
 import * as admin from "firebase-admin";
 import {onCall, HttpsError} from "firebase-functions/v2/https";
 import {onTaskDispatched} from "firebase-functions/v2/tasks";
@@ -106,7 +108,7 @@ function publicSource(s: any) {
   const {sourceId, sourceType, title, courseOfferingId, lectureId, dayID, status, error, coverage, rawVisibility, knowledgeVisibility, createdAt, activeRun, sourceVersion} = s;
   return {databaseId: aiDatabaseId(), sourceId, sourceType, title, courseOfferingId, lectureId, dayID, status, courseSnapshot: s.courseSnapshot || null,
     canonicalSnapshot: s.canonicalSnapshot || null, pipelineVersion: s.pipelineVersion || "input-v1", recognition: s.recognition || null, processingMs: s.processingMs ?? null, sharingEnabled: sharingEnabled(), linkingEnabled: runtimeProject() !== "forta-aogaku", error: error || null,
-    coverage: coverage || null, rawVisibility, knowledgeVisibility, createdAt, sourceVersion, activeVersion: activeRun || null};
+    latency: s.latency || null, previewVersion: ["extracting", "indexing"].includes(status) ? s.previewRun || null : null, previewProgress: s.previewProgress || null, updatedAt: s.updatedAt || null, coverage: coverage || null, rawVisibility, knowledgeVisibility, createdAt, sourceVersion, activeVersion: activeRun || null};
 }
 function runtimeProject() {
   const project = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || admin.app().options.projectId;
@@ -272,13 +274,15 @@ export const aiCreateSource = callable(async (uid, data) => {
 export const aiCompleteSource = callable(async (uid, data) => {
   const {ref, source} = await owned(uid, data.sourceId);
   if (source.status === "awaiting_upload") {
+    const transferMs = data.uploadMs;
+    if (transferMs !== undefined && (typeof transferMs !== "number" || !Number.isFinite(transferMs) || transferMs < 0 || transferMs > 3600000)) throw new InputError("INVALID_UPLOAD_METRIC");
     let metadata: any;
     try { [metadata] = await bucket().file(source.storagePath).getMetadata(); }
     catch { throw new InputError("UPLOAD_INCOMPLETE", true); }
     if (Number(metadata.size) !== source.declaredSize || metadata.contentType !== source.mime) throw new InputError("UPLOAD_MISMATCH");
     await db().runTransaction(async tx => {
       const latest = await tx.get(ref);
-      if (latest.get("status") === "awaiting_upload") tx.update(ref, {status: "queued", objectGeneration: metadata.generation, updatedAt: now()});
+      if (latest.get("status") === "awaiting_upload") tx.update(ref, {status: "queued", objectGeneration: metadata.generation, ...(transferMs === undefined ? {} : {uploadMs: transferMs, uploadTimingKind: "client-transfer"}), updatedAt: now()});
     });
   }
   const latest = (await ref.get()).data()!;
@@ -303,8 +307,19 @@ export const aiListSources = callable(async (uid, data) => {
     courseOfferingId: course, lectureId: resolved?.lectureId || null, nextCursor: snap.size > 100 ? page.at(-1)!.id : null};
 });
 export const aiGetEvidence = callable(async (uid, data) => {
+  const started = performance.now();
   const ref = sources().doc(id(data.sourceId)), source = (await ref.get()).data();
   if (!source || !canRead(source, uid, await verified(uid, source.courseOfferingId))) throw new InputError("NOT_FOUND");
+  if (data.preview === true) {
+    if (!previewAllowed(source, uid)) return {items: [], status: source.status, preview: true, nextCursor: null};
+    let query = ref.collection(collections.runs).doc(source.previewRun).collection("previewPages").orderBy(admin.firestore.FieldPath.documentId()).limit(6);
+    if (data.after) query = query.startAfter(id(data.after));
+    const pages = await query.get(), latest = (await ref.get()).data();
+    if (!previewAllowed(latest, uid) || latest!.previewRun !== source.previewRun) throw new InputError("SOURCE_VERSION_CHANGED", true);
+    await assertAccountActive(uid);
+    return {...previewResponse(latest, pages.docs.slice(0,5).map(p => p.data())), evidenceMs: performance.now() - started,
+      nextCursor: pages.size > 5 ? pages.docs[4].id : null};
+  }
   if (!source.activeRun) return {items: [], status: source.status, nextCursor: null};
   let q = ref.collection(collections.runs).doc(source.activeRun).collection(collections.chunks).orderBy("chunkId").limit(21);
   if (data.after) q = q.startAfter(id(data.after));
@@ -312,7 +327,7 @@ export const aiGetEvidence = callable(async (uid, data) => {
   const latest = (await ref.get()).data();
   if (!latest || latest.activeRun !== source.activeRun || !canRead(latest, uid, await verified(uid, source.courseOfferingId))) throw new InputError("NOT_FOUND");
   return {items: chunks.docs.slice(0, 20).map(d => ({...d.data(), sourceId: ref.id, lectureId: latest.lectureId})),
-    status: latest.status, activeVersion: latest.activeRun, recognition: latest.recognition || null, pipelineVersion: latest.pipelineVersion || "input-v1", processingMs: latest.processingMs ?? null, coverage: latest.coverage || null, nextCursor: chunks.size > 20 ? chunks.docs[19].id : null};
+    latency: {...(latest.latency || {}), evidenceMs: performance.now() - started}, status: latest.status, activeVersion: latest.activeRun, recognition: latest.recognition || null, pipelineVersion: latest.pipelineVersion || "input-v1", processingMs: latest.processingMs ?? null, coverage: latest.coverage || null, nextCursor: chunks.size > 20 ? chunks.docs[19].id : null};
 });
 
 export const aiRetrySource = callable(async (uid, data) => {
@@ -436,8 +451,11 @@ export const aiRetrieveContext = callable(async (uid, data) => {
       sources: coverageSources.map(s => ({sourceId: s.sourceId, status: s.status, coverage: s.coverage || null}))}};
 });
 
+let workerInvocationCount = 0;
 export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtimeAccount, timeoutSeconds: 1800, memory: "2GiB", maxInstances: 3,
   retryConfig: {maxAttempts: 4, minBackoffSeconds: 30, maxBackoffSeconds: 300}, rateLimits: {maxConcurrentDispatches: 3}}, async request => {
+  const enteredAt = now(), meter = new LatencyMeter();
+  meter.value.firstInvocation = ++workerInvocationCount === 1;
   // Old default-DB deliveries cannot touch the new namespace, even on ID reuse.
   if (request.data.databaseId !== aiDatabaseId()) return;
   if (productionClosed()) throw new InputError("AI_INPUT_NOT_ENABLED");
@@ -447,7 +465,7 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
     if (!s || terminal.includes(s.status) || s.status === "awaiting_upload" || !productionInputsAllowed(s.ownerUserId)) return null;
     if ((s.leaseUntil || 0) > now()) throw new InputError("BUSY", true);
     if (s.attempts >= 6) { tx.update(ref, {status: "failed", error: {code: "RETRY_LIMIT", retryable: false}}); return null; }
-    tx.update(ref, {status: "extracting", leaseToken: token, leaseUntil: now() + 1900000, attempts: s.attempts + 1, updatedAt: now()});
+    tx.update(ref, {status: "extracting", ...(s.pipelineVersion === "pdf-auto-v1" ? {previewRun: token, previewProgress: {completed: 0, total: 0, native: 0, ocr: 0, ai: 0}} : {}), leaseToken: token, leaseUntil: now() + 1900000, attempts: s.attempts + 1, updatedAt: now()});
     return s;
   });
   if (!source) { if (request.data.taskId) await ref.collection(collections.jobs).doc(id(request.data.taskId)).delete(); return; }
@@ -464,27 +482,61 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
     const marker = await owners().doc(ownerUID).get();
     if (["deleting", "deleted"].includes(marker.get("state")) || !mayPublish((await ref.get()).data(), token)) throw new InputError("CANCELLED");
   }
+  if (request.data.taskId) {
+    const job = await ref.collection(collections.jobs).doc(id(request.data.taskId)).get();
+    const queued = job.get("createdAt");
+    if (typeof queued === "number") meter.value.queueWaitMs = Math.max(0, enteredAt - queued);
+  }
+  // A fresh visual source has no checkpoint files. One bounded listing replaces
+  // one Storage 404 per page, while existing provider checkpoints are preserved.
+  const visualInput = ["image-auto-v1", "pdf-auto-v1"].includes(source.pipelineVersion);
+  let checkpointCatalog: Promise<Set<string> | null> | undefined;
+  const catalog = () => checkpointCatalog ||= (async () => {
+    if (!visualInput) return null;
+    const [files, next] = await bucket().getFiles({prefix: `${derived}/checkpoints/${PIPELINE}/`, autoPaginate: false, maxResults: 200});
+    return next ? null : new Set(files.map(f => f.name)); // Oversized legacy namespace: retain old lookup behavior.
+  })();
   const cp = {
     alive,
+    ...previewPublisher(db(), ref, owners().doc(ownerUID), token, () => productionInputsAllowed(ownerUID)),
     reserveProviderCall: () => reserveProviderCall(ownerUID),
-    load: async (key: string) => { try { const [b] = await bucket().file(`${derived}/checkpoints/${PIPELINE}/${key}.json`).download(); return JSON.parse(b.toString()); } catch (e: any) { if (e.code === 404) return undefined; throw e; } },
-    save: async (key: string, value: any) => { await alive(); await bucket().file(`${derived}/checkpoints/${PIPELINE}/${key}.json`).save(JSON.stringify(value), {contentType: "application/json"}); await alive(); }
+    load: async (key: string) => {
+      const name = `${derived}/checkpoints/${PIPELINE}/${key}.json`, known = await catalog();
+      if (known && !known.has(name)) return undefined;
+      try { const [b] = await bucket().file(name).download(); return JSON.parse(b.toString()); }
+      catch (e: any) { if (e.code === 404) return undefined; throw e; }
+    },
+    save: async (key: string, value: any) => {
+      await alive(); const name = `${derived}/checkpoints/${PIPELINE}/${key}.json`;
+      await meter.measure("persistenceMs", () => bucket().file(name).save(JSON.stringify(value), {contentType: "application/json"}));
+      (await catalog())?.add(name); await alive();
+    }
   };
   try {
     let extraction: Extraction;
     const processingStartedAt = now();
+    let visual: import("./latency").VisualLatency | undefined;
     let originalHash: string | null = null;
     if (source.sourceType === "note") extraction = {units: [{text: source.noteText, locator: {startChar: 0, endChar: source.noteText.length}, method: "note", flags: []}], totalUnits: 1, failedUnits: []};
     else {
       const path = join(dir, "original");
       await bucket().file(source.storagePath, {generation: source.objectGeneration}).download({destination: path});
       const bytes = await readFile(path);
+      if (["image-auto-v1", "pdf-auto-v1"].includes(source.pipelineVersion)) {
+        if (typeof source.uploadMs === "number") { meter.value.uploadMs = source.uploadMs; meter.value.uploadTimingKind = "client-transfer"; }
+        else {
+          const [metadata] = await bucket().file(source.storagePath, {generation: source.objectGeneration}).getMetadata();
+          const uploaded = Date.parse(metadata.timeCreated || "");
+          if (Number.isFinite(uploaded)) { meter.value.uploadMs = Math.max(0, uploaded - source.createdAt); meter.value.uploadTimingKind = "server-window"; }
+        }
+        meter.value.workerStartupMs = now() - enteredAt;
+      }
       originalHash = createHash("sha256").update(bytes).digest("hex");
       if (bytes.length !== source.declaredSize) throw new InputError("UPLOAD_MISMATCH");
       const pdfMagic = bytes.subarray(0, 5).toString() === "%PDF-";
       if (source.sourceType === "pdf" && !pdfMagic) throw new InputError("INVALID_PDF");
       if (source.sourceType === "image") extraction = source.pipelineVersion === "image-auto-v1" ?
-        await extractAutoImage(path, await groqSecret(), cp) : await extractImage(path, source.mime, await groqSecret(), cp);
+        await extractAutoImage(path, await groqSecret(), cp, undefined, devVisualOptions(runtimeProject(), request.data)) : await extractImage(path, source.mime, await groqSecret(), cp);
       else if (source.sourceType === "pdf") extraction = source.pipelineVersion === "pdf-auto-v1" ?
         await extractAutoPDF(path, await groqSecret(), cp) : await extractPDF(path, `gs://${bucket().name}/${source.storagePath}`, cp);
       else {
@@ -493,6 +545,12 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
         extraction = await extractAudio(path, duration, await groqSecret(), cp);
       }
     }
+    if (extraction.recognition?.latency) {
+      visual = {...extraction.recognition.latency, uploadMs: meter.value.uploadMs, uploadTimingKind: meter.value.uploadTimingKind, queueWaitMs: meter.value.queueWaitMs, workerStartupMs: meter.value.workerStartupMs, firstInvocation: meter.value.firstInvocation};
+      visual.persistenceMs += meter.value.persistenceMs;
+      extraction.recognition.latency = visual;
+    }
+    const persistenceStarted = performance.now();
     await alive();
     const chunks = chunksFor(extraction.units);
     if (!chunks.length) throw new InputError("SOURCE_UNREADABLE");
@@ -506,11 +564,16 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
       await batch.commit();
     }
     await assertAccountActive(source.ownerUserId);
+    if (visual) {
+      visual.persistenceMs += performance.now() - persistenceStarted;
+      visual.totalProcessingMs = now() - enteredAt;
+      await ref.collection(collections.runs).doc(token).set({latency: visual}, {merge: true});
+    }
     await db().runTransaction(async tx => {
       const s = (await tx.get(ref)).data();
       const owner = await tx.get(owners().doc(source.ownerUserId));
       if (!productionInputsAllowed(source.ownerUserId) || ["deleting", "deleted"].includes(owner.get("state")) || !mayPublish(s, token)) throw new InputError("CANCELLED");
-      tx.update(ref, {activeRun: token, originalHash, ...(extraction.recognition ? {recognition: extraction.recognition, pipelineVersion: extraction.recognition.pipelineVersion} : {}), processingMs: now() - processingStartedAt, status: extraction.failedUnits.length ? "partial_ready" : "ready", leaseToken: null, leaseUntil: 0,
+      tx.update(ref, {activeRun: token, originalHash, ...(visual ? {latency: visual} : {}), ...(extraction.recognition ? {recognition: extraction.recognition, pipelineVersion: extraction.recognition.pipelineVersion} : {}), processingMs: now() - processingStartedAt, status: extraction.failedUnits.length ? "partial_ready" : "ready", leaseToken: null, leaseUntil: 0,
         coverage: {totalUnits: extraction.totalUnits, processedUnits: extraction.totalUnits - extraction.failedUnits.length, failedUnits: extraction.failedUnits},
         error: null, updatedAt: now()});
     });

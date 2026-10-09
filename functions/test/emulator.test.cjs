@@ -5,7 +5,7 @@ const enabled=!!process.env.FIRESTORE_EMULATOR_HOST && !!process.env.STORAGE_EMU
 process.env.AI_SHARING_ENABLED='true';
 const deletedUsers=new Set();
 let originalGetUser, originalDeleteTask;
-let recognitionStatus=200, imageRequests=0, audioRequests=0;
+let recognitionStatus=200, imageRequests=0, audioRequests=0, routerProbe;
 let originalVisionOCR;
 let app,db,legacyDb,api,taskPrototype,originalEnqueue,originalFetch,credential,originalToken;
 before(()=>{
@@ -13,7 +13,7 @@ before(()=>{
   const vision=require('@google-cloud/vision').ImageAnnotatorClient.prototype;
   originalVisionOCR=vision.documentTextDetection;
   vision.documentTextDetection=async()=>{
-    const p=require('../../scripts/visual_router_fixtures.cjs').image('plain').probe;
+    const p=routerProbe||require('../../scripts/visual_router_fixtures.cjs').image('plain').probe;
     return [{fullTextAnnotation:{text:p.text,pages:[{width:800,height:1000,blocks:[{boundingBox:{vertices:[{x:50,y:50},{x:760,y:50},{x:760,y:700},{x:50,y:700}]},paragraphs:[{words:p.words.map(b=>({confidence:.98,boundingBox:{vertices:[{x:b.x*800,y:b.y*1000},{x:(b.x+b.w)*800,y:b.y*1000},{x:(b.x+b.w)*800,y:(b.y+b.h)*1000},{x:b.x*800,y:(b.y+b.h)*1000}]},symbols:[{text:'x'}]}))}]}]}]}}];
   };
   credential=admin.credential.applicationDefault();originalToken=credential.getAccessToken;
@@ -30,7 +30,7 @@ before(()=>{
     if(String(url)==='https://secretmanager.googleapis.com/v1/projects/demo-aogaku-input/secrets/GROQ_API_KEY/versions/latest:access')return new Response(JSON.stringify({payload:{data:Buffer.from('synthetic-test-only').toString('base64')}}));
     if(String(url)==='https://api.groq.com/openai/v1/models')return new Response(JSON.stringify({data:[{id:'qwen/qwen3.8-27b',active:true}]}));
     if(String(url)==='https://api.groq.com/openai/v1/chat/completions') {
-      imageRequests++;const body=JSON.parse(options.body);assert.equal(body.model,'qwen/qwen3.8-27b');assert(body.messages[0].content[1].image_url.url.startsWith('data:image/png;base64,'));
+      imageRequests++;const body=JSON.parse(options.body);assert.equal(body.model,'qwen/qwen3.8-27b');assert.equal(body.messages[0].role,'system');assert.equal(body.messages[0].content,require('../lib/ai/recognition').IMAGE_INSTRUCTIONS);assert.equal(body.messages[1].role,'user');assert(body.messages[1].content[0].image_url.url.startsWith('data:image/png;base64,'));
       return new Response(JSON.stringify({model:body.model,usage:{prompt_tokens:2940,completion_tokens:417,total_tokens:3357},choices:[{finish_reason:'stop',message:{content:JSON.stringify({finalText:'親から子へ特徴が遺伝する。'+ '階層を説明する。'.repeat(200)})}}]}),{status:recognitionStatus});
     }
     if(String(url)==='https://api.groq.com/openai/v1/audio/transcriptions') {
@@ -332,9 +332,33 @@ test('visual router: new receipts, native/OCR/AI evidence, retry and deletion bo
   await recognitionSource(id,'router-owner',type,bytes,type==='image'?'image/png':'application/pdf');await db.doc('aiSources/'+id).update({pipelineVersion:type+'-auto-v1',schemaVersion:5});
   await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});const source=await call('aiGetSource','router-owner',{sourceId:id});assert.equal(source.status,'ready');assert.deepEqual(source.recognition.routing.pages.map(x=>x.route),routes);
   const all=[];let after;do{const page=await call('aiGetEvidence','router-owner',{sourceId:id,...(after?{after}:{})});all.push(...page.items);after=page.nextCursor;}while(after);assert.deepEqual([...new Set(all.map(x=>x.method))],routes);if(type==='pdf')assert.deepEqual([...new Set(all.map(x=>x.locator.pageNumber))],[1,2,3]);
-  assert.equal((await legacyDb.doc('aiSources/'+id).get()).exists,false);assert((await call('aiRetrieveContext','router-owner',{courseOfferingId:'course-a',purpose:'lecture_summary'})).items.some(x=>x.sourceId===id));const old=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});assert.equal(imageRequests,old);
+  assert.equal((await legacyDb.doc('aiSources/'+id).get()).exists,false);
+  const retrieved=(await call('aiRetrieveContext','router-owner',{courseOfferingId:'course-a',purpose:'lecture_summary',maxCharacters:30000})).items.filter(x=>x.sourceId===id);
+  assert.equal(retrieved.length,all.length,'All selected-route chunks survive retrieval');
+  for(const item of all){const found=retrieved.find(x=>x.chunkId===item.chunkId);assert(found);assert.equal(found.text,item.text);assert.equal(found.method,item.method);assert.deepEqual(found.locator,item.locator);}
+  const stored=(await db.collection(`aiSources/${id}/runs/${source.activeVersion}/chunks`).orderBy('chunkId').get()).docs.map(x=>x.data());
+  assert.deepEqual(stored.map(x=>x.text),all.map(x=>x.text));
+  const {joinChunks}=require('../../scripts/evidence_adoption_dev.cjs');
+  for(const page of source.recognition.routing.pages){const pageChunks=all.filter(x=>type==='pdf'?x.locator.pageNumber===page.pageNumber:true);const text=joinChunks(pageChunks);
+   if(page.route==='multimodal_ai')assert.equal(text,'親から子へ特徴が遺伝する。'+ '階層を説明する。'.repeat(200),'Qwen finalText only; no native/probe text added');
+   if(page.route==='vision_ocr')assert.equal(text,fixture.image('plain').probe.text.trim(),'Only selected OCR');
+  }
+  const old=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});assert.equal(imageRequests,old);
  }
  await recognitionSource('router-retry','router-retry-owner','image',fixture.image('arrows').bytes,'image/png');await db.doc('aiSources/router-retry').update({pipelineVersion:'image-auto-v1'});recognitionStatus=503;
  try{await assert.rejects(api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'router-retry'}}),e=>e.retryable);const s=(await db.doc('aiSources/router-retry').get()).data();assert.equal(s.status,'queued');assert.equal(s.activeRun,null);assert.equal(s.pipelineVersion,'image-auto-v1');assert.equal(s.recognition,undefined);}finally{recognitionStatus=200;}
  await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'router-retry'}});assert.equal((await call('aiGetSource','router-retry-owner',{sourceId:'router-retry'})).status,'ready');await api.beginAIAccountDeletion('router-retry-owner');assert.equal((await db.collection('aiSources/router-retry/runs').get()).size,0);assert.equal((await db.collection('aiUsage/router-retry-owner/periods').get()).size,0);await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'router-retry'}});assert.equal((await db.doc('aiSources/router-retry').get()).get('status'),'deleted');
+});
+
+
+test('image connector geometry: real worker -> named chunks -> Evidence -> retrieval when OCR omits arrows',{skip:!enabled},async()=>{
+ const f=require('../../scripts/image_router_fixtures.cjs').relation(false),id='short-raster-arrow',owner='short-raster-owner';routerProbe=f.probe;
+ try{await recognitionSource(id,owner,'image',f.bytes,'image/png');await db.doc('aiSources/'+id).update({pipelineVersion:'image-auto-v1',schemaVersion:5});
+  const beforeCalls=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});assert.equal(imageRequests,beforeCalls+1);
+  const source=await call('aiGetSource',owner,{sourceId:id});assert.equal(source.status,'ready');const page=source.recognition.routing.pages[0];assert.equal(page.route,'multimodal_ai');assert.equal(page.provider,'groq');assert.equal(page.model,'qwen/qwen3.8-27b');assert.equal(page.features.relationMark,false);assert.equal(page.features.lineScore,0);assert(page.features.connectorComponents>0);
+  const items=[];let after;do{const e=await call('aiGetEvidence',owner,{sourceId:id,...(after?{after}:{})});items.push(...e.items);after=e.nextCursor;}while(after);
+  const {joinChunks}=require('../../scripts/evidence_adoption_dev.cjs'),expected='親から子へ特徴が遺伝する。'+'階層を説明する。'.repeat(200);
+  const stored=(await db.collection(`aiSources/${id}/runs/${source.activeVersion}/chunks`).orderBy('chunkId').get()).docs.map(x=>x.data()),retrieved=(await call('aiRetrieveContext',owner,{courseOfferingId:'course-a',purpose:'lecture_summary',maxCharacters:30000})).items.filter(x=>x.sourceId===id);
+  for(const xs of [items,stored,retrieved]){assert.equal(joinChunks(xs),expected);assert(xs.every(x=>x.method==='multimodal_ai'));}assert.equal((await legacyDb.doc('aiSources/'+id).get()).exists,false);
+ }finally{routerProbe=undefined;}
 });

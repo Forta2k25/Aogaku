@@ -120,6 +120,12 @@ struct AIDetectionResult {
     var processingMs: Double?
     var method: String?
     var pipelineVersion: String?
+    var pipelineLabel: String {
+        // Use backend metadata; never infer a new version from route.
+        let value = pipelineVersion ?? recognition?.pipelineVersion
+        let title = value == "pdf-auto-v1" ? "PDF自動ルーティング\n" : value == "image-auto-v1" ? "画像自動ルーティング\n" : ""
+        return title + "Pipeline: " + (value.flatMap { $0.isEmpty ? nil : $0 } ?? "legacy")
+    }
     // Reconstruct from the actual active-run chunks; no second copy of the text is stored.
     static func cleanText(_ chunks: [AIEvidenceChunk], pageHeaders: Bool = false) -> String {
         var result = "", previousKey: String?, previousEnd: Int?, unitText = ""
@@ -182,7 +188,8 @@ struct AIDetectionResult {
         guard let routing = recognition?.routing else { return nil }
         return routing.pages.map { page in
             let label = ["native_text": "本文抽出", "vision_ocr": "OCR", "multimodal_ai": "AI"][page.route] ?? page.route
-            return "\(page.pageNumber.map { "p.\($0)" } ?? "画像") \(label) ・ score \(String(format: "%.2f", page.routingScore))\n理由: \(page.routingReason.joined(separator: ", "))"
+            let pipeline = pipelineVersion ?? recognition?.pipelineVersion ?? "legacy"
+            return "\(page.pageNumber.map { "p.\($0)" } ?? "画像") \(label) ・ score \(String(format: "%.2f", page.routingScore))\nRoute: \(page.route)\nPipeline: \(pipeline)\nProvider: \(page.provider)\nModel: \(page.model ?? "対象外")\n理由: \(page.routingReason.joined(separator: ", "))"
         }.joined(separator: "\n\n")
     }
     var detail: String {

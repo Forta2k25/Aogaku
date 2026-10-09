@@ -5,7 +5,7 @@ import {createCanvas, loadImage} from "@napi-rs/canvas";
 import {Extraction, InputError, Unit} from "./domain";
 import {GroqImageRecognition, ImageRecognitionProvider, assertImageExtraction} from "./recognition";
 import {Box, VisualFeatures, emptyFeatures, clamp, textQuality, layoutFeatures, rasterFeatures,
-  chooseVisualRoute, routedPage, aggregateRouting, assertAutoExtraction} from "./visualRouter";
+  chooseVisualRoute, routedPage, aggregateRouting, assertAutoExtraction, imageConnectorFeatures} from "./visualRouter";
 
 type Checkpoint = {alive: () => Promise<void>; load: (key: string) => Promise<any>;
   save: (key: string, value: any) => Promise<void>; reserveProviderCall?: () => Promise<void>};
@@ -47,19 +47,20 @@ async function cache<T>(cp: Checkpoint, key: string, fn: () => Promise<T>): Prom
   await cp.alive(); const old = await cp.load(key); if (old) return old;
   const value = await fn(); await cp.alive(); await cp.save(key, value); return value;
 }
-async function raster(bytes: Buffer, words: Box[]) {
+async function raster(bytes: Buffer, words: Box[], imageOnly = false) {
   const image = await loadImage(bytes);
   if (!image.width || !image.height || image.width * image.height > 40_000_000) throw new InputError("IMAGE_DIMENSION_LIMIT");
   const scale = Math.min(1, 640 / Math.max(image.width, image.height)), w = Math.max(1, Math.round(image.width * scale)), h = Math.max(1, Math.round(image.height * scale));
   const canvas = createCanvas(w, h), ctx = canvas.getContext("2d"); ctx.fillStyle = "white"; ctx.fillRect(0, 0, w, h); ctx.drawImage(image, 0, 0, w, h);
-  return rasterFeatures(ctx.getImageData(0, 0, w, h).data, w, h, words);
+  const data = ctx.getImageData(0, 0, w, h).data;
+  return {...rasterFeatures(data, w, h, words), ...(imageOnly ? imageConnectorFeatures(data, w, h, words) : {})};
 }
-async function probeFeatures(bytes: Buffer, cp: Checkpoint, providers: RouterProviders, name: string, original: VisualFeatures) {
+async function probeFeatures(bytes: Buffer, cp: Checkpoint, providers: RouterProviders, name: string, original: VisualFeatures, kind: "pdf" | "image") {
   // Compact, reusable checkpoint, never raw Vision responses / annotations in Firestore.
   const probe = await cache(cp, name + "-ocr-probe", async () => {
     await cp.reserveProviderCall?.(); return providers.ocr(bytes);
   });
-  const layout = layoutFeatures(probe.blocks), pixels = await raster(bytes, probe.words);
+  const layout = layoutFeatures(probe.blocks), pixels = await raster(bytes, probe.words, kind === "image");
   return {probe, features: {...original, ...pixels, textCoverage: layout.coverage, textBlockCount: probe.blocks.length,
     blockDispersion: layout.dispersion, readingOrderPenalty: layout.order,
     relationMark: original.relationMark || /[→←↑↓↔⇒⇐⇔↗↘]/.test(probe.text),
@@ -72,7 +73,7 @@ async function pageResult(bytes: Buffer | undefined, nativeText: string, feature
   // Native/simple pages and structurally obvious visuals need no OCR round trip.
   if (decision.route !== "native_text" && decision.visualComplexity < .55) {
     if (!bytes) throw new InputError("MISSING_PAGE_RENDER", true);
-    const probe = await probeFeatures(bytes, cp, providers, name, features);
+    const probe = await probeFeatures(bytes, cp, providers, name, features, kind);
     ocrUnits = 1; ocrText = probe.probe.text; decision = chooseVisualRoute(kind, probe.features);
   }
   let text: string, ai: Extraction | undefined;

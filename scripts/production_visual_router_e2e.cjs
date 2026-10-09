@@ -1,0 +1,92 @@
+#!/usr/bin/env node
+// Approved pilot only, new synthetic assets; never upload user course material.
+// Every mutation is journaled once. No implicit provider/upload/creation retry.
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),crypto=require('node:crypto'),{execFileSync}=require('node:child_process');
+const d=require('./deploy_production_visual_router.cjs'),c=require('./production_phase5a_common.cjs'),p=require('./production_recognition_review.cjs'),reads=require('./production_read_retry.cjs'),{value,uploadTarget}=require('./production_phase5a_e2e.cjs');
+const DIR=path.join(d.DIR,'e2e'),FILE=path.join(DIR,'registry.private.json'),db=(id,p)=>`https://firestore.googleapis.com/v1/projects/${c.P}/databases/${id}/documents/${p}`;
+const doc=x=>Object.fromEntries(Object.entries(x.fields||{}).map(([k,v])=>[k,value(v)])),canonical=require('./deploy_production_phase3a.cjs').hash;
+const save=s=>fs.writeFileSync(FILE,JSON.stringify(s,null,2)+'\n',{mode:0o600});
+function reconstruct(items){return require('./evidence_adoption_dev.cjs').joinChunks(items);}
+async function main(action){
+ assert(['before','gates','inputs','permissions','final'].includes(action));fs.mkdirSync(DIR,{recursive:true,mode:0o700});
+ let s=fs.existsSync(FILE)?JSON.parse(fs.readFileSync(FILE)):{run:crypto.randomUUID(),status:'STARTED',syntheticOnly:true,sources:[],results:[],attempts:[]};assert.notEqual(s.status,'STOPPED');
+ const live=await d.rawFunctions(),owner=await d.pilotAuth(live);
+ async function call(name,data,token=owner.token){
+  assert(p.CALLABLES.includes(name));assert(data===null||!['aiDeleteSource','aiUpdateSource'].includes(name),'No deletion/sharing action');
+  const ev={name,payloadHash:c.hash(data),status:'ATTEMPTED'};s.attempts.push(ev);save(s);
+  const r=await fetch(`https://${c.R}-${c.P}.cloudfunctions.net/${name}`,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:JSON.stringify({data}),signal:AbortSignal.timeout(150000)});
+  const x=await r.json().catch(()=>({}));ev.httpStatus=r.status;ev.status='RECEIVED';save(s);if(!r.ok){const e=Error(x.error?.details?.code||x.error?.status||'CALLABLE_ERROR');e.code=e.message;throw e;}return x.result;
+ }
+ async function document(id,p){const {response,data}=await reads.read(db(id,p),{headers:{Authorization:'Bearer '+await c.cloud.oauth()}},{allowStatuses:[404],sourceName:'router_boundary'});return response.status===404?null:data;}
+ async function evidence(id){let after,first;const items=[];do{const x=await call('aiGetEvidence',{sourceId:id,...(after?{after}:{})});if(first)assert.equal(first.activeVersion,x.activeVersion);else first=x;items.push(...x.items);after=x.nextCursor;}while(after);return {...first,items};}
+ async function object(name,media=false,allowMissing=false){assert(name.startsWith(`ai-derived/${c.DB}/${owner.uid}/`)||name.startsWith(`ai-inputs/${c.DB}/${owner.uid}/`));const {response,data}=await reads.read(`https://storage.googleapis.com/storage/v1/b/${c.B}/o/${encodeURIComponent(name)}`+(media?'?alt=media':''),{headers:{Authorization:'Bearer '+await c.cloud.oauth()}},{allowStatuses:allowMissing?[404]:[],sourceName:'router_owned_object'});return response.status===404?null:data;}
+ async function ready(id){for(let i=0;i<180;i++){const x=await call('aiGetSource',{sourceId:id});if(x.status==='ready')return x;assert(!['failed','partial_ready','deleted','deleting'].includes(x.status),'Worker terminal '+x.status+' '+x.error?.code);if(i%15===0)console.log('Synthetic worker: '+x.status);await new Promise(r=>setTimeout(r,4000));}throw Error('PROCESSING_TIMEOUT');}
+ function outsider(){const a=JSON.parse(fs.readFileSync(path.join(DIR,'outsider-auth.private.json')));assert(!JSON.parse(live.find(f=>f.name.endsWith('/aiCreateSource')).serviceConfig.environmentVariables.AI_INPUT_ALLOWED_UIDS).includes(c.jwt(a.idToken).sub));return a;}
+ async function oldProof(){for(const old of s.legacy){const raw=await document(c.DB,'aiSources/'+old.sourceId),ev=await evidence(old.sourceId);assert.equal(canonical(raw),old.recordHash);assert.equal(canonical(ev.items),old.itemsHash);assert.equal(raw.updateTime,old.updateTime);}}
+ try{
+  if(action==='before'){
+   assert.equal(s.status,'STARTED');const old=JSON.parse(fs.readFileSync('/Users/shum/Documents/Codex/2026-10-06/y/work/Aogaku-main-integration/build/production-phase5a/e2e.json'));assert.equal(old.syntheticOnly,true);
+   const prior=JSON.parse(fs.readFileSync(path.join(d.PREVIOUS_DIR,'e2e/registry.private.json')));assert.equal(prior.syntheticOnly,true);
+   s.legacy=[];for(const [kind,id]of [['ocr',old.sources.image.sourceId],['image-ai-v2',prior.sources.find(x=>x.key==='image-1').sourceId]]){const raw=await document(c.DB,'aiSources/'+id);assert.equal(raw.fields.ownerUserId.stringValue,owner.uid);assert.equal(raw.fields.status.stringValue,'ready');const ev=await evidence(id);assert(ev.items.every(x=>x.method===(kind==='ocr'?'vision_ocr':'multimodal_ai')));s.legacy.push({kind,sourceId:id,recordHash:canonical(raw),itemsHash:canonical(ev.items),updateTime:raw.updateTime});}
+   const id=old.context.classDocId;assert(/^\d{5}$/.test(id));const catalog=doc(await document('(default)','classes/'+id)),url=catalog.url||catalog.syllabusURL,year=Number(new URL(url).searchParams.get('YR'));assert(Number.isInteger(year)&&year>=2000&&year<=2100);
+   s.catalog={classDocId:id,year,syllabusUrl:url};s.context={classDocId:id,year,semester:old.context.semester,dayID:Math.floor(Date.now()/86400000),localCourseUUID:crypto.randomUUID(),occurrenceKey:'router-'+s.run};
+   s.defaultUsageBefore=await document('(default)','aiUsage/'+owner.uid);s.defaultPeriodsBefore=await d.read(db('(default)','aiUsage/'+owner.uid+'/periods?pageSize=100'));
+   for(const file of ['mixed.pdf','flow.png','text.png'])assert(fs.existsSync(path.join(DIR,file)));
+   fs.writeFileSync(path.join(DIR,'speech.txt'),'これは架空の講義です。観察、問い、仮説、実験、結論、結果の順番を確認します。図にない関係は追加しません。');
+   execFileSync('say',['-v','Kyoko','-f',path.join(DIR,'speech.txt'),'-o',path.join(DIR,'speech.aiff')]);execFileSync(require('../functions/node_modules/ffmpeg-static'),['-y','-i',path.join(DIR,'speech.aiff'),'-c:a','aac','-b:a','96k',path.join(DIR,'audio.m4a')],{stdio:'pipe'});
+   s.audioDurationSeconds=Number(execFileSync(require('../functions/node_modules/ffprobe-static').path,['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',path.join(DIR,'audio.m4a')],{encoding:'utf8'}));assert(s.audioDurationSeconds>0&&s.audioDurationSeconds<60);s.status='BASELINE_READY';save(s);console.log('Old OCR/image-ai-v2 read-only baselines and synthetic assets ready');return;
+  }
+  if(action==='gates'){
+   assert.equal(d.load('execution').status,'COHORT_AUDIT_PASS');const other=outsider(),checks=[];
+   for(const name of p.CALLABLES)for(const role of ['anonymous','nonpilot','pilot']){try{await call(name,null,role==='anonymous'?null:role==='pilot'?owner.token:other.idToken);throw Error('NULL_ACCEPTED');}catch(e){assert.equal(e.code,{anonymous:'UNAUTHENTICATED',nonpilot:'AI_INPUT_NOT_ENABLED',pilot:'INVALID_REQUEST'}[role]);checks.push({name,role,code:e.code});}}
+   d.save('auth-gates',{status:'PASS',checks});s.gates={status:'PASS',count:checks.length};save(s);console.log('27/27 live admission gates PASS; no fixture writes');return;
+  }
+  if(action==='inputs'){
+   assert.equal(s.status,'BASELINE_READY');assert.equal(d.load('execution').status,'DEPLOY_COMPLETE_E2E_PENDING');assert.equal(s.sources.length,0,'No fixture replay');
+   const cap=(await call('aiListSources',{context:s.context})).inputCapabilities;assert.equal(cap.image.pipelineVersion,'image-auto-v1');assert.equal(cap.pdf.pipelineVersion,'pdf-auto-v1');assert.equal(cap.image.fallback,false);
+   for(const key of ['pdf','image-text','image-flow','note','audio','image-retry']){
+    const type=key.startsWith('image')?'image':key,asset={pdf:'mixed.pdf','image-text':'text.png','image-flow':'flow.png',audio:'audio.m4a','image-retry':'text.png'}[key],bytes=asset?fs.readFileSync(path.join(DIR,asset)):null;
+    const data={clientRequestId:'router-'+s.run+'-'+key,type,title:'Synthetic Visual Router '+key,mime:{image:'image/png',pdf:'application/pdf',note:'text/plain',audio:'audio/mp4'}[type],context:s.context,...(bytes?{size:bytes.length}:{text:'架空の講義メモ。資料に書かれている根拠と出典を保存し、存在しない関係を追加せずに確認する。'}),...(type==='audio'?{durationSeconds:Math.ceil(s.audioDurationSeconds)}:{})};
+    const row={key,data,status:'CREATE_ATTEMPTED'};s.sources.push(row);save(s);let created=await call('aiCreateSource',data);row.sourceId=created.sourceId;row.status='CREATED';save(s);
+    if(key==='image-retry'){await assert.rejects(call('aiCompleteSource',{sourceId:created.sourceId}),e=>e.code==='UPLOAD_INCOMPLETE');created=await call('aiCreateSource',data);assert.equal(created.sourceId,row.sourceId);assert(created.upload);s.interruptedUploadRetry='PASS';save(s);}
+    if(bytes){const u=uploadTarget(created.upload.url,created.sourceId,owner.uid);row.status='UPLOAD_ATTEMPTED';save(s);const r=await fetch(u,{method:'PUT',redirect:'error',headers:created.upload.headers,body:bytes,signal:AbortSignal.timeout(120000)});assert.equal(r.status,200);row.status='UPLOADED';save(s);}
+    await call('aiCompleteSource',{sourceId:row.sourceId});const source=await ready(row.sourceId),ev=await evidence(row.sourceId);assert(ev.items.length);assert.equal(source.courseOfferingId,s.catalog.year+':'+s.catalog.classDocId);assert.equal(source.courseSnapshot.yearSource,'syllabus');assert.equal(source.courseSnapshot.syllabusUrl,s.catalog.syllabusUrl);assert.equal(source.sharingEnabled,false);assert.equal(source.knowledgeVisibility,'private');
+    const raw=await document(c.DB,'aiSources/'+row.sourceId),stored=doc(raw);assert.equal(stored.ownerUserId,owner.uid);assert.deepEqual(stored.recognition||null,source.recognition||null);assert.equal(await document('(default)','aiSources/'+row.sourceId),null);
+    const chunks=await d.read(db(c.DB,`aiSources/${row.sourceId}/runs/${stored.activeRun}/chunks?pageSize=100`));assert(!chunks.nextPageToken);assert(chunks.documents?.length);assert.equal((await d.read(db('(default)',`aiSources/${row.sourceId}/runs/${stored.activeRun}/chunks?pageSize=100`))).documents?.length||0,0);
+    const chunkItems=chunks.documents.map(doc);assert.deepEqual(chunkItems.map(x=>({text:x.text,method:x.method,locator:x.locator})),ev.items.map(x=>({text:x.text,method:x.method,locator:x.locator})));
+    const retrieval=await call('aiRetrieveContext',{courseOfferingId:source.courseOfferingId,purpose:'lecture_summary',maxCharacters:30000}),own=retrieval.items.filter(x=>x.sourceId===row.sourceId);assert(own.length);assert((await call('aiListSources',{context:s.context})).items.some(x=>x.sourceId===row.sourceId));
+    const objects=await d.read(`https://storage.googleapis.com/storage/v1/b/${c.B}/o?prefix=${encodeURIComponent(`ai-derived/${c.DB}/${owner.uid}/${row.sourceId}/`)}`);assert(!objects.nextPageToken);assert(objects.items?.length);
+    const trace=[];
+    if(['image','pdf'].includes(type)){
+     assert.equal(source.pipelineVersion,type==='pdf'?'pdf-auto-v1':'image-auto-v1');const pages=source.recognition.routing.pages;assert.equal(pages.length,type==='pdf'?3:1);
+     const expected=type==='pdf'?['native_text','vision_ocr','multimodal_ai']:[key==='image-flow'?'multimodal_ai':'vision_ocr'];assert.deepEqual(pages.map(x=>x.route),expected);
+     for(const [i,page]of pages.entries()){
+      const suffix=type==='pdf'?`pdf-auto-v1-page-${i+1}.json`:'image-auto-v1-final.json',name=objects.items.find(x=>x.name.endsWith('/'+suffix))?.name;assert(name);const checkpoint=await object(name,true),unit=checkpoint.unit;
+      const selected=ev.items.filter(x=>type==='image'||x.locator.pageNumber===i+1),selectedChunks=chunkItems.filter(x=>type==='image'||x.locator.pageNumber===i+1),selectedRetrieved=own.filter(x=>type==='image'||x.locator.pageNumber===i+1);
+      assert.equal(unit.method,page.route);assert.equal(reconstruct(selected),unit.text);assert.equal(reconstruct(selectedChunks),unit.text);assert.equal(reconstruct(selectedRetrieved),unit.text);
+      const probeSuffix=type==='pdf'?suffix.replace('.json','-ocr-probe.json'):'image-auto-v1-ocr-probe.json';
+      const probeName=objects.items.find(x=>x.name.endsWith('/'+probeSuffix))?.name,probe=probeName?await object(probeName,true):null;
+      if(page.route==='multimodal_ai'){assert.equal(page.provider,'groq');assert.equal(page.model,'qwen/qwen3.8-27b');assert(page.inputTokens>0&&page.outputTokens>0&&page.totalTokens>0);const price=require('../functions/lib/ai/pricing').RECOGNITION_PRICING.image;assert(Math.abs(page.aiCostUSD-(page.inputTokens*price.inputPricePerMillionTokens+page.outputTokens*price.outputPricePerMillionTokens)/1e6)<1e-12);assert.notEqual(unit.text,probe?.text);for(const label of ['Observation','Question','Hypothesis','Experiment','Conclusion','Result'])assert(unit.text.includes(label));assert(!/Result\s*(?:→|->|⇒|から)\s*Observation/i.test(unit.text),'Invented closing edge');assert(/→|↓|矢印|接続|connect|arrow/i.test(unit.text),'Missing visible relations');}
+      if(page.route==='native_text'){assert.equal(page.totalTokens,0);assert.equal(probe,null);const {openRouterPDF,analyzePDFPage}=require('../functions/lib/ai/visualExtraction'),pdf=await openRouterPDF(path.join(DIR,'mixed.pdf'));try{const pp=await pdf.doc.getPage(i+1),native=await analyzePDFPage(pp,pdf.OPS);assert.equal(unit.text,native.text.trim());pp.cleanup();}finally{await pdf.destroy();}}
+      trace.push({pageNumber:type==='pdf'?i+1:null,route:page.route,provider:page.provider,model:page.model,ocrProbe:probe?.text??null,finalText:unit.text,finalTextOrigin:'Installed parser publishes provider finalText only; persisted post-provider Unit checkpoint',unitText:unit.text,chunkText:reconstruct(selectedChunks),evidenceText:reconstruct(selected),retrieveContextText:reconstruct(selectedRetrieved),metadata:page});
+     }
+    }
+    if(type==='audio'){const m=source.recognition;assert.equal(m.model,'whisper-large-v3-turbo');assert.equal(m.inputTokens,null);assert.equal(m.totalTokens,null);assert(m.audioDurationSeconds>0&&m.processingMs>0);assert(Math.abs(m.estimatedCostUSD-m.billedAudioSeconds/3600*.04)<1e-12);assert(ev.items.every(x=>x.locator.endMs>x.locator.startMs));assert.equal(stored.originalHash,crypto.createHash('sha256').update(bytes).digest('hex'));assert.equal(await object(stored.storagePath,false,true),null);}
+    else if(bytes){assert.equal(Number((await object(stored.storagePath)).size),bytes.length);}
+    fs.writeFileSync(path.join(DIR,key+'-result.private.json'),JSON.stringify({source,evidence:ev,retrieval:own,trace},null,2),{mode:0o600});row.status='READY';s.results.push({key,status:'PASS',sourceId:row.sourceId,pipelineVersion:source.pipelineVersion,recognition:source.recognition||null,traceVerified:true});save(s);console.log(JSON.stringify({key,status:'PASS',pipelineVersion:source.pipelineVersion,routes:source.recognition?.routing?.pages.map(x=>x.route),tokens:source.recognition?.totalTokens,costUSD:source.recognition?.estimatedCostUSD}));
+   }
+   const note=s.sources.find(x=>x.key==='note');assert.equal((await call('aiCreateSource',note.data)).sourceId,note.sourceId);s.duplicate='PASS';await oldProof();s.legacyUnchanged=true;
+   assert.equal(canonical(await document('(default)','aiUsage/'+owner.uid)),canonical(s.defaultUsageBefore));assert.equal(canonical(await d.read(db('(default)','aiUsage/'+owner.uid+'/periods?pageSize=100'))),canonical(s.defaultPeriodsBefore));assert((await d.read(db(c.DB,'aiUsage/'+owner.uid+'/periods?pageSize=100'))).documents?.some(x=>x.fields.providerCalls));
+   const ui=s.results.map(row=>{const x=JSON.parse(fs.readFileSync(path.join(DIR,row.key+'-result.private.json')));return {key:row.key,evidence:{status:x.source.status,pipelineVersion:x.source.pipelineVersion,recognition:x.source.recognition,processingMs:x.source.processingMs,items:x.evidence.items.map(({chunkId,text,method,unitIndex,locator})=>({chunkId,text,method,unitIndex,locator}))},trace:x.trace.map(x=>({pageNumber:x.pageNumber,finalText:x.finalText}))};});
+   fs.mkdirSync(path.join(c.ROOT,'AogakuTests/DevFixtures'),{recursive:true});fs.writeFileSync(path.join(c.ROOT,'AogakuTests/DevFixtures/visual-router-production.json'),JSON.stringify(ui),{mode:0o600});s.status='INPUTS_PASS';save(s);console.log('6 synthetic inputs, duplicate/upload restart, legacy unchanged and named/default boundary PASS');return;
+  }
+  if(action==='permissions'){
+   assert.equal(s.status,'INPUTS_PASS');const other=outsider(),sourceId=s.sources.find(x=>x.key==='image-flow').sourceId,raw=doc(await document(c.DB,'aiSources/'+sourceId)).storagePath,checks=[];
+   for(const n of p.CALLABLES){await assert.rejects(call(n,null,other.idToken),e=>e.code==='AI_INPUT_NOT_ENABLED');checks.push({name:n,nonpilotDenied:true});}await assert.rejects(call('aiGetEvidence',{sourceId},other.idToken),e=>e.code==='AI_INPUT_NOT_ENABLED');
+   for(const [role,token]of [['anonymous',null],['pilot',owner.token],['nonpilot',other.idToken]])for(const [service,url,header]of [['Firestore',db(c.DB,'aiSources/'+sourceId),token?'Bearer '+token:null],['Storage',`https://firebasestorage.googleapis.com/v0/b/${c.B}/o/${encodeURIComponent(raw)}?alt=media`,token?'Firebase '+token:null]]){const r=await fetch(url,{headers:header?{Authorization:header}:{},signal:AbortSignal.timeout(45000)});assert.equal(r.status,403,service+' direct '+role);await r.body?.cancel();checks.push({role,service,status:403});}
+   s.permissions={status:'PASS',checks};s.status='PERMISSIONS_PASS';save(s);console.log('Nonpilot evidence/callables denied; 6/6 client direct DB/Storage denied');return;
+  }
+  assert.equal(s.status,'PERMISSIONS_PASS');assert.equal(s.disposableAuthCleanup?.status,'PASS');await oldProof();const snap=await d.snapshot();d.protectedCheck(d.load('baseline'),snap,d.load('execution'));d.save('e2e-final-protected',snap);s.status='PRODUCTION_VISUAL_ROUTER_E2E_PASS';save(s);console.log(s.status);
+ }catch(e){s.status='STOPPED';s.safeError=/^[A-Z0-9_]+$/.test(e.code||e.message)?e.code||e.message:e.name;save(s);console.error('SAFE STOP synthetic E2E '+s.safeError+'; no mutation or provider retry');process.exitCode=1;}
+}
+module.exports={reconstruct};if(require.main===module)main(process.argv[2]).catch(e=>{console.error('SAFE STOP '+e.name);process.exitCode=1});

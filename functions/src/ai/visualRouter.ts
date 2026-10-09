@@ -9,6 +9,8 @@ export interface VisualFeatures {
   drawingScore: number; blockDispersion: number; readingOrderPenalty: number;
   nonTextCoverage: number; lineScore: number; relationMark: boolean;
   ocrCharacterCount: number; ocrQuality: number; probeAvailable: boolean;
+  // Image-only geometry signal; absent for PDF and historical routing metadata.
+  connectorComponents?: number;
 }
 export interface RoutingDecision {
   route: VisualRoute; routingScore: number; routingReason: string[];
@@ -48,6 +50,9 @@ export function chooseVisualRoute(kind: "pdf" | "image", f: VisualFeatures): Rou
   let score = clamp(semanticImage * w.image + f.blockDispersion * w.dispersion + f.drawingScore * w.drawing +
     f.readingOrderPenalty * w.order + f.nonTextCoverage * w.nonText + f.lineScore * w.lines);
   const reasons: string[] = [];
+  if (kind === "image" && (f.connectorComponents ?? 0) > 0) {
+    score = Math.max(score, .60); reasons.push("raster_connectors_between_text");
+  }
   if (f.relationMark) { score = Math.max(score, .85); reasons.push("explicit_relation_marks"); }
   if (f.lineScore >= .5) { score = Math.max(score, .60); reasons.push("connectors_or_grid"); }
   if (f.drawingScore >= .5) { score = Math.max(score, .60); reasons.push("semantic_vector_drawing"); }
@@ -116,6 +121,54 @@ export function rasterFeatures(data: Uint8ClampedArray, width: number, height: n
     }
   }
   return {nonTextCoverage: clamp(other / Math.max(1, ink)), lineScore: clamp(lines / 4)};
+}
+
+/** Short raster connectors can disappear from OCR, and fall below long-stroke
+ * detection. Inspect only unrecognized ink between separated word boxes. This
+ * does not identify the relation or generate Evidence; it only routes to AI.
+ * The image analysis canvas is bounded to 640 pixels by the caller. */
+export function imageConnectorFeatures(data: Uint8ClampedArray, width: number, height: number, words: Box[]) {
+  const ink = new Uint8Array(width * height), seen = new Uint8Array(ink.length);
+  for (let i = 0; i < ink.length; i++) {
+    const o = i * 4;
+    ink[i] = Number(data[o + 3] > 80 && (.2126 * data[o] + .7152 * data[o + 1] + .0722 * data[o + 2]) < 205);
+  }
+  // Use the same padding as rasterFeatures, avoiding glyphs/punctuation within
+  // OCR words while retaining arrows omitted entirely by the OCR service.
+  for (const b of words) {
+    const x0 = Math.max(0, Math.floor((b.x - .003) * width)), y0 = Math.max(0, Math.floor((b.y - .003) * height));
+    const x1 = Math.min(width, Math.ceil((b.x + b.w + .003) * width)), y1 = Math.min(height, Math.ceil((b.y + b.h + .003) * height));
+    for (let y = y0; y < y1; y++) ink.fill(0, y * width + x0, y * width + x1);
+  }
+  const queue = new Int32Array(ink.length);
+  const minimum = Math.max(8, Math.round(Math.min(width, height) * .018));
+  let connectorComponents = 0;
+  for (let start = 0; start < ink.length; start++) {
+    if (!ink[start] || seen[start]) continue;
+    let head = 0, tail = 1, x0 = width, x1 = 0, y0 = height, y1 = 0;
+    queue[0] = start; seen[start] = 1;
+    while (head < tail) {
+      const at = queue[head++], x = at % width, y = Math.floor(at / width);
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || xx >= width || yy < 0 || yy >= height) continue;
+        const next = yy * width + xx;
+        if (ink[next] && !seen[next]) { seen[next] = 1; queue[tail++] = next; }
+      }
+    }
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    // Skip specks and filled glyph-like components. A thin or arrow-shaped
+    // component must also occupy a blank gap between two real text regions.
+    if (Math.max(w, h) < minimum || tail < 6 || tail / (w * h) > .70 || Math.max(w, h) / Math.min(w, h) < 1.5) continue;
+    const cx = (x0 + x1) / (2 * width), cy = (y0 + y1) / (2 * height);
+    const vertical = h >= w;
+    const near = words.filter(b => vertical ? cx >= b.x - .03 && cx <= b.x + b.w + .03 : cy >= b.y - .025 && cy <= b.y + b.h + .025);
+    const before = near.some(b => vertical ? b.y + b.h < y0 / height && y0 / height - b.y - b.h < .22 : b.x + b.w < x0 / width && x0 / width - b.x - b.w < .30);
+    const after = near.some(b => vertical ? b.y > (y1 + 1) / height && b.y - (y1 + 1) / height < .22 : b.x > (x1 + 1) / width && b.x - (x1 + 1) / width < .30);
+    if (before && after) connectorComponents++;
+  }
+  return {connectorComponents};
 }
 
 export function routedPage(decision: RoutingDecision, locator: {pageNumber?: number; imageIndex?: number}, ms: number,

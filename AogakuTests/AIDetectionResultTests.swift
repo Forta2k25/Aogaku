@@ -196,6 +196,8 @@ final class AIDetectionResultTests: XCTestCase {
         XCTAssertEqual(result.text, "[p.1]\n原文本文\n[p.2]\n循環の意味")
         XCTAssertTrue(result.routeSummary?.contains("本文抽出 1ページ / OCR 0 / AI 1") == true)
         XCTAssertTrue(result.routeDiagnostics?.contains("p.2 AI") == true)
+        XCTAssertTrue(result.routeDiagnostics?.contains("Route: multimodal_ai\nPipeline: pdf-auto-v1\nProvider: groq\nModel: qwen/qwen3.8-27b") == true)
+        XCTAssertEqual(result.pipelineLabel, "PDF自動ルーティング\nPipeline: pdf-auto-v1")
         XCTAssertTrue(result.costSentence().contains("OCR $0.001500"))
         let view = AIDetectionResultView(); view.show(result)
         XCTAssertTrue(view.displayedDetail.contains("Groq / qwen/qwen3.8-27b"))
@@ -239,4 +241,66 @@ final class AIDetectionResultTests: XCTestCase {
         XCTAssertTrue(result.costSentence().contains("$"))
     }
 
+    @MainActor func testGroundedDevFinalTextSurvivesEvidenceToDisplayedBody() throws {
+        struct Trace: Decodable { let pageNumber: Int; let finalText: String }
+        struct Fixture: Decodable { let evidence: AIEvidencePage; let trace: [Trace] }
+        guard let url = Bundle(for: Self.self).url(forResource: "evidence-adoption-dev", withExtension: "json") else {
+            throw XCTSkip("Fresh approved Dev adoption trace is private and optional")
+        }
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        let page = fixture.evidence
+        try AIImagePipeline.requireEvidence(pipelineVersion: page.pipelineVersion, recognition: page.recognition, chunks: page.items)
+        let result = AIDetectionResult(text: AIDetectionResult.cleanText(page.items, pageHeaders: true), recognition: page.recognition)
+        let view = AIDetectionResultView(); view.show(result)
+        XCTAssertEqual(view.displayedText, result.text)
+        XCTAssertEqual(view.displayedPipeline, "PDF自動ルーティング\nPipeline: pdf-auto-v1")
+        XCTAssertEqual(fixture.trace.map(\.pageNumber), [4, 15, 25, 27])
+        for trace in fixture.trace {
+            let chunks = page.items.filter { $0.locator.pageNumber == trace.pageNumber }
+            XCTAssertEqual(AIDetectionResult.cleanText(chunks), trace.finalText)
+            XCTAssertTrue(view.displayedText.contains("[p.\(trace.pageNumber)]\n" + trace.finalText))
+            let metadata = try XCTUnwrap(page.recognition?.routing?.pages.first { $0.pageNumber == trace.pageNumber })
+            XCTAssertEqual(metadata.route, "multimodal_ai")
+            XCTAssertEqual(metadata.provider, "groq")
+            XCTAssertEqual(metadata.model, "qwen/qwen3.8-27b")
+        }
+    }
+    @MainActor func testFreshProductionRouterFinalTextSurvivesToDisplayedBody() throws {
+        struct Trace: Decodable { let pageNumber: Int?; let finalText: String }
+        struct Fixture: Decodable { let key: String; let evidence: AIEvidencePage; let trace: [Trace] }
+        guard let url = Bundle(for: Self.self).url(forResource: "visual-router-production", withExtension: "json") else {
+            throw XCTSkip("Fresh production synthetic evidence fixture is private and optional")
+        }
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixtures.count, 6)
+        for fixture in fixtures {
+            let page = fixture.evidence
+            let result = AIDetectionResult(text: AIDetectionResult.cleanText(page.items, pageHeaders: true), recognition: page.recognition, pipelineVersion: page.pipelineVersion)
+            let view = AIDetectionResultView(); view.show(result)
+            XCTAssertEqual(view.displayedText, result.text)
+            XCTAssertTrue(view.displayedPipeline.contains("Pipeline: " + (page.pipelineVersion ?? "legacy")))
+            for trace in fixture.trace {
+                let chunks = page.items.filter { $0.locator.pageNumber == trace.pageNumber }
+                XCTAssertEqual(AIDetectionResult.cleanText(chunks), trace.finalText)
+                XCTAssertTrue(view.displayedText.contains(trace.finalText))
+            }
+            if fixture.key == "pdf" {
+                XCTAssertEqual(page.recognition?.routing?.pages.map(\.route), ["native_text", "vision_ocr", "multimodal_ai"])
+                XCTAssertEqual(view.displayedPipeline, "PDF自動ルーティング\nPipeline: pdf-auto-v1")
+            }
+            if fixture.key.hasPrefix("image") {
+                XCTAssertEqual(view.displayedPipeline, "画像自動ルーティング\nPipeline: image-auto-v1")
+            }
+        }
+    }
+    @MainActor func testPipelineLabelUsesMetadataAndNeverInventsVersionForLegacy() throws {
+        let legacy = AIDetectionResult(text: "旧OCR", method: "vision_ocr")
+        let view = AIDetectionResultView(); view.show(legacy)
+        XCTAssertEqual(view.displayedPipeline, "Pipeline: legacy")
+        let existing = AIDetectionResult(text: "既存AI", method: "multimodal_ai", pipelineVersion: "image-ai-v2")
+        view.show(existing); XCTAssertEqual(view.displayedPipeline, "Pipeline: image-ai-v2")
+        let auto = AIDetectionResult(text: "新画像", pipelineVersion: "image-auto-v1")
+        view.show(auto); XCTAssertEqual(view.displayedPipeline, "画像自動ルーティング\nPipeline: image-auto-v1")
+        view.clear(); XCTAssertEqual(view.displayedPipeline, "")
+    }
 }

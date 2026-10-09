@@ -8,7 +8,7 @@ const response=(body,status=200)=>new Response(JSON.stringify(body),{status});
 test('image original bytes -> AI-only text -> chunks, measured usage and pricing',async()=>{
  const calls=[];const provider=new GroqImageRecognition('test-only',async(url,options)=>{calls.push([url,options]);return response(calls.length===1?{data:[{id:model,active:true}]}:{model,usage:{prompt_tokens:2940,completion_tokens:417,total_tokens:3357},choices:[{finish_reason:'stop',message:{content:JSON.stringify({finalText:'親から子へ特徴が遺伝する。'})}}]});});
  const e=await provider.recognize(jpeg,'image/jpeg');assert.equal(e.units[0].text,'親から子へ特徴が遺伝する。');assert.equal(e.units[0].method,'multimodal_ai');assert.equal(e.raw,undefined);
- const request=JSON.parse(calls[1][1].body);assert.equal(request.model,model);assert.equal(request.reasoning_effort,'none');assert(request.messages[0].content[1].image_url.url.endsWith(jpeg.toString('base64')));assert(IMAGE_INSTRUCTIONS.includes('推測・補完しない'));
+ const request=JSON.parse(calls[1][1].body);assert.equal(request.model,model);assert.equal(request.reasoning_effort,'none');assert(request.messages[1].content[0].image_url.url.endsWith(jpeg.toString('base64')));assert(IMAGE_INSTRUCTIONS.includes('推測・補完しない'));
  assert.equal(e.recognition.totalTokens,3357);assert(Math.abs(e.recognition.estimatedCostUSD-.004020)<1e-12);assert.equal(chunksFor(e.units)[0].method,'multimodal_ai');
  assert(calls.every(c=>c[0].startsWith('https://api.groq.com/')));
 });
@@ -54,4 +54,15 @@ test('image AI checkpoint contract rejects old OCR and missing metadata without 
   await assert.rejects(extractImage('unused','image/jpeg','test-only',{alive:async()=>{},load:async key=>{assert.equal(key,'image-ai-v2');return cached;},save:async()=>assert.fail('No writes')},provider),e=>e.code==='IMAGE_PIPELINE_MISMATCH'&&e.retryable);
  }
  assert.equal(calls,0);
+});
+
+test('structured visible-only response publishes only readable finalText, never intermediate fields',async()=>{
+ let calls=0;const finalText='Observation → Question → Hypothesis → Experiment → Conclusion → Result の順に矢印で示されている。戻り矢印は確認できない。';
+ const p=new GroqImageRecognition('test-only',async(url,options)=>{
+  if(++calls===1)return response({data:[{id:model}]});
+  const sent=JSON.parse(options.body);assert.equal(sent.messages[0].role,'system');assert.equal(sent.messages[0].content,IMAGE_INSTRUCTIONS);assert.equal(sent.messages[1].role,'user');assert.equal(sent.messages[1].content.length,1);
+  return response({model,usage:{prompt_tokens:1000,completion_tokens:120,total_tokens:1120},choices:[{finish_reason:'stop',message:{content:JSON.stringify({visibleText:['Observation','Result'],visibleRelations:['Observation → Question'],description:'円形配置',uncertainty:['戻り矢印は確認できない'],finalText})}}]});
+ });
+ const e=await p.recognize(jpeg,'image/jpeg');assert.equal(e.units[0].text,finalText);assert.equal(e.raw,undefined);
+ assert(!JSON.stringify(chunksFor(e.units)).includes('visibleRelations'));assert.equal(e.recognition.totalTokens,1120);
 });

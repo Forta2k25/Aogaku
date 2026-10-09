@@ -20,9 +20,14 @@ test('Exact packaged provider/pricing is Qwen AI-only and Turbo audio time; OCR 
 test('Production target number, bucket, Release bundle and named DB are mandatory even for source-only changes',()=>{p.validateIdentity(p.TARGET);for(const [key,value]of [['projectId','forta-aogaku-dev'],['projectNumber','1064661805206'],['bucket','forta-aogaku-dev.firebasestorage.app'],['bundleId','com.forta2k25.Aogaku.dev'],['databaseId','(default)'],['region','us-central1']]){const identity={...p.TARGET,[key]:value};assert.throws(()=>p.validateSourcePatch(url,'PATCH',body,{...context,identity}));}});
 
 test('Gen2 issued staging storageSource may omit generation; other project/bad path/unuploaded objects reject',()=>{const storage={bucket:'gcf-v2-uploads-505828754933-asia-northeast1',object:'fresh.zip'};const c={...context,freshStorageSource:storage,issuedStorageSourceHash:require('node:crypto').createHash('sha256').update(JSON.stringify(storage)).digest('hex')};const b={name:before.name,buildConfig:{source:{storageSource:storage}}};p.validateSourcePatch(url,'PATCH',b,c);for(const change of [{bucket:'gcf-v2-uploads-1064661805206-asia-northeast1'},{object:'../wrong'},{generation:'invalid'}]){const s={...storage,...change};assert.throws(()=>p.validateSourcePatch(url,'PATCH',{name:before.name,buildConfig:{source:{storageSource:s}}},{...c,freshStorageSource:s,issuedStorageSourceHash:require('node:crypto').createHash('sha256').update(JSON.stringify(s)).digest('hex')}));}assert.throws(()=>p.validateSourcePatch(url,'PATCH',b,{...c,stagingUploaded:false}));});
-test('Current modules match their fresh review; archived AI-only approval cannot authorize Router',()=>{
+test('Archived approvals never authorize changed image routing modules; fresh review required',()=>{
  const routed=fs.readFileSync(path.join(__dirname,'../functions/src/ai/index.ts'),'utf8').includes('schemaVersion: 5');
  let packageDir=p.PACKAGE;
  if(routed){const next=require('./production_visual_router_review.cjs');next.contract();assert.throws(()=>p.verifyContract());packageDir=path.join(next.DIR,'package');}
- const files=p.inventory(packageDir);for(const [file,expected]of Object.entries(files)){if(!file.startsWith('lib/ai/'))continue;assert.equal(require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(__dirname,'../functions',file))).digest('hex'),expected);}
+ const files=p.inventory(packageDir),changed=[];for(const [file,expected]of Object.entries(files)){if(!file.startsWith('lib/ai/'))continue;const actual=require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(__dirname,'../functions',file))).digest('hex');if(actual!==expected)changed.push(file);}
+ // This image-only candidate is deliberately not approved by the completed
+ // ten-Function rollout artifact. Prove exactly its two modules differ; do not
+ // overwrite that artifact or treat it as authorization for a new PATCH.
+ if(changed.length){assert.deepEqual(changed.sort(),['lib/ai/visualExtraction.js','lib/ai/visualRouter.js']);assert.throws(()=>assert.deepEqual(p.inventory(path.join(__dirname,'../functions/lib/ai')),Object.fromEntries(Object.entries(files).filter(([f])=>f.startsWith('lib/ai/')).map(([f,h])=>[f.slice(7),h]))));}
+ else assert.deepEqual(changed,[]);
 });

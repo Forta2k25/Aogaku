@@ -1,0 +1,17 @@
+// Storage Rules
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // avatars/<uid>.jpg を許可（<uid>.jpg 全体を {file} で受ける）
+    match /avatars/{file} {
+      allow read:  if request.auth != null;
+      allow write: if request.auth != null
+                   && file == (request.auth.uid + '.jpg');  // 自分の <uid>.jpg のみ可
+    }
+
+    // AI access is through authenticated server APIs only.
+    match /ai-inputs/{path=**} { allow read, write: if false; }
+    match /ai-derived/{path=**} { allow read, write: if false; }
+  }
+}

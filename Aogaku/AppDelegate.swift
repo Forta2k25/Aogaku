@@ -17,7 +17,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        FirebaseApp.configure()
+        setupGlobalAppearance()
+        if AppBackend.isOffline { return true }
+        do { try AppBackend.configureFirebase() }
+        catch { AppBackend.configurationError = error.localizedDescription; return true }
         if let clientID = FirebaseApp.app()?.options.clientID {
             GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
         }
@@ -81,7 +84,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         // Called when a new scene session is being created.
         // Use this method to select a configuration to create the new scene with.
-        return UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
+        let configuration = UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
+        configuration.storyboard = nil
+        configuration.delegateClass = SceneDelegate.self
+        return configuration
     }
 
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
@@ -91,6 +97,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ app: UIApplication,
                      open url: URL,
                      options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+        guard !AppBackend.isOffline, AppBackend.configurationError == nil else { return false }
         if GIDSignIn.sharedInstance.handle(url) { return true }
         _ = DeepLinkRouter.handle(url, window: UIApplication.shared.windows.first)
         return true

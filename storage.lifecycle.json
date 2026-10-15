@@ -13,6 +13,20 @@
           ".m4a"
         ]
       }
+    },
+    {
+      "action": {
+        "type": "Delete"
+      },
+      "condition": {
+        "age": 1,
+        "matchesPrefix": [
+          "ai-inputs/"
+        ],
+        "matchesSuffix": [
+          "/audio/original.m4a"
+        ]
+      }
     }
   ]
 }

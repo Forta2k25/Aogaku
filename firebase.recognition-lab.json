@@ -1,0 +1,3 @@
+{
+  "functions": [{"source":"recognition-lab/functions","codebase":"recognition-lab","predeploy":["python3 \"$PROJECT_DIR/scripts/recognition_lab_dev.py\" check", "npm --prefix \"$RESOURCE_DIR\" run build"],"ignore":["node_modules",".git","test","*.log"]}]
+}

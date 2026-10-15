@@ -42,6 +42,7 @@ struct NoteRecordingResult {
 }
 
 /// 授業の録音。週の上限(180分)に達したら自動で止まる。
+@MainActor
 final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     static let shared = NoteRecorder()
 
@@ -55,8 +56,10 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     private var timer: Timer?
     private var committedAtStart: TimeInterval = 0
     private var tickCount = 0
+    private var startGeneration = 0
 
     /// ロック画面に出す授業名と回(録音を始める前に設定する)
+    var inputContext: AIInputContext?
     var activityCourseTitle = ""
     var activitySessionLabel = ""
 
@@ -86,6 +89,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     }
 
     func start(completion: @escaping (Result<Void, StartError>) -> Void) {
+        let generation = startGeneration
         guard NoteRecordingUsage.committedSeconds < NoteRecordingUsage.limitSeconds else {
             completion(.failure(.limitReached))
             return
@@ -93,6 +97,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self else { return }
+                guard self.startGeneration == generation else { completion(.failure(.failed)); return }
                 guard granted else {
                     completion(.failure(.permissionDenied))
                     return
@@ -122,6 +127,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
             let recorder = try AVAudioRecorder(url: url, settings: settings)
             recorder.delegate = self
             recorder.isMeteringEnabled = true
+            if let context = inputContext { try RecordingRecovery.begin(context: context, fileURL: url) }
             guard recorder.record() else { return false }
             self.recorder = recorder
             committedAtStart = NoteRecordingUsage.committedSeconds
@@ -129,7 +135,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
             startTimer()
             NoteRecordingActivityController.shared.start(
                 courseTitle: activityCourseTitle, sessionLabel: activitySessionLabel,
-                remainingSeconds: NoteRecordingUsage.limitSeconds - committedAtStart)
+                remainingSeconds: min(5399, NoteRecordingUsage.limitSeconds - committedAtStart))
             return true
         } catch {
             return false
@@ -138,7 +144,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
 
     private func startTimer() {
         timer?.invalidate()
-        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.timerFired() }
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in Task { @MainActor in self?.timerFired() } }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
@@ -156,7 +162,7 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
                 NoteRecordingUsage.committedSeconds = committedAtStart + recorder.currentTime
             }
         }
-        if remainingSeconds <= 0 {
+        if remainingSeconds <= 0 || recorder.currentTime >= 5399 {
             let result = stop()
             onAutoStopped?(result)
         }
@@ -181,7 +187,8 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
             NoteRecordingUsage.committedSeconds = committedAtStart
             return nil
         }
-        return NoteRecordingResult(url: url, duration: duration)
+        let savedURL = inputContext.flatMap { try? RecordingRecovery.finish(uid: $0.ownerUID) }
+        return NoteRecordingResult(url: savedURL ?? url, duration: duration)
     }
 
     @objc private func audioInterrupted(_ note: Notification) {
@@ -191,10 +198,23 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
         let result = stop()
         DispatchQueue.main.async { self.onAutoStopped?(result) }
     }
+    /// Stop without staging a new recording or invoking a callback that could retain attachments.
+    func discardForAccountDeletion(uid: String) {
+        guard inputContext?.ownerUID == uid else { return }
+        startGeneration += 1
+        let url = recorder?.url
+        recorder?.stop(); recorder = nil
+        timer?.invalidate(); timer = nil
+        onLevel = nil; onTick = nil; onAutoStopped = nil; inputContext = nil
+        NoteRecordingActivityController.shared.end()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if let url { try? FileManager.default.removeItem(at: url) }
+    }
 }
 
 // MARK: - 再生
 
+@MainActor
 final class NoteAudioPlayer: NSObject, AVAudioPlayerDelegate {
     static let shared = NoteAudioPlayer()
     private var player: AVAudioPlayer?

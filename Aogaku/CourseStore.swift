@@ -29,7 +29,13 @@ struct CourseStore {
 
     static func load() -> [Course] {
         guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
-        return (try? JSONDecoder().decode([Course].self, from: data)) ?? []
+        guard var courses = try? JSONDecoder().decode([Course].self, from: data) else { return [] }
+        var changed = false
+        for i in courses.indices where courses[i].localCourseUUID == nil {
+            courses[i].localCourseUUID = UUID().uuidString.lowercased(); changed = true
+        }
+        if changed { save(courses) }
+        return courses
     }
 
     static func save(_ courses: [Course]) {

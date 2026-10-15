@@ -1,0 +1,29 @@
+{
+  "functions": {
+    "source": "functions",
+    "predeploy": [
+      "python3 \"$PROJECT_DIR/scripts/check_firebase_deploy_target.py\" \"$GCLOUD_PROJECT\"",
+      "npm --prefix \"$RESOURCE_DIR\" run build"
+    ],
+    "ignore": [
+      "node_modules",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      "recovered",
+      "lib-recovered",
+      "test",
+      "tsconfig.recovered.json"
+    ]
+  },
+  "firestore": [
+    {
+      "database": "aogaku-ai",
+      "rules": "Config/AI/firestore.rules",
+      "indexes": "Config/AI/firestore.indexes.json",
+      "predeploy": [
+        "python3 \"$PROJECT_DIR/scripts/firebase_named_dev.py\" check"
+      ]
+    }
+  ]
+}

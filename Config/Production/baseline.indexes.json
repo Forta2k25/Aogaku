@@ -1,0 +1,128 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "classes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ngrams2",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "class_name",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "classes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "category",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "class_name",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "circle",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "campus",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "popularity",
+          "order": "DESCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "Friends",
+      "fieldPath": "friendUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "friends",
+      "fieldPath": "friendUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "incomingRequests",
+      "fieldPath": "senderUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "outgoingRequests",
+      "fieldPath": "targetUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "requestIncoming",
+      "fieldPath": "senderUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "requestOutgoing",
+      "fieldPath": "targetUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "requestsIncoming",
+      "fieldPath": "senderUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "requestsOutgoing",
+      "fieldPath": "targetUid",
+      "indexes": [
+        {
+          "queryScope": "COLLECTION_GROUP",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ]
+}

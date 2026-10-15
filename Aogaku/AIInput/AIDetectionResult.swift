@@ -14,14 +14,14 @@ enum AIImagePipeline {
         let image = (response["inputCapabilities"] as? [String: Any])?["image"] as? [String: Any]
         if image?["pipelineVersion"] as? String == "image-auto-v1" {
             guard image?["method"] as? String == "auto_route", image?["fallback"] as? Bool == false,
-                  image?["provider"] as? String == provider, image?["model"] as? String == model,
+                  isKnownPipeline(provider: image?["provider"] as? String ?? "", model: image?["model"] as? String ?? ""),
                   Set(image?["routes"] as? [String] ?? []) == Set(["vision_ocr", "multimodal_ai"]) else {
                 throw AIInputError.message("接続先の画像Router仕様が一致しません")
             }
             return
         }
         guard image?["pipelineVersion"] as? String == version,
-              image?["provider"] as? String == provider, image?["model"] as? String == model,
+              isKnownPipeline(provider: image?["provider"] as? String ?? "", model: image?["model"] as? String ?? ""),
               image?["method"] as? String == method, image?["fallback"] as? Bool == false else {
             throw AIInputError.message(unavailableMessage)
         }

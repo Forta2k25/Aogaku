@@ -485,11 +485,22 @@ final class CourseDetailViewController: UIViewController {
                 return try? await SourceIngestionService.shared.detectionResult(sourceId: measuredID, uid: uid)
             }()
             var reply: AIChatReply?
+            var firstTokenMs: Double?
+            // 待っている間の表示: まず「送っています」、少したったら「AIが読んでいます」。最初の文字が届いたら本文に切り替わる。
+            bubble.showProcess(steps: timeline.steps, live: inline.images.isEmpty ? "考えています…" : "写真をAIに送っています…")
+            let stageSteps = timeline.steps
+            let stageTask = inline.images.isEmpty ? nil : Task { @MainActor [weak bubble] in
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                if !Task.isCancelled { bubble?.showProcess(steps: stageSteps, live: "AIが写真を読んでいます…") }
+            }
+            defer { stageTask?.cancel() }
             // できた文字から順に受け取り、画面には打っているように出す。
             for try await event in SourceIngestionService.shared.chatReplyStream(uid: uid, remoteSourceIDs: remotes, mode: mode, turns: turns, images: inline.images) {
                 try Task.checkCancellation()
                 switch event {
-                case .delta(let part): bubble.appendStream(part)
+                case .delta(let part):
+                    if firstTokenMs == nil { firstTokenMs = timeline.totalMs; stageTask?.cancel() }
+                    bubble.appendStream(part)
                 case .final(let final): reply = final
                 }
             }
@@ -502,7 +513,7 @@ final class CourseDetailViewController: UIViewController {
                 detectMs: read?.latency?.totalProcessingMs ?? detect?.processingMs ?? read?.processingMs,
                 detectTokens: detect?.totalTokens, detectCostUSD: detect?.estimatedCostUSD,
                 replyMs: reply.recognition?.processingMs, replyTokens: reply.recognition?.totalTokens, replyCostUSD: reply.recognition?.estimatedCostUSD,
-                detail: read?.detail, totalMs: timeline.totalMs, steps: timeline.steps)
+                detail: read?.detail, firstTokenMs: firstTokenMs, totalMs: timeline.totalMs, steps: timeline.steps)
             try? store.addReply(AIStoredReply(id: UUID().uuidString, context: context, afterMessageID: id, text: reply.text, createdAt: Date(), metrics: metrics))
             bubble.completeStream(fullText: reply.text, metrics: metrics, usdJPY: AIReplyBubbleView.displayUSDJPY)
             refreshAISuggestions()

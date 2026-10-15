@@ -23,6 +23,8 @@ final class AIReplyBubbleView: UIView {
     private let retryButton = UIButton(type: .system)
     private let metaButton = UIButton(type: .system)
     private let detailLabel = UILabel()
+    // 最初の文字が出るまでの「骨組み」(灰色の線が脈打つ)。待っている間も、何かが進んでいる感じを出す
+    private let skeleton = UIStackView()
     // 追質問のボタン(返信の下に、横に並べる)
     private let suggestionScroll = UIScrollView()
     private let suggestionStack = UIStackView()
@@ -108,6 +110,20 @@ final class AIReplyBubbleView: UIView {
         detailLabel.textColor = .secondaryLabel
         detailLabel.numberOfLines = 0
 
+        skeleton.axis = .vertical
+        skeleton.spacing = 10
+        skeleton.alignment = .leading
+        skeleton.isHidden = true
+        for (index, fraction) in [1.0, 0.86, 0.58].enumerated() {
+            let bar = UIView()
+            bar.backgroundColor = .tertiarySystemFill
+            bar.layer.cornerRadius = 6
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            bar.heightAnchor.constraint(equalToConstant: 12).isActive = true
+            skeleton.addArrangedSubview(bar)
+            bar.widthAnchor.constraint(equalTo: skeleton.widthAnchor, multiplier: fraction).isActive = true
+            bar.tag = index
+        }
         suggestionScroll.showsHorizontalScrollIndicator = false
         suggestionScroll.isHidden = true
         suggestionScroll.translatesAutoresizingMaskIntoConstraints = false
@@ -123,7 +139,7 @@ final class AIReplyBubbleView: UIView {
             suggestionStack.heightAnchor.constraint(equalTo: suggestionScroll.frameLayoutGuide.heightAnchor),
             suggestionScroll.heightAnchor.constraint(equalToConstant: 32)
         ])
-        let column = UIStackView(arrangedSubviews: [header, stepsLabel, bodyView, retryButton, actionRow, suggestionScroll, metaButton, detailLabel])
+        let column = UIStackView(arrangedSubviews: [header, stepsLabel, skeleton, bodyView, retryButton, actionRow, suggestionScroll, metaButton, detailLabel])
         column.axis = .vertical
         column.spacing = 6
         column.alignment = .fill
@@ -152,6 +168,7 @@ final class AIReplyBubbleView: UIView {
         retryButton.isHidden = true; actionRow.isHidden = true; metaButton.isHidden = true; detailLabel.isHidden = true
         suggestionScroll.isHidden = true
         suggestionStack.arrangedSubviews.forEach { suggestionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
+        setSkeleton(false)
         detailVisible = false
     }
 
@@ -181,6 +198,23 @@ final class AIReplyBubbleView: UIView {
         headerStack.isHidden = false
         spinner.startAnimating()
         updateProcessUI()
+        setSkeleton(true)
+    }
+
+    /// 灰色の線を、ゆっくり脈打たせて出す/隠す。
+    private func setSkeleton(_ on: Bool) {
+        guard skeleton.isHidden == on else { return }
+        skeleton.isHidden = !on
+        for (index, bar) in skeleton.arrangedSubviews.enumerated() {
+            bar.layer.removeAnimation(forKey: "pulse")
+            guard on else { continue }
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 1.0; pulse.toValue = 0.35
+            pulse.duration = 0.9; pulse.autoreverses = true; pulse.repeatCount = .infinity
+            pulse.beginTime = CACurrentMediaTime() + Double(index) * 0.18
+            pulse.fillMode = .backwards
+            bar.layer.add(pulse, forKey: "pulse")
+        }
     }
 
     private func finishProcess(totalMs: Double?, collapse: Bool) {
@@ -209,7 +243,7 @@ final class AIReplyBubbleView: UIView {
         var lines = steps.map { "✓ \($0.title)  \(Self.seconds($0.ms))" }
         if let live = liveText { lines.append("… " + live) }
         stepsLabel.text = lines.joined(separator: "\n")
-        stepsLabel.isHidden = !stepsExpanded || lines.isEmpty
+        stepsLabel.isHidden = !stepsExpanded || steps.isEmpty   // 段階がまだ無いときは、上の1行と重複するので出さない
     }
 
     @objc private func toggleSteps() {
@@ -221,6 +255,7 @@ final class AIReplyBubbleView: UIView {
     // MARK: 本文
     func showError(_ text: String, retry: Bool) {
         resetBody()
+        setSkeleton(false)
         spinner.stopAnimating(); liveText = nil
         updateProcessUI()
         headerStack.isHidden = steps.isEmpty
@@ -232,13 +267,14 @@ final class AIReplyBubbleView: UIView {
 
     /// ストリーミングで届いた文字を足す。実際の表示は、打っているようなペースで進める。
     func appendStream(_ delta: String) {
-        if bodyView.isHidden { bodyView.isHidden = false; finishProcess(totalMs: nil, collapse: true); liveText = nil; spinner.stopAnimating(); updateProcessUI() }
+        if bodyView.isHidden { setSkeleton(false); bodyView.isHidden = false; finishProcess(totalMs: nil, collapse: true); liveText = nil; spinner.stopAnimating(); updateProcessUI() }
         typedSource.append(contentsOf: Array(delta))
         startTyping()
     }
 
     /// 返信が出そろった。全文に差し替えて、打ち終わったら、アイコンと「秒・token・料金」を出す。
     func completeStream(fullText: String, metrics: AIReplyMetrics?, usdJPY: Double?) {
+        setSkeleton(false)
         if bodyView.isHidden { bodyView.isHidden = false }
         typedSource = Array(fullText)
         streamFinished = true
@@ -268,8 +304,9 @@ final class AIReplyBubbleView: UIView {
     private func typeTick() {
         let backlog = typedSource.count - typedCount
         if backlog > 0 {
-            // 基本は1コマ3文字(約90文字/秒)。溜まったら速めて、遅れすぎないようにする。
-            typedCount += min(backlog, max(3, backlog / 40))
+            // 基本は1コマ3文字(約90文字/秒)。溜まったら速めて、表示が受信より0.4秒以上遅れないようにする
+            // (AIの返信は届くのが速いので、打つ演出のせいで待たされないように)。
+            typedCount += min(backlog, max(3, (backlog + 11) / 12))
             render(String(typedSource[0..<typedCount]), final: false)
             onContentGrow?()
         }
@@ -391,6 +428,7 @@ final class AIReplyBubbleView: UIView {
     /// 秒数は、メッセージを送ってから返答が出そろうまで。
     static func metaLine(_ m: AIReplyMetrics, usdJPY: Double?) -> String {
         var parts: [String] = []
+        if let first = m.firstTokenMs { parts.append("最初の文字まで" + seconds(first)) }
         if let ms = m.totalMs { parts.append("回答まで" + seconds(ms)) }
         else {
             if let ms = m.detectMs { parts.append("読み取り" + seconds(ms)) }

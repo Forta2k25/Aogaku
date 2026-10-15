@@ -238,6 +238,8 @@ struct AIReplyMetrics: Codable, Equatable {
     var replyTokens: Int? = nil
     var replyCostUSD: Double? = nil
     var detail: String? = nil
+    /// メッセージを送ってから、返信の最初の文字が出るまでの時間(体感の速さ)。
+    var firstTokenMs: Double? = nil
     /// メッセージを送ってから返答が出そろうまでの時間。
     var totalMs: Double? = nil
     var steps: [AIReplyStep]? = nil

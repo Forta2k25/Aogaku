@@ -66,6 +66,10 @@ final class NoteLibraryViewController: UIViewController {
         separator.backgroundColor = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
 
+        // pickButton の制約が closeButton を参照するため、先に同じ階層へ入れておく
+        // (入れる前に制約を有効化すると「共通の親がない」でクラッシュする)。
+        bar.addSubview(closeButton)
+
         if onPick != nil {
             var cfg = UIButton.Configuration.filled()
             cfg.title = "追加"
@@ -85,7 +89,6 @@ final class NoteLibraryViewController: UIViewController {
         }
         view.addSubview(collectionView)
         view.addSubview(bar)
-        bar.addSubview(closeButton)
         bar.addSubview(titleLabel)
         bar.addSubview(separator)
 

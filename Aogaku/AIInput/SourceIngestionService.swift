@@ -17,6 +17,10 @@ final class SourceIngestionService {
     private var blockedUIDs: Set<String> = []
     private var runners: [String: Task<Void, Never>] = [:]
     private var uploadSessions: [String: URLSession] = [:]
+    /// 画像AIの対応確認(aiListSources)に合格したアカウント。アプリ起動中は再確認しない(送信ごとの往復を1回減らす)。
+    private var verifiedImageCapabilityUIDs: Set<String> = []
+    /// aiChat がサーバーに無いときのエラー文。画面側はこれを見て「読み取り結果の表示」に切り替える。
+    static let chatUnsupportedMessage = "AIとの会話は、サーバーが未対応のため今は使えません"
     private lazy var functions = Functions.functions(region: "asia-northeast1")
 
     func store(uid: String) throws -> LocalSourceStore {
@@ -49,31 +53,44 @@ final class SourceIngestionService {
         if AppBackend.isOffline { throw AIInputError.message("ローカル確認モードではクラウド通信を行いません") }
         let result: HTTPSCallableResult
         do { result = try await functions.httpsCallable(name).call(data) }
-        catch {
-            let details = (error as NSError).userInfo[FunctionsErrorDetailsKey] as? [String: Any]
-            switch details?["code"] as? String {
-            case "SHARING_DISABLED": throw AIInputError.message("授業内共有は現在利用できません。資料は自分のみで利用できます")
-            case "LINKING_DISABLED": throw AIInputError.message("授業IDの確定は現在利用できません。保存済みの資料はそのまま利用できます")
-            case "AI_INPUT_NOT_ENABLED": throw AIInputError.message("AIへの資料追加は現在準備中です")
-            case "ACCOUNT_DELETED", "ACCOUNT_DISABLED": throw AIInputError.message("このアカウントで資料を利用できません。ログイン状態を確認してください")
-            case "MEMBERSHIP_NOT_VERIFIED": throw AIInputError.message("この授業の参加確認が必要です。今は自分のみで利用できます")
-            case "RATE_LIMITED": throw AIInputError.message("短時間の利用上限に達しました。少し待って再試行してください")
-            case "APP_CHECK_REQUIRED": throw AIInputError.message("アプリの確認ができませんでした。最新版で再試行してください")
-            case "QUOTA_EXCEEDED", "PROVIDER_QUOTA_EXCEEDED": throw AIInputError.message("資料の利用上限に達しました。時間を置いて再試行してください")
-            case "RETRY_LIMIT", "RAW_EXPIRED": throw AIInputError.message("この資料の再試行期限または回数を超えました。資料を追加し直してください")
-            case "SOURCE_DELETED": throw AIInputError.message("この資料は削除済みです")
-            case "CLASS_NOT_FOUND": throw AIInputError.message("授業の情報を確認できませんでした。授業を開き直してください")
-            case "INVALID_CLASS": throw AIInputError.message("授業IDは先頭の0を含む5桁の数字で指定してください")
-            case "CLASS_YEAR_MISMATCH": throw AIInputError.message("資料の年度と現在の授業年度が異なります。過年度の紐付けは変更しません")
-            case "OFFERING_UNRESOLVED", "LOCAL_COURSE_UUID_REQUIRED": throw AIInputError.message("授業IDと年度を確認してください。未解決の資料は自分のみで利用できます")
-            case "OFFERING_ALREADY_LINKED": throw AIInputError.message("この資料は既に授業へ紐付けられています")
-            case "SOURCE_BUSY": throw AIInputError.message("処理が終わってから授業IDを確定してください")
-            default: throw error
-            }
-        }
+        catch { throw mapFunctionsError(error, name: name) }
         try checkUser(uid)
         guard let object = result.data as? [String: Any] else { throw AIInputError.message("サーバーの応答を読み取れませんでした") }
         return object
+    }
+    /// サーバーのエラーを、利用者に分かる文言に直す(通常の呼び出しとストリーミングの両方で使う)。
+    func mapFunctionsError(_ error: Error, name: String) -> Error {
+        let details = (error as NSError).userInfo[FunctionsErrorDetailsKey] as? [String: Any]
+        switch details?["code"] as? String {
+        case "SHARING_DISABLED": return AIInputError.message("授業内共有は現在利用できません。資料は自分のみで利用できます")
+        case "LINKING_DISABLED": return AIInputError.message("授業IDの確定は現在利用できません。保存済みの資料はそのまま利用できます")
+        case "AI_INPUT_NOT_ENABLED": return AIInputError.message("AIへの資料追加は現在準備中です")
+        case "ACCOUNT_DELETED", "ACCOUNT_DISABLED": return AIInputError.message("このアカウントで資料を利用できません。ログイン状態を確認してください")
+        case "MEMBERSHIP_NOT_VERIFIED": return AIInputError.message("この授業の参加確認が必要です。今は自分のみで利用できます")
+        case "RATE_LIMITED": return AIInputError.message("短時間の利用上限に達しました。少し待って再試行してください")
+        case "APP_CHECK_REQUIRED": return AIInputError.message("アプリの確認ができませんでした。最新版で再試行してください")
+        case "QUOTA_EXCEEDED", "PROVIDER_QUOTA_EXCEEDED": return AIInputError.message("資料の利用上限に達しました。時間を置いて再試行してください")
+        case "RETRY_LIMIT", "RAW_EXPIRED": return AIInputError.message("この資料の再試行期限または回数を超えました。資料を追加し直してください")
+        case "SOURCE_DELETED": return AIInputError.message("この資料は削除済みです")
+        case "CLASS_NOT_FOUND": return AIInputError.message("授業の情報を確認できませんでした。授業を開き直してください")
+        case "INVALID_CLASS": return AIInputError.message("授業IDは先頭の0を含む5桁の数字で指定してください")
+        case "CLASS_YEAR_MISMATCH": return AIInputError.message("資料の年度と現在の授業年度が異なります。過年度の紐付けは変更しません")
+        case "OFFERING_UNRESOLVED", "LOCAL_COURSE_UUID_REQUIRED": return AIInputError.message("授業IDと年度を確認してください。未解決の資料は自分のみで利用できます")
+        case "OFFERING_ALREADY_LINKED": return AIInputError.message("この資料は既に授業へ紐付けられています")
+        case "SOURCE_BUSY": return AIInputError.message("処理が終わってから授業IDを確定してください")
+        case "CHAT_QUOTA_EXCEEDED": return AIInputError.message("今日のAIとの会話の上限に達しました。明日また使えます")
+        case "CHAT_RATE_LIMIT": return AIInputError.message("AIが混み合っています。少し待ってもう一度お試しください")
+        case "CHAT_UNAVAILABLE", "CHAT_INVALID_RESULT", "CHAT_MODEL_MISMATCH": return AIInputError.message("AIの返信を作れませんでした。もう一度お試しください")
+        case "CHAT_NOT_CONFIGURED": return AIInputError.message("AIとの会話は現在準備中です")
+        case "CHAT_TURN_TOO_LONG": return AIInputError.message("メッセージが長すぎます。短くして送ってください")
+        default:
+            // 関数が本番にまだ無い(未デプロイ)ときは、原因が分かる文言にする。
+            if (error as NSError).domain == FunctionsErrorDomain, (error as NSError).code == FunctionsErrorCode.notFound.rawValue, name == "aiChat" {
+                return AIInputError.message(Self.chatUnsupportedMessage)
+            }
+            return error
+        }
+    
     }
     private func decode(_ value: [String: Any]) throws -> AIRemoteSource {
         try JSONDecoder().decode(AIRemoteSource.self, from: JSONSerialization.data(withJSONObject: value))
@@ -109,10 +126,11 @@ final class SourceIngestionService {
         var source = item
         source.localState = "uploading"; source.lastError = nil; try store.update(source); notify()
         let readyImage = source.kind == .image && ["ready", "partial_ready"].contains(source.remote?.status ?? "")
-        if source.kind == .image && !readyImage {
+        if source.kind == .image && !readyImage && !verifiedImageCapabilityUIDs.contains(source.context.ownerUID) {
             // Check BEFORE create/upload: old production APIs silently ignore new client fields.
             let capabilities = try await call("aiListSources", data: ["context": source.context.request, "onlyLecture": true], uid: source.context.ownerUID)
             try AIImagePipeline.requireCapability(capabilities)
+            verifiedImageCapabilityUIDs.insert(source.context.ownerUID)
         }
         let response = try await call("aiCreateSource", data: source.createRequest, uid: source.context.ownerUID)
         source.remote = try decode(response)
@@ -251,6 +269,40 @@ final class SourceIngestionService {
         }
         return AIDetectionResult(previewProgress: preview ? page?.progress : nil, latency: page?.latency ?? latest.latency, text: AIDetectionResult.cleanText(chunks, pageHeaders: latest.pipelineVersion == "pdf-auto-v1"), recognition: page?.recognition ?? latest.recognition,
             processingMs: page?.processingMs, method: page?.status == "partial_ready" && latest.sourceType == "audio" ? "partial_audio" : chunks.first?.method, pipelineVersion: page?.pipelineVersion ?? latest.pipelineVersion)
+    }
+    /// AIの返信を作る。`intro` は資料だけを送ったとき(AIが内容を伝えて、次にできることを聞く)、`reply` は質問への返事。
+    /// 会話の中身はサーバーに保存されない(端末の台帳にだけ残る)。
+    func chatReply(uid: String, remoteSourceIDs: [String], mode: String, turns: [AIChatTurn]) async throws -> AIChatReply {
+        let data: [String: Any] = ["mode": mode, "sourceIds": remoteSourceIDs, "turns": turns.map { ["role": $0.role, "text": $0.text] }]
+        let value = try await call("aiChat", data: data, uid: uid)
+        return try JSONDecoder().decode(AIChatReply.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+    /// AIの返信をストリーミングで受け取る。できた文字から順に `.delta` が届き、最後に `.final`(全文と実測の token・料金)が届く。
+    /// サーバーが古くてストリーミングに未対応でも、`.final` だけが届くので同じように扱える。
+    func chatReplyStream(uid: String, remoteSourceIDs: [String], mode: String, turns: [AIChatTurn]) -> AsyncThrowingStream<AIChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { @MainActor in
+                do {
+                    try self.checkUser(uid)
+                    if AppBackend.isOffline { throw AIInputError.message("ローカル確認モードではクラウド通信を行いません") }
+                    let callable: Callable<AIChatRequest, StreamResponse<AIChatDelta, AIChatReply>> = self.functions.httpsCallable("aiChat")
+                    let request = AIChatRequest(mode: mode, sourceIds: remoteSourceIDs, turns: turns)
+                    for try await item in try callable.stream(request) {
+                        try self.checkUser(uid)
+                        switch item {
+                        case .message(let part): continuation.yield(.delta(part.delta))
+                        case .result(let reply): continuation.yield(.final(reply))
+                        }
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: self.mapFunctionsError(error, name: "aiChat"))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
     func retrieveContext(uid: String, courseOfferingId: String, lectureIds: [String], query: String, purpose: String = "question", after: String? = nil) async throws -> [String: Any] {
         var data: [String: Any] = ["courseOfferingId": courseOfferingId, "lectureIds": lectureIds, "query": query, "purpose": purpose, "maxCharacters": 12000]

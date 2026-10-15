@@ -141,9 +141,9 @@ final class CourseDetailViewController: UIViewController {
     private let noteChatActionRow = UIStackView()
     private let noteChatGuideContainer = UIView()
     private let noteChatMessageStack = UIStackView()
-    private let detectionView = AIDetectionResultView()
-    private var detectionSourceID: String?
-    private var detectionTask: Task<Void, Never>?
+    /// AIの返信(チャットの吹き出し)。メッセージIDごとに1つ。処理中のジョブも持つ。
+    private var aiReplyBubbles: [String: AIReplyBubbleView] = [:]
+    private var aiReplyTasks: [String: Task<Void, Never>] = [:]
     private var aiSessionTask: Task<Void, Never>?
 
     private let noteChatTextField = UITextField()
@@ -220,92 +220,282 @@ final class CourseDetailViewController: UIViewController {
                 let uid = try await AIInputSession.shared.ensure()
                 try Task.checkCancellation()
                 guard let self, AppBackend.currentUID == uid else { return }
-                self.aiSessionUID = uid; self.restoreAIInput(); self.updateDetectionSources(restart: true)
+                self.aiSessionUID = uid; self.restoreAIInput(); self.resumePendingAIReply()
             } catch {
                 guard let self, !Task.isCancelled else { return }
-                self.detectionView.showState("接続を準備できませんでした。通信を確認し、授業を開き直してください。")
+                if self.noteShowsChatDetail { self.showNoteAlert(title: "AIに接続できませんでした", message: "通信を確認し、授業を開き直してください。") }
             }
             self?.aiSessionTask = nil
         }
     }
-    @objc private func aiDetectionSourcesChanged() { updateDetectionSources(restart: false) }
-    private func updateDetectionSources(restart: Bool) {
-        guard noteShowsChatDetail, let context = try? aiContext(day: noteChatCurrentSession),
-              let store = try? SourceIngestionService.shared.store(uid: context.ownerUID) else { return }
-        let sources = store.ledger.sources.filter {
-            $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID && $0.submitted && !$0.wantsDeletion &&
-                !["deleted", "deleting"].contains($0.remote?.status ?? "")
-        }.sorted { $0.createdAt < $1.createdAt }
-        let prior = detectionSourceID
-        if !sources.contains(where: { $0.id == detectionSourceID }) { detectionSourceID = sources.last?.id }
-        guard let source = sources.first(where: { $0.id == detectionSourceID }) else { detectionTask?.cancel(); detectionView.clear(); return }
-        detectionView.selector.setTitle(source.title + (sources.count > 1 ? " ▾" : ""), for: .normal)
-        detectionView.selector.menu = UIMenu(children: sources.map { item in
-            UIAction(title: item.title, state: item.id == source.id ? .on : .off) { [weak self] _ in
-                self?.detectionSourceID = item.id; self?.updateDetectionSources(restart: true)
-            }
-        })
-        if restart || prior != detectionSourceID || detectionTask == nil { beginDetection(source, uid: context.ownerUID) }
-    }
-    private func beginDetection(_ selected: AIStoredSource, uid: String) {
-        detectionTask?.cancel()
-        if AppBackend.isOffline {
-            detectionView.showState("ローカル確認モードです。本文の解析はDev接続で確認できます。")
-            return
-        }
-        detectionView.showState("AIが資料を読み取っています…")
-        let localID = selected.id
-        detectionTask = Task { [weak self] in
-            let deadline = Date().addingTimeInterval(360)
-            var poll = 0, previewCount = 0
-            while !Task.isCancelled && Date() < deadline {
-                guard let self, self.detectionSourceID == localID, AppBackend.currentUID == uid,
-                      let store = try? SourceIngestionService.shared.store(uid: uid),
-                      let item = store.ledger.sources.first(where: { $0.id == localID }), !item.wantsDeletion else { return }
-                if item.localState == "failed" || item.remote?.status == "failed" {
-                    self.detectionView.showState("読み取りに失敗しました。再試行してください。", retry: true); return
-                }
-                do {
-                    if let remote = item.remote, ["ready", "partial_ready"].contains(remote.status) {
-                        let result = try await SourceIngestionService.shared.detectionResult(sourceId: remote.sourceId, uid: uid)
-                        try Task.checkCancellation()
-                        guard self.detectionSourceID == localID, AppBackend.currentUID == uid else { return }
-                        self.detectionView.show(result)
-                        return
-                    }
-                    await SourceIngestionService.shared.refreshSource(localID: localID, uid: uid)
-                    let refreshed = try SourceIngestionService.shared.store(uid: uid).ledger.sources.first { $0.id == localID }?.remote
-                    // A ready refresh must be consumed immediately, not after another fixed sleep.
-                    if let refreshed, ["ready", "partial_ready"].contains(refreshed.status) { continue }
-                    if let refreshed, refreshed.pipelineVersion == "pdf-auto-v1", let progress = refreshed.previewProgress,
-                       progress.completed > previewCount, refreshed.previewVersion != nil {
-                        do {
-                            let result = try await SourceIngestionService.shared.detectionResult(sourceId: refreshed.sourceId, uid: uid, preview: true)
-                            try Task.checkCancellation()
-                            guard self.detectionSourceID == localID, AppBackend.currentUID == uid else { return }
-                            self.detectionView.show(result); previewCount = progress.completed
-                        } catch {
-                            if Task.isCancelled { return }
-                            // Preview is optional. A concurrent final publication is read next poll.
-                        }
-                    }
-                    poll += 1
-                    let interval: UInt64 = poll < 10 ? 1_000_000_000 : poll < 30 ? 2_000_000_000 : 3_000_000_000
-                    try await Task.sleep(nanoseconds: interval)
-                } catch {
-                    if Task.isCancelled { return }
-                    self.detectionView.showState("本文を読み込めませんでした。再試行してください。", retry: true); return
-                }
-            }
-            if !Task.isCancelled { self?.detectionView.showState("解析を続けています。後でもう一度確認してください。", retry: true) }
+    @objc private func aiDetectionSourcesChanged() { resumePendingAIReply() }
+    /// 資料やメッセージが変わったとき、返信待ちのまま止まっているものがあれば再開する(アプリの再起動後など)。
+    private func updateDetectionSources(restart: Bool) { resumePendingAIReply() }
+
+    // MARK: AIの返信(チャット)
+    private func aiNoun(_ kind: AISourceKind) -> String {
+        switch kind {
+        case .pdf: return "資料"
+        case .audio: return "録音"
+        default: return "画像"
         }
     }
-    @objc private func retryDetection() {
+    /// 送信 → 読み取り → 整理、の段階に合わせた待ち時間の文言。
+    private func aiProgressText(_ item: AIStoredSource) -> String {
+        let noun = aiNoun(item.kind)
+        if ["draft", "queued", "uploading"].contains(item.localState) { return "\(noun)を送信しています…" }
+        switch item.remote?.status ?? "" {
+        case "extracting": return "\(noun)を読み取っています…"
+        case "indexing": return "読み取った内容を整えています…"
+        default: return "\(noun)を読み取る準備をしています…"
+        }
+    }
+
+    /// 同じ送信でまとめて保存されたメッセージ(画像+文章など)。最後のメッセージから、10秒以内に続くものを遡る。
+    private func trailingBatch(_ snapshots: [AIChatSnapshot]) -> [AIChatSnapshot] {
+        guard var previous = snapshots.last else { return [] }
+        var batch = [previous]
+        for snapshot in snapshots.dropLast().reversed() {
+            guard previous.createdAt.timeIntervalSince(snapshot.createdAt) < 10 else { break }
+            batch.insert(snapshot, at: 0); previous = snapshot
+        }
+        return batch
+    }
+
+    /// 返信待ちのまま止まっている最後の送信があれば、返信を作り直す。
+    private func resumePendingAIReply() {
+        guard noteShowsChatDetail, let uid = aiSessionUID, let context = try? aiContext(day: noteChatCurrentSession),
+              let store = try? SourceIngestionService.shared.store(uid: uid),
+              let anchor = store.messages(context: context).last, ["image", "pdf", "audio", "question"].contains(anchor.kind),
+              aiReplyTasks[anchor.id] == nil, store.reply(afterMessageID: anchor.id) == nil else { return }
+        startAIReply(afterMessageID: anchor.id)
+    }
+
+    /// 返信の吹き出し。処理中・保存済みのどちらも、メッセージIDごとに1つを使い回す。
+    private func aiReplyBubble(forMessage id: String) -> AIReplyBubbleView? {
+        if let existing = aiReplyBubbles[id] { return existing }
         guard let uid = aiSessionUID, let store = try? SourceIngestionService.shared.store(uid: uid),
-              let item = store.ledger.sources.first(where: { $0.id == detectionSourceID }) else { return }
+              let reply = store.reply(afterMessageID: id) else { return nil }
+        let bubble = makeAIReplyBubble(id)
+        bubble.showReply(reply.text, metrics: reply.metrics, usdJPY: AIReplyBubbleView.displayUSDJPY)
+        aiReplyBubbles[id] = bubble
+        return bubble
+    }
+    private func makeAIReplyBubble(_ id: String) -> AIReplyBubbleView {
+        let bubble = AIReplyBubbleView()
+        bubble.onRetry = { [weak self] in self?.retryAIReply(afterMessageID: id) }
+        return bubble
+    }
+    /// メッセージ列のうち、AIの返信を除いた「ユーザーのメッセージ」の行。
+    private func noteChatMessageRows() -> [UIView] {
+        noteChatMessageStack.arrangedSubviews.filter { !($0 is AIReplyBubbleView) }
+    }
+    /// 返信の吹き出しを、対応するメッセージの直後に置く(すでに置いてあれば何もしない)。
+    private func placeAIReplyBubble(_ bubble: AIReplyBubbleView, afterMessage id: String) {
+        guard noteShowsChatDetail, bubble.superview == nil,
+              let index = (aiMessageIDs[noteChatCurrentSession] ?? []).firstIndex(of: id) else { return }
+        let rows = noteChatMessageRows()
+        guard rows.indices.contains(index), let at = noteChatMessageStack.arrangedSubviews.firstIndex(of: rows[index]) else { return }
+        noteChatMessageStack.insertArrangedSubview(bubble, at: at + 1)
+        scrollNoteChatToBottom(animated: true)
+    }
+    /// 吹き出し列を作り直す。各メッセージの直後に、そのメッセージへのAIの返信を挟む。
+    private func rebuildNoteChatStack(session: Int) {
+        noteChatMessageStack.arrangedSubviews.forEach {
+            noteChatMessageStack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        let messages = noteChatMessagesBySession[session] ?? []
+        let ids = aiMessageIDs[session] ?? []
+        for (index, message) in messages.enumerated() {
+            noteChatMessageStack.addArrangedSubview(makeNoteChatBubble(message))
+            if ids.indices.contains(index), let reply = aiReplyBubble(forMessage: ids[index]) {
+                noteChatMessageStack.addArrangedSubview(reply)
+            }
+        }
+    }
+
+    /// 送信したメッセージへのAIの返信を作る(資料の読み取りを待つ → サーバーのAIに会話を作らせる → 吹き出しに出して保存)。
+    private func startAIReply(afterMessageID id: String) {
+        guard aiReplyTasks[id] == nil, let uid = aiSessionUID, let context = try? aiContext(day: noteChatCurrentSession),
+              let store = try? SourceIngestionService.shared.store(uid: uid), store.reply(afterMessageID: id) == nil else { return }
+        let batch = trailingBatch(store.messages(context: context))
+        guard batch.last?.id == id else { return }
+        let bubble = aiReplyBubbles[id] ?? makeAIReplyBubble(id)
+        aiReplyBubbles[id] = bubble
+        bubble.showProcess(steps: [], live: "考えています…")
+        bubble.onContentGrow = { [weak self, weak bubble] in
+            // 一番下にいるときだけ、文章が伸びるのに合わせて画面を追従させる。
+            guard let self, let bubble, self.noteChatMessageStack.arrangedSubviews.last === bubble else { return }
+            self.scrollNoteChatToBottom(animated: false)
+        }
+        placeAIReplyBubble(bubble, afterMessage: id)
+        SourceIngestionService.shared.resume(uid: uid)
+        aiReplyTasks[id] = Task { [weak self] in
+            await self?.runAIReply(anchorID: id, batch: batch, uid: uid, context: context)
+            self?.aiReplyTasks[id] = nil
+        }
+    }
+
+    private func retryAIReply(afterMessageID id: String) {
+        guard let uid = aiSessionUID, let store = try? SourceIngestionService.shared.store(uid: uid) else { return }
+        aiReplyTasks[id]?.cancel(); aiReplyTasks[id] = nil
+        try? store.removeReply(afterMessageID: id)   // 「もう一度生成」のとき、保存済みの返信を作り直す
         Task { [weak self] in
-            do { try await SourceIngestionService.shared.retry(item); self?.updateDetectionSources(restart: true) }
-            catch { self?.detectionView.showState(error.localizedDescription, retry: true) }
+            // 読み取りに失敗した資料は、先にもう一度送る。
+            for source in store.ledger.sources where source.localState == "failed" || source.remote?.status == "failed" {
+                if source.submitted, !source.wantsDeletion { try? await SourceIngestionService.shared.retry(source) }
+            }
+            self?.startAIReply(afterMessageID: id)
+        }
+    }
+
+    /// 返信のための会話履歴。質問は user、これまでのAIの返信は assistant として、送った順に並べる。
+    private func aiChatTurns(store: LocalSourceStore, context: AIInputContext) -> [AIChatTurn] {
+        var turns: [AIChatTurn] = []
+        for snapshot in store.messages(context: context) {
+            if snapshot.kind == "question", let text = snapshot.text, !text.isEmpty { turns.append(AIChatTurn(role: "user", text: text)) }
+            if let reply = store.reply(afterMessageID: snapshot.id) {
+                if turns.last?.role != "user" { turns.append(AIChatTurn(role: "user", text: "(資料を送りました)")) }
+                turns.append(AIChatTurn(role: "assistant", text: reply.text))
+            }
+        }
+        return Array(turns.suffix(10))
+    }
+
+    /// 「思考プロセス」の記録。段階(送信・読み取り・返信の作成)ごとに、かかった時間を残す。
+    private struct AIReplyTimeline {
+        let startedAt: Date
+        private(set) var steps: [AIReplyStep] = []
+        private var current: (title: String, start: Date)?
+        init(startedAt: Date) { self.startedAt = startedAt }
+        var currentTitle: String? { current?.title }
+        mutating func enter(_ title: String) {
+            if current?.title == title { return }
+            close(); current = (title, Date())
+        }
+        mutating func close() {
+            guard let c = current else { return }
+            steps.append(AIReplyStep(title: c.title, ms: Date().timeIntervalSince(c.start) * 1000)); current = nil
+        }
+        var totalMs: Double { Date().timeIntervalSince(startedAt) * 1000 }
+    }
+
+    /// 送った資料がすべて読み取り済みになるまで待つ。段階が変わるたびに、思考プロセスを更新する。
+    private func awaitSourcesReady(localIDs: [String], uid: String, bubble: AIReplyBubbleView, timeline: inout AIReplyTimeline) async throws {
+        let deadline = Date().addingTimeInterval(360)
+        while Date() < deadline {
+            try Task.checkCancellation()
+            let store = try SourceIngestionService.shared.store(uid: uid)
+            var pending: [AIStoredSource] = []
+            for localID in localIDs {
+                guard let item = store.ledger.sources.first(where: { $0.id == localID }), !item.wantsDeletion else { throw AIInputError.message("資料が見つかりません") }
+                if item.localState == "failed" || item.remote?.status == "failed" { throw AIInputError.message("読み取りに失敗しました") }
+                if !["ready", "partial_ready"].contains(item.remote?.status ?? "") { pending.append(item) }
+            }
+            guard let first = pending.first else { return }
+            let sending = ["draft", "queued", "uploading"].contains(first.localState)
+            timeline.enter(sending ? "送信" : "読み取り")
+            bubble.showProcess(steps: timeline.steps, live: aiProgressText(first))
+            for item in pending where item.localState == "uploaded" { await SourceIngestionService.shared.refreshSource(localID: item.id, uid: uid) }
+            // サーバーの1分あたり120回の上限に収まるよう、待つ資料が多いほど間隔をあける。
+            let interval = max(0.5, 0.6 * Double(pending.count))
+            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        }
+        throw AIInputError.message("読み取りに時間がかかっています。後でもう一度お試しください")
+    }
+
+    private func runAIReply(anchorID id: String, batch: [AIChatSnapshot], uid: String, context: AIInputContext) async {
+        guard let bubble = aiReplyBubbles[id] else { return }
+        // 秒数は「メッセージを送ってから」。再起動後の再開などで古すぎるときは、いまから数える。
+        let anchorDate = batch.last?.createdAt ?? Date()
+        var timeline = AIReplyTimeline(startedAt: Date().timeIntervalSince(anchorDate) < 600 ? anchorDate : Date())
+        do {
+            if AppBackend.isOffline {
+                timeline.enter("返信を作成")
+                bubble.showProcess(steps: timeline.steps, live: "考えています…")
+                try await Task.sleep(nanoseconds: 800_000_000)
+                timeline.close()
+                bubble.completeStream(fullText: "(ローカル確認用の返信です)画像を読み取りました。要約しますか? それとも授業ノートにまとめますか?",
+                                      metrics: AIReplyMetrics(totalMs: timeline.totalMs, steps: timeline.steps), usdJPY: nil)
+                return
+            }
+            let batchSourceIDs = batch.flatMap(\.sourceIDs)
+            try await awaitSourcesReady(localIDs: batchSourceIDs, uid: uid, bubble: bubble, timeline: &timeline)
+            try Task.checkCancellation()
+            let store = try SourceIngestionService.shared.store(uid: uid)
+            // 会話に使う資料: この授業回の読み取り済みの資料(新しい順に最大8件)。
+            let remotes = store.ledger.sources.filter {
+                $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID && $0.submitted && !$0.wantsDeletion &&
+                    ["ready", "partial_ready"].contains($0.remote?.status ?? "")
+            }.sorted { $0.createdAt < $1.createdAt }.suffix(8).compactMap { $0.remote?.sourceId }
+            let hasQuestion = batch.contains { $0.kind == "question" && !($0.text ?? "").isEmpty }
+            let mode = hasQuestion ? "reply" : "intro"
+            let turns = mode == "intro" ? [] : aiChatTurns(store: store, context: context)
+            timeline.enter("返信を作成")
+            bubble.showProcess(steps: timeline.steps, live: "考えています…")
+            // 読み取りの実績(token・料金)は、返信と並行して取得する。
+            let measuredID = batchSourceIDs.compactMap { sourceID in store.ledger.sources.first { $0.id == sourceID }?.remote?.sourceId }.last
+            async let detection: AIDetectionResult? = {
+                guard let measuredID else { return nil }
+                return try? await SourceIngestionService.shared.detectionResult(sourceId: measuredID, uid: uid)
+            }()
+            var reply: AIChatReply?
+            // できた文字から順に受け取り、画面には打っているように出す。
+            for try await event in SourceIngestionService.shared.chatReplyStream(uid: uid, remoteSourceIDs: remotes, mode: mode, turns: turns) {
+                try Task.checkCancellation()
+                switch event {
+                case .delta(let part): bubble.appendStream(part)
+                case .final(let final): reply = final
+                }
+            }
+            guard let reply else { throw AIInputError.message("返信を受け取れませんでした。もう一度お試しください") }
+            timeline.close()
+            let read = await detection
+            try Task.checkCancellation()
+            let detect = read?.recognition
+            let metrics = AIReplyMetrics(
+                detectMs: read?.latency?.totalProcessingMs ?? detect?.processingMs ?? read?.processingMs,
+                detectTokens: detect?.totalTokens, detectCostUSD: detect?.estimatedCostUSD,
+                replyMs: reply.recognition?.processingMs, replyTokens: reply.recognition?.totalTokens, replyCostUSD: reply.recognition?.estimatedCostUSD,
+                detail: read?.detail, totalMs: timeline.totalMs, steps: timeline.steps)
+            try? store.addReply(AIStoredReply(id: UUID().uuidString, context: context, afterMessageID: id, text: reply.text, createdAt: Date(), metrics: metrics))
+            bubble.completeStream(fullText: reply.text, metrics: metrics, usdJPY: AIReplyBubbleView.displayUSDJPY)
+        } catch {
+            if Task.isCancelled || error is CancellationError { return }
+            let message = (error as? AIInputError)?.errorDescription
+            if message == SourceIngestionService.chatUnsupportedMessage {
+                await showAIReadoutFallback(anchorID: id, batch: batch, uid: uid, bubble: bubble, totalMs: timeline.totalMs)
+            } else {
+                bubble.showError(message ?? "返信を作れませんでした。", retry: true)
+            }
+        }
+    }
+
+    /// サーバーが会話に未対応のあいだは、これまでどおり読み取った内容(と秒・token・料金)を表示する。返信としては保存しない。
+    private func showAIReadoutFallback(anchorID id: String, batch: [AIChatSnapshot], uid: String, bubble: AIReplyBubbleView, totalMs: Double) async {
+        guard let store = try? SourceIngestionService.shared.store(uid: uid),
+              let remoteID = batch.flatMap(\.sourceIDs).compactMap({ sid in store.ledger.sources.first { $0.id == sid }?.remote?.sourceId }).last,
+              let read = try? await SourceIngestionService.shared.detectionResult(sourceId: remoteID, uid: uid), !Task.isCancelled else {
+            bubble.showError("AIとの会話は、サーバーが未対応のため今は使えません。", retry: false); return
+        }
+        let detect = read.recognition
+        let metrics = AIReplyMetrics(detectMs: read.latency?.totalProcessingMs ?? detect?.processingMs ?? read.processingMs,
+                                     detectTokens: detect?.totalTokens, detectCostUSD: detect?.estimatedCostUSD, detail: read.detail, totalMs: totalMs)
+        let text = read.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        bubble.showReply("AIとの会話はまだ準備中です。読み取れた内容を表示します。\n\n" + (text.isEmpty ? "(文字は読み取れませんでした)" : String(text.prefix(1500))),
+                         metrics: metrics, usdJPY: AIReplyBubbleView.displayUSDJPY)
+        scrollToAIReply(bubble)
+    }
+
+    /// 返信が一番下にあるときだけ、一番下までスクロールする。文字の折り返しで高さが変わった後にも、もう一度合わせる
+    /// (最初の1回だけだと、下の「秒・token・料金」の行が入力欄に隠れる)。
+    private func scrollToAIReply(_ bubble: AIReplyBubbleView) {
+        guard noteChatMessageStack.arrangedSubviews.last === bubble else { return }
+        scrollNoteChatToBottom(animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak bubble] in
+            guard let self, let bubble, self.noteChatMessageStack.arrangedSubviews.last === bubble else { return }
+            self.scrollNoteChatToBottom(animated: true)
         }
     }
     private func stageAIPhoto(_ photo: CapturedPhoto, context: AIInputContext) throws -> AIStoredSource {
@@ -354,9 +544,8 @@ final class CourseDetailViewController: UIViewController {
             }
             loadNoteSessionCards()
             if noteShowsChatDetail {
-                noteChatMessageStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
                 let messages = noteChatMessagesBySession[noteChatCurrentSession] ?? []
-                for message in messages { noteChatMessageStack.addArrangedSubview(makeNoteChatBubble(message)) }
+                rebuildNoteChatStack(session: noteChatCurrentSession)
                 noteChatMessageStack.isHidden = messages.isEmpty
                 syncNoteChatActions()
                 reloadNoteChatAttachments(animated: false)
@@ -366,7 +555,7 @@ final class CourseDetailViewController: UIViewController {
     @objc private func eraseDeletedAIAccount(_ notification: Notification) {
         guard let uid = notification.object as? String, aiSessionUID == uid else { return }
         aiSessionUID = nil
-        aiSessionTask?.cancel(); detectionTask?.cancel(); detectionSourceID = nil; detectionView.clear()
+        aiSessionTask?.cancel(); aiReplyTasks.values.forEach { $0.cancel() }; aiReplyTasks.removeAll(); aiReplyBubbles.removeAll()
         noteChatMessagesBySession.removeAll(); aiMessageIDs.removeAll(); noteLastSentAt.removeAll()
         noteChatPendingBySession.values.forEach { $0.items.removeAll() }
         noteChatPendingBySession.removeAll(); noteChatPendingRecordingsBySession.removeAll()
@@ -638,7 +827,7 @@ final class CourseDetailViewController: UIViewController {
         super.viewWillDisappear(animated)
         view.endEditing(true)
         if isBeingDismissed || isMovingFromParent {
-            detectionTask?.cancel(); aiSessionTask?.cancel()
+            aiReplyTasks.values.forEach { $0.cancel() }; aiReplyTasks.removeAll(); aiSessionTask?.cancel()
             // 授業詳細を閉じたら、録音と再生も止める(使用時間は加算される)
             noteRecordingStopped(NoteRecorder.shared.stop(), auto: false)
             NoteAudioPlayer.shared.stop()
@@ -2676,8 +2865,6 @@ final class CourseDetailViewController: UIViewController {
         noteChatMessageStack.spacing = 12
         noteChatMessageStack.isHidden = true
         noteChatContainer.addArrangedSubview(noteChatMessageStack)
-        noteChatContainer.addArrangedSubview(detectionView)
-        detectionView.retryButton.addTarget(self, action: #selector(retryDetection), for: .touchUpInside)
 
         let inputBar = makeNoteInputBar()
         inputBar.isHidden = true
@@ -2754,10 +2941,10 @@ final class CourseDetailViewController: UIViewController {
             noteChatPendingRecordingsBySession[noteChatCurrentSession] = []
             reloadNoteChatAttachments(animated: true)
             appendNoteChatMessages(messages)
-            detectionSourceID = snapshots.flatMap(\.sourceIDs).last
-            updateDetectionSources(restart: true)
             updateNoteChatSendButton(animated: true)
             SourceIngestionService.shared.resume(uid: context.ownerUID)
+            // 送ったメッセージへのAIの返信を作る(資料なら読み取りを待ってから、会話として返す)。
+            if let anchor = snapshots.last, ["image", "pdf", "audio", "question"].contains(anchor.kind) { startAIReply(afterMessageID: anchor.id) }
         } catch { showNoteAlert(title: "保存できませんでした", message: error.localizedDescription) }
     }
 
@@ -2802,7 +2989,7 @@ final class CourseDetailViewController: UIViewController {
             current = candidate.superview
         }
         guard let row = current else { return nil }
-        return noteChatMessageStack.arrangedSubviews.firstIndex(of: row)
+        return noteChatMessageRows().firstIndex(of: row)
     }
 
     private func setNoteChatEditing(_ index: Int?) {
@@ -2835,11 +3022,7 @@ final class CourseDetailViewController: UIViewController {
         guard messages.indices.contains(index) else { return }
         messages.removeSubrange(index...)
         noteChatMessagesBySession[noteChatCurrentSession] = messages
-        noteChatMessageStack.arrangedSubviews.forEach {
-            noteChatMessageStack.removeArrangedSubview($0)
-            $0.removeFromSuperview()
-        }
-        for message in messages { noteChatMessageStack.addArrangedSubview(makeNoteChatBubble(message)) }
+        rebuildNoteChatStack(session: noteChatCurrentSession)
         if messages.isEmpty {
             noteChatMessageStack.isHidden = true
             noteChatActionRow.isHidden = false
@@ -4283,11 +4466,8 @@ final class CourseDetailViewController: UIViewController {
         updateTitleSubtitle(animated: false)
         if noteChatEditingIndex != nil { setNoteChatEditing(nil) }
         reloadNoteChatAttachments(animated: false)
-        noteChatMessageStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let messages = noteChatMessagesBySession[session] ?? []
-        for message in messages {
-            noteChatMessageStack.addArrangedSubview(makeNoteChatBubble(message))
-        }
+        rebuildNoteChatStack(session: session)
         let isEmpty = messages.isEmpty
         noteChatMessageStack.alpha = 1
         noteChatMessageStack.isHidden = isEmpty
@@ -4303,7 +4483,7 @@ final class CourseDetailViewController: UIViewController {
         noteChatActionsCompact = !isEmpty
         noteChatMorphing = false
         showNoteChatDetail(true)
-        detectionSourceID = nil; updateDetectionSources(restart: true)
+        resumePendingAIReply()
     }
 
     /// チャット表示中は、緑の帯に「第N回授業 · 9/29 火」を小さく出す(どの回のチャットか分かるように)。
@@ -6286,6 +6466,7 @@ extension CourseDetailViewController: UIDocumentPickerDelegate {
                 try store.submit(context: context, snapshots: [AIChatSnapshot(id: UUID().uuidString, context: context, kind: "pdf", text: nil, sourceIDs: [source.id], createdAt: Date())])
             }
             restoreAIInput(); SourceIngestionService.shared.resume(uid: context.ownerUID)
+            resumePendingAIReply()   // PDFを送ったら、AIが内容を伝えて何をするか聞く
         } catch { showNoteAlert(title: "PDFを保存できませんでした", message: error.localizedDescription) }
     }
 }

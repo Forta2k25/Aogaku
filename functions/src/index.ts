@@ -157,4 +157,4 @@ export const onIncomingRequestDeleted = functions
 
 
 export {aiCreateSource, aiCompleteSource, aiGetSource, aiListSources, aiRetrySource, aiUpdateSource,
-  aiDeleteSource, aiGetEvidence, aiRetrieveContext, aiLinkSourceOffering, aiProcessSource, aiReconcileInputs, aiRejectLateUpload} from "./ai";
+  aiDeleteSource, aiGetEvidence, aiRetrieveContext, aiChat, aiLinkSourceOffering, aiProcessSource, aiReconcileInputs, aiRejectLateUpload} from "./ai";

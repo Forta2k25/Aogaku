@@ -1,5 +1,7 @@
 import Foundation
 import CryptoKit
+import ImageIO
+import UniformTypeIdentifiers
 
 /// All mutations are serialized on the main actor. Media is stored separately from the atomic ledger.
 @MainActor
@@ -9,6 +11,8 @@ final class LocalSourceStore {
         var sources: [AIStoredSource] = []
         var messages: [AIChatSnapshot] = []
         var offeringBindings: [String: AICourseSnapshot]? = nil
+        /// AIの返信。後から足した項目なので任意(以前のledgerもそのまま読める)。
+        var replies: [AIStoredReply]? = nil
     }
     private let root: URL
     private let uid: String
@@ -54,12 +58,15 @@ final class LocalSourceStore {
                data: Data? = nil, fileURL: URL? = nil, text: String? = nil, duration: TimeInterval? = nil) throws -> AIStoredSource {
         try requireActive()
         guard context.ownerUID == uid else { throw AIInputError.message("アカウントが変わりました。画面を開き直してください") }
-        let contents = try data ?? fileURL.map { try Data(contentsOf: $0, options: .mappedIfSafe) } ?? Data((text ?? "").utf8)
+        let original = try data ?? fileURL.map { try Data(contentsOf: $0, options: .mappedIfSafe) } ?? Data((text ?? "").utf8)
+        // 画像は送信用に縮小して再圧縮する(サーバーは長辺1800pxまでしか使わない。元のままだと回線で長く待つ)。
+        // 重複判定のチェックサムは元の画像のまま保つ(下書きの保持・重複検出が元データ基準のため)。
+        let contents = kind == .image ? Self.compressedForUpload(original) : original
         let maximum = kind == .audio ? 100 * 1024 * 1024 : kind == .pdf ? 20 * 1024 * 1024 : kind == .image ? 10 * 1024 * 1024 : 80000
         guard !contents.isEmpty, contents.count <= maximum else { throw AIInputError.message("資料のサイズが上限を超えているか、内容が空です") }
         if kind == .note, (text ?? "").utf16.count > 20000 { throw AIInputError.message("メモは2万文字以内にしてください") }
         if kind == .audio, !(1...5400).contains(duration ?? 0) { throw AIInputError.message("録音は1秒以上90分以内にしてください") }
-        let checksum = SHA256.hash(data: contents).map { String(format: "%02x", $0) }.joined()
+        let checksum = SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined()
         if let existing = ledger.sources.first(where: { !$0.submitted && !$0.wantsDeletion && $0.context == context && $0.checksum == checksum && $0.kind == kind }) { return existing }
         let identifier = UUID().uuidString
         let ext = kind == .image ? "jpg" : kind == .audio ? "m4a" : "pdf"
@@ -72,6 +79,19 @@ final class LocalSourceStore {
         do { try commit(value) } catch { if let name { try? FileManager.default.removeItem(at: root.appendingPathComponent(name)) }; throw error }
         return source
     }
+    /// 長辺2400px・画質0.8のJPEGに縮小する。すでに小さい/変換できないときは元のまま返す。
+    static func compressedForUpload(_ data: Data, maxPixel: CGFloat = 2400, quality: CGFloat = 0.8) -> Data {
+        guard data.count > 600_000, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return data }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: maxPixel]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return data }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else { return data }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination), output.length < data.count else { return data }
+        return output as Data
+    }
     func update(_ source: AIStoredSource) throws {
         guard source.context.ownerUID == uid, let i = ledger.sources.firstIndex(where: { $0.id == source.id }) else { throw AIInputError.message("保存した資料が見つかりません") }
         guard source.context == ledger.sources[i].context, source.courseSnapshot == ledger.sources[i].courseSnapshot else {
@@ -83,13 +103,38 @@ final class LocalSourceStore {
         guard context.ownerUID == uid, snapshots.allSatisfy({ sameSession($0.context, context) }) else { throw AIInputError.message("保存先が一致しません") }
         var value = ledger
         if let messageID, let start = value.messages.firstIndex(where: { $0.id == messageID && sameSession($0.context, context) }) {
-            for i in start..<value.messages.count where sameSession(value.messages[i].context, context) { value.messages[i].hidden = true }
+            var hiddenIDs = Set<String>()
+            for i in start..<value.messages.count where sameSession(value.messages[i].context, context) {
+                value.messages[i].hidden = true; hiddenIDs.insert(value.messages[i].id)
+            }
+            // 編集で消えたメッセージへのAI返信も一緒に消す。
+            if var replies = value.replies {
+                for i in replies.indices where hiddenIDs.contains(replies[i].afterMessageID) { replies[i].hidden = true }
+                value.replies = replies
+            }
         }
         for sourceID in snapshots.flatMap(\.sourceIDs) {
             guard let i = value.sources.firstIndex(where: { $0.id == sourceID && sameSession($0.context, context) && !$0.wantsDeletion }) else { throw AIInputError.message("添付資料が見つかりません") }
             if !value.sources[i].submitted { value.sources[i].submitted = true; value.sources[i].localState = "queued" }
         }
         value.messages.append(contentsOf: snapshots); try commit(value)
+    }
+    /// AIの返信を保存する。同じメッセージへの返信は、新しいもので置き換える(再試行)。
+    func addReply(_ reply: AIStoredReply) throws {
+        guard reply.context.ownerUID == uid else { throw AIInputError.message("アカウントが変わりました。画面を開き直してください") }
+        var value = ledger
+        var replies = (value.replies ?? []).filter { $0.afterMessageID != reply.afterMessageID }
+        replies.append(reply)
+        value.replies = replies; try commit(value)
+    }
+    /// 「もう一度生成」のために、保存済みの返信を消す。
+    func removeReply(afterMessageID id: String) throws {
+        var value = ledger
+        value.replies = (value.replies ?? []).filter { $0.afterMessageID != id }
+        try commit(value)
+    }
+    func reply(afterMessageID id: String) -> AIStoredReply? {
+        ledger.replies?.first { $0.afterMessageID == id && !$0.hidden }
     }
     func discard(_ sourceID: String) throws {
         guard let source = ledger.sources.first(where: { $0.id == sourceID }) else { return }

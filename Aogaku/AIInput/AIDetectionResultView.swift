@@ -7,6 +7,8 @@ final class AIDetectionResultView: UIStackView {
     private let body = UITextView(), detail = UILabel(), pipeline = UILabel(), tokens = UILabel(), cost = UILabel(), routes = UILabel(), diagnostics = UITextView()
     let selector = UIButton(type: .system), retryButton = UIButton(type: .system)
     private let metadataButton = UIButton(type: .system)
+    /// false のときは内容だけ更新し、画面には出さない(チャットの吹き出しに置き換えた画面用)。
+    var isInlineCard = true
     override init(frame: CGRect) {
         super.init(frame: frame); axis = .vertical; spacing = 9; isHidden = true
         isLayoutMarginsRelativeArrangement = true; layoutMargins = UIEdgeInsets(top: 16, left: 14, bottom: 16, right: 14)
@@ -32,10 +34,10 @@ final class AIDetectionResultView: UIStackView {
     }
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func showState(_ text: String, retry: Bool = false) {
-        isHidden = false; body.text = text; detail.text = nil; pipeline.text = nil; tokens.text = nil; cost.text = nil; routes.text = nil; diagnostics.text = nil; diagnostics.isHidden = true; metadataButton.isHidden = true; retryButton.isHidden = !retry
+        isHidden = !isInlineCard; body.text = text; detail.text = nil; pipeline.text = nil; tokens.text = nil; cost.text = nil; routes.text = nil; diagnostics.text = nil; diagnostics.isHidden = true; metadataButton.isHidden = true; retryButton.isHidden = !retry
     }
     func show(_ result: AIDetectionResult) {
-        isHidden = false; body.text = result.text; detail.text = result.previewProgress == nil ? result.detail : "処理中。完了したページの本文を先に表示しています。"; pipeline.text = result.pipelineLabel; tokens.text = result.previewProgress == nil ? result.tokenSentence : "全体のusage / costは解析完了後に表示します。"
+        isHidden = !isInlineCard; body.text = result.text; detail.text = result.previewProgress == nil ? result.detail : "処理中。完了したページの本文を先に表示しています。"; pipeline.text = result.pipelineLabel; tokens.text = result.previewProgress == nil ? result.tokenSentence : "全体のusage / costは解析完了後に表示します。"
         // Optional display-only Remote Config rate; no fixed FX value or server billing conversion.
         let rate = AppBackend.isOffline ? nil : RemoteConfig.remoteConfig()["ai_recognition_usd_jpy"].numberValue.doubleValue
         cost.text = result.previewProgress == nil ? result.costSentence(usdJPY: rate) : nil

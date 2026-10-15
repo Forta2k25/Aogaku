@@ -191,6 +191,63 @@ struct AIChatSnapshot: Codable, Identifiable {
     var hidden = false
 }
 
+/// サーバー(aiChat)へ渡す会話の1ターン。role は "user" / "assistant"。
+struct AIChatTurn: Codable, Equatable, Sendable {
+    let role: String
+    let text: String
+}
+
+/// aiChat の応答。token・料金はサーバーが実測値から計算したもの(アプリ側で推定しない)。
+struct AIChatReply: Decodable, Sendable {
+    let text: String
+    let recognition: AIRecognitionMetadata?
+    let sourceCount: Int?
+}
+
+/// aiChat へ送る内容。
+struct AIChatRequest: Encodable, Sendable {
+    let mode: String
+    let sourceIds: [String]
+    let turns: [AIChatTurn]
+}
+/// ストリーミングで届く、できたところまでの文字。
+struct AIChatDelta: Decodable, Sendable { let delta: String }
+enum AIChatEvent: Sendable {
+    case delta(String)
+    case final(AIChatReply)
+}
+
+/// 「思考プロセス」の1段階(送信・読み取り・返信の作成など)と、かかった時間。
+struct AIReplyStep: Codable, Equatable {
+    var title: String
+    var ms: Double
+}
+
+/// 返信の下に出す「秒・token・料金」。読み取り(資料の認識)と返信(会話生成)を分けて持つ。
+struct AIReplyMetrics: Codable, Equatable {
+    var detectMs: Double? = nil
+    var detectTokens: Int? = nil
+    var detectCostUSD: Double? = nil
+    var replyMs: Double? = nil
+    var replyTokens: Int? = nil
+    var replyCostUSD: Double? = nil
+    var detail: String? = nil
+    /// メッセージを送ってから返答が出そろうまでの時間。
+    var totalMs: Double? = nil
+    var steps: [AIReplyStep]? = nil
+}
+
+/// チャットに残すAIの返信。どのメッセージ(AIChatSnapshot.id)への返信かを持ち、その直後に表示する。
+struct AIStoredReply: Codable, Identifiable {
+    let id: String
+    let context: AIInputContext
+    let afterMessageID: String
+    let text: String
+    let createdAt: Date
+    var metrics: AIReplyMetrics? = nil
+    var hidden = false
+}
+
 enum AIInputError: LocalizedError {
     case message(String)
     var errorDescription: String? { if case .message(let message) = self { return message }; return nil }

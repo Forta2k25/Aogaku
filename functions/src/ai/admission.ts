@@ -9,4 +9,4 @@ export function admissionAllowed(project: string, mode: string, rawUIDs: string,
   catch { return false; }
 }
 export const INPUT_QUOTAS = {dailyCount: 100, dailyBytes: 500 * 1024 ** 2, weeklyAudioSeconds: 10800,
-  requestsPerMinute: 120, providerCallsPerDay: 100};
+  requestsPerMinute: 120, providerCallsPerDay: 100, chatCallsPerDay: 60};

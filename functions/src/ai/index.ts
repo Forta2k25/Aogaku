@@ -17,6 +17,7 @@ import {PIPELINE, InputError, validateCreate, id, offeringId, syllabusYear, cour
 import {extractAudio, extractImage, extractPDF, audioDuration} from "./extractors";
 import {AI_COLLECTIONS as collections} from "./schema";
 import {admissionAllowed, INPUT_QUOTAS} from "./admission";
+import {CHAT, CHAT_CAPABILITY, validateChat, buildMessages, groqChat, groqChatStream, ContextItem} from "./chat";
 import {RecognitionError} from "./recognition";
 import {IMAGE_PIPELINE} from "./pricing";
 import {AUTO_CAPABILITIES} from "./visualRouter";
@@ -52,15 +53,16 @@ const sources = () => db().collection(collections.sources);
 const now = () => Date.now();
 const terminal = ["ready", "partial_ready", "failed", "deleting", "deleted"];
 const queue = () => getFunctions().taskQueue(`locations/${region}/functions/aiProcessSource`);
-function callable(fn: (uid: string, data: any) => Promise<any>) {
-  return onCall({region, serviceAccount: runtimeAccount, cpu: "gcf_gen1", timeoutSeconds: 120, maxInstances: 10, enforceAppCheck: process.env.AI_INPUT_REQUIRE_APP_CHECK === "true"}, async request => {
+interface StreamContext { streaming: boolean; send: (chunk: unknown) => Promise<unknown> | undefined }
+function callable(fn: (uid: string, data: any, stream?: StreamContext) => Promise<any>) {
+  return onCall({region, serviceAccount: runtimeAccount, cpu: "gcf_gen1", timeoutSeconds: 120, maxInstances: 10, enforceAppCheck: process.env.AI_INPUT_REQUIRE_APP_CHECK === "true"}, async (request, response) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "認証を確認できませんでした。もう一度お試しください");
     try { if (inputAdmissionMode() === "public" && (!appCheckRequired() || !request.app)) throw new InputError("APP_CHECK_REQUIRED");
       if (!productionInputsAllowed(request.auth.uid)) throw new InputError("AI_INPUT_NOT_ENABLED");
       if (!request.data || typeof request.data !== "object") throw new InputError("INVALID_REQUEST");
       await assertAccountActive(request.auth.uid);
       await limitRequests(request.auth.uid);
-      return await fn(request.auth.uid, request.data); }
+      return await fn(request.auth.uid, request.data, {streaming: request.acceptsStreaming === true, send: chunk => response?.sendChunk(chunk)}); }
     catch (e) {
       if (e instanceof HttpsError) throw e;
       if (e instanceof InputError) throw new HttpsError(e.code === "NOT_FOUND" ? "not-found" : e.code === "FORBIDDEN" ? "permission-denied" : "failed-precondition", e.code, {code: e.code, retryable: e.retryable});
@@ -90,6 +92,19 @@ async function reserveProviderCall(uid: string) {
     const count = current.get("providerCalls") || 0;
     if (count >= INPUT_QUOTAS.providerCallsPerDay) throw new InputError("PROVIDER_QUOTA_EXCEEDED");
     tx.set(ref, {providerCalls: count + 1}, {merge: true});
+  });
+}
+// Chat replies have their own daily budget so conversation cannot starve (or be starved by) recognition calls.
+async function reserveChatCall(uid: string, delta = 1) {
+  await assertAccountActive(uid);
+  const day = new Date(now() + 9 * 3600000).toISOString().slice(0, 10);
+  const ref = db().doc(`${collections.usage}/${uid}/${collections.periods}/day-${day}`);
+  await db().runTransaction(async tx => {
+    const [current, owner] = await Promise.all([tx.get(ref), tx.get(owners().doc(uid))]);
+    if (["deleting", "deleted"].includes(owner.get("state"))) throw new InputError("ACCOUNT_DELETED");
+    const count = current.get("chatCalls") || 0;
+    if (delta > 0 && count >= INPUT_QUOTAS.chatCallsPerDay) throw new InputError("CHAT_QUOTA_EXCEEDED");
+    tx.set(ref, {chatCalls: Math.max(0, count + delta)}, {merge: true});
   });
 }
 async function verified(uid: string, courseId: string) {
@@ -303,7 +318,7 @@ export const aiListSources = callable(async (uid, data) => {
   const [snap, member] = await Promise.all([query.get(), verified(uid, course)]);
   const page = snap.docs.slice(0, 100);
   return {items: page.map(d => d.data()).filter(s => canRead(s, uid, member) && (!lecture || s.lectureId === lecture)).map(publicSource),
-    inputCapabilities: AUTO_CAPABILITIES,
+    inputCapabilities: {...AUTO_CAPABILITIES, chat: CHAT_CAPABILITY},
     courseOfferingId: course, lectureId: resolved?.lectureId || null, nextCursor: snap.size > 100 ? page.at(-1)!.id : null};
 });
 export const aiGetEvidence = callable(async (uid, data) => {
@@ -449,6 +464,37 @@ export const aiRetrieveContext = callable(async (uid, data) => {
       processingSources: coverageSources.filter(s => !terminal.includes(s.status)).length,
       partialSources: coverageSources.filter(s => s.status === "partial_ready").length,
       sources: coverageSources.map(s => ({sourceId: s.sourceId, status: s.status, coverage: s.coverage || null}))}};
+});
+
+// Conversational reply over the caller's own ready sources. Nothing from the conversation is stored server-side.
+export const aiChat = callable(async (uid, data, stream) => {
+  const input = validateChat(data);
+  const lastQuestion = [...input.turns].reverse().find(t => t.role === "user")?.text || "";
+  const candidates: any[] = [], titles = new Map<string, string>();
+  for (const sourceId of input.sourceIds) {
+    const {source} = await owned(uid, sourceId);
+    if (!["ready", "partial_ready"].includes(source.status) || !source.activeRun) continue;
+    titles.set(source.sourceId, String(source.title || "資料").slice(0, 80));
+    const snap = await sources().doc(source.sourceId).collection(collections.runs).doc(source.activeRun).collection(collections.chunks).orderBy("chunkId").limit(60).get();
+    for (const d of snap.docs) candidates.push({text: String(d.get("text") || ""), chunkId: d.get("chunkId"), sourceId: source.sourceId});
+  }
+  // Prefer passages related to the question; fall back to an even spread when nothing matches lexically.
+  let selected = input.mode === "reply" && lastQuestion ? selectContext(candidates, "question", lastQuestion, CHAT.contextChars).items : [];
+  if (!selected.length) selected = selectContext(candidates, "lecture_summary", "", CHAT.contextChars).items;
+  const context: ContextItem[] = [...new Set(selected.map(s => s.sourceId))].map(sourceId => ({
+    title: titles.get(sourceId) || "資料",
+    text: selected.filter(s => s.sourceId === sourceId).sort((a, b) => String(a.chunkId).localeCompare(String(b.chunkId))).map(s => s.text).join("\n")}));
+  const key = await groqSecret();
+  await reserveChatCall(uid);
+  try {
+    const messages = buildMessages(input, context);
+    // ストリーミング対応のクライアントには、できた文字から順に送る。未対応のクライアントは、これまでどおり全文を1回で返す。
+    const reply = stream?.streaming ? await groqChatStream(key, messages, async delta => { await stream.send({delta}); }) : await groqChat(key, messages);
+    return {schemaVersion: 1, pipelineVersion: CHAT.version, text: reply.text, recognition: reply.recognition, sourceCount: context.length};
+  } catch (e) {
+    await reserveChatCall(uid, -1).catch(() => undefined);   // A failed provider attempt does not consume the user's daily budget.
+    throw e;
+  }
 });
 
 let workerInvocationCount = 0;

@@ -17,7 +17,7 @@ import {PIPELINE, InputError, validateCreate, id, offeringId, syllabusYear, cour
 import {extractAudio, extractImage, extractPDF, audioDuration} from "./extractors";
 import {AI_COLLECTIONS as collections} from "./schema";
 import {admissionAllowed, INPUT_QUOTAS} from "./admission";
-import {CHAT, CHAT_CAPABILITY, validateChat, buildMessages, groqChat, groqChatStream, ContextItem} from "./chat";
+import {CHAT, CHAT_CAPABILITY, validateChat, buildMessages, geminiChat, geminiChatStream, ContextItem} from "./chat";
 import {RecognitionError} from "./recognition";
 import {IMAGE_PIPELINE} from "./pricing";
 import {AUTO_CAPABILITIES} from "./visualRouter";
@@ -149,14 +149,17 @@ async function taskTarget() {
   }
   return workerUri;
 }
-async function groqSecret() {
-  // ADC + secret-scoped IAM. Image and audio only; never expose the payload to clients.
-  const response = await adcRequest(`https://secretmanager.googleapis.com/v1/projects/${runtimeProject()}/secrets/GROQ_API_KEY/versions/latest:access`);
-  if (response.status === 404) throw new InputError("ASR_NOT_CONFIGURED");
+async function groqSecret() { return providerSecret("GROQ_API_KEY"); }
+async function geminiSecret() { return providerSecret("GEMINI_API_KEY"); }
+async function providerSecret(name: string) {
+  // ADC + secret-scoped IAM. Image, chat and audio only; never expose the payload to clients.
+  const response = await adcRequest(`https://secretmanager.googleapis.com/v1/projects/${runtimeProject()}/secrets/${name}/versions/latest:access`);
+  const missing = name === "GEMINI_API_KEY" ? "IMAGE_AI_NOT_CONFIGURED" : "ASR_NOT_CONFIGURED";
+  if (response.status === 404) throw new InputError(missing);
   if (!response.ok) throw new InputError("ASR_SECRET_UNAVAILABLE", response.status === 429 || response.status >= 500);
   const payload = await response.json() as any;
   const key = Buffer.from(payload.payload?.data || "", "base64").toString("utf8").trim();
-  if (!key) throw new InputError("ASR_NOT_CONFIGURED");
+  if (!key) throw new InputError(missing);
   return key;
 }
 // Durable task IDs permit deletion, including enqueue/delete races.
@@ -484,12 +487,12 @@ export const aiChat = callable(async (uid, data, stream) => {
   const context: ContextItem[] = [...new Set(selected.map(s => s.sourceId))].map(sourceId => ({
     title: titles.get(sourceId) || "資料",
     text: selected.filter(s => s.sourceId === sourceId).sort((a, b) => String(a.chunkId).localeCompare(String(b.chunkId))).map(s => s.text).join("\n")}));
-  const key = await groqSecret();
+  const key = await geminiSecret();
   await reserveChatCall(uid);
   try {
     const messages = buildMessages(input, context);
     // ストリーミング対応のクライアントには、できた文字から順に送る。未対応のクライアントは、これまでどおり全文を1回で返す。
-    const reply = stream?.streaming ? await groqChatStream(key, messages, async delta => { await stream.send({delta}); }) : await groqChat(key, messages);
+    const reply = stream?.streaming ? await geminiChatStream(key, messages, async delta => { await stream.send({delta}); }) : await geminiChat(key, messages);
     return {schemaVersion: 1, pipelineVersion: CHAT.version, text: reply.text, recognition: reply.recognition, sourceCount: context.length};
   } catch (e) {
     await reserveChatCall(uid, -1).catch(() => undefined);   // A failed provider attempt does not consume the user's daily budget.
@@ -582,9 +585,9 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
       const pdfMagic = bytes.subarray(0, 5).toString() === "%PDF-";
       if (source.sourceType === "pdf" && !pdfMagic) throw new InputError("INVALID_PDF");
       if (source.sourceType === "image") extraction = source.pipelineVersion === "image-auto-v1" ?
-        await extractAutoImage(path, await groqSecret(), cp, undefined, devVisualOptions(runtimeProject(), request.data)) : await extractImage(path, source.mime, await groqSecret(), cp);
+        await extractAutoImage(path, await geminiSecret(), cp, undefined, devVisualOptions(runtimeProject(), request.data)) : await extractImage(path, source.mime, await geminiSecret(), cp);
       else if (source.sourceType === "pdf") extraction = source.pipelineVersion === "pdf-auto-v1" ?
-        await extractAutoPDF(path, await groqSecret(), cp) : await extractPDF(path, `gs://${bucket().name}/${source.storagePath}`, cp);
+        await extractAutoPDF(path, await geminiSecret(), cp) : await extractPDF(path, `gs://${bucket().name}/${source.storagePath}`, cp);
       else {
         const duration = await audioDuration(path);
         if (duration > source.declaredDuration + 1) throw new InputError("DURATION_MISMATCH");

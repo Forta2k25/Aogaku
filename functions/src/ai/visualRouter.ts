@@ -35,9 +35,9 @@ export const VISUAL_ROUTER = Object.freeze({version: "visual-router-v1", low: .3
   weights: {image: .10, dispersion: .15, drawing: .20, order: .15, nonText: .20, lines: .20}});
 export const AUTO_CAPABILITIES = {
   image: {pipelineVersion: "image-auto-v1", method: "auto_route", routes: ["vision_ocr", "multimodal_ai"],
-    provider: "groq", model: RECOGNITION_PRICING.image.model, fallback: false, routerVersion: VISUAL_ROUTER.version},
+    provider: RECOGNITION_PRICING.image.provider, model: RECOGNITION_PRICING.image.model, fallback: false, routerVersion: VISUAL_ROUTER.version},
   pdf: {pipelineVersion: "pdf-auto-v1", method: "auto_route", routes: ["native_text", "vision_ocr", "multimodal_ai"],
-    provider: "groq", model: RECOGNITION_PRICING.image.model, fallback: false, routerVersion: VISUAL_ROUTER.version}
+    provider: RECOGNITION_PRICING.image.provider, model: RECOGNITION_PRICING.image.model, fallback: false, routerVersion: VISUAL_ROUTER.version}
 };
 export const clamp = (v: number) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
 export const emptyFeatures = (): VisualFeatures => ({nativeTextLength: 0, nativeTextQuality: 0, textCoverage: 0,
@@ -178,7 +178,7 @@ export function routedPage(decision: RoutingDecision, locator: {pageNumber?: num
   const native = decision.route === "native_text", multimodal = decision.route === "multimodal_ai";
   const aiCost = multimodal ? ai?.estimatedCostUSD ?? null : 0;
   const ocrCost = ocrUnits * RECOGNITION_PRICING.ocr.pricePerThousand / 1000;
-  return {...decision, ...locator, provider: native ? "pdfjs" : multimodal ? "groq" : "google_vision",
+  return {...decision, ...locator, provider: native ? "pdfjs" : multimodal ? RECOGNITION_PRICING.image.provider : "google_vision",
     model: native ? null : multimodal ? RECOGNITION_PRICING.image.model : "DOCUMENT_TEXT_DETECTION",
     inputTokens: multimodal ? ai?.inputTokens ?? null : 0, outputTokens: multimodal ? ai?.outputTokens ?? null : 0,
     totalTokens: multimodal ? ai?.totalTokens ?? null : 0, aiCostUSD: aiCost, ocrCostUSD: ocrCost,
@@ -190,7 +190,7 @@ export function aggregateRouting(pages: RoutedPage[], kind: "pdf" | "image", ms:
   const total = (key: "inputTokens" | "outputTokens" | "totalTokens" | "aiCostUSD") =>
     pages.some(p => p[key] === null) ? null : pages.reduce((s, p) => s + (p[key] as number), 0);
   const aiCostUSD = total("aiCostUSD"), ocrCostUSD = pages.reduce((s, p) => s + p.ocrCostUSD, 0);
-  return {provider: counts.multimodal_ai ? (counts.native_text || counts.vision_ocr ? "mixed" : "groq") : counts.vision_ocr ? "google_vision" : "pdfjs",
+  return {provider: counts.multimodal_ai ? (counts.native_text || counts.vision_ocr ? "mixed" : RECOGNITION_PRICING.image.provider) : counts.vision_ocr ? "google_vision" : "pdfjs",
     model: counts.multimodal_ai ? RECOGNITION_PRICING.image.model : counts.vision_ocr ? "DOCUMENT_TEXT_DETECTION" : "native_text",
     method: "auto_route", pipelineVersion: kind === "pdf" ? "pdf-auto-v1" : "image-auto-v1", processingMs: ms,
     inputTokens: total("inputTokens"), outputTokens: total("outputTokens"), totalTokens: total("totalTokens"),
@@ -203,7 +203,7 @@ export function assertAutoExtraction(value: Extraction, kind: "pdf" | "image") {
   const r = value.recognition, expected = kind === "pdf" ? "pdf-auto-v1" : "image-auto-v1";
   if (r?.pipelineVersion !== expected || r.method !== "auto_route" || r.routing?.routerVersion !== VISUAL_ROUTER.version || !r.routing?.pages.length || !value.units.length ||
       r.routing.pages.some(p => !["native_text", "vision_ocr", "multimodal_ai"].includes(p.route)) ||
-      r.routing.pages.some(p => p.route === "multimodal_ai" && (p.provider !== "groq" || p.model !== RECOGNITION_PRICING.image.model)) ||
+      r.routing.pages.some(p => p.route === "multimodal_ai" && (p.provider !== RECOGNITION_PRICING.image.provider || p.model !== RECOGNITION_PRICING.image.model)) ||
       value.units.some(u => !r.routing!.pages.some(p => u.method === p.route &&
         (kind === "pdf" ? u.locator.pageNumber === p.pageNumber : u.locator.imageIndex === p.imageIndex)))) {
     throw new InputError("VISUAL_ROUTER_CONTRACT_MISMATCH", true);

@@ -3,7 +3,7 @@ import {dirname, join} from "node:path";
 import {ImageAnnotatorClient} from "@google-cloud/vision";
 import {createCanvas, loadImage} from "@napi-rs/canvas";
 import {Extraction, InputError, Unit} from "./domain";
-import {GroqImageRecognition, ImageRecognitionProvider, assertImageExtraction} from "./recognition";
+import {GeminiImageRecognition, ImageRecognitionProvider, assertImageExtraction} from "./recognition";
 import {Box, VisualFeatures, emptyFeatures, clamp, textQuality, layoutFeatures, rasterFeatures,
   chooseVisualRoute, routedPage, aggregateRouting, assertAutoExtraction, imageConnectorFeatures} from "./visualRouter";
 
@@ -43,7 +43,7 @@ export function compactOCR(response: any): OCRProbe {
     blocks: blocks.slice(0, 2000), confidence: characters ? confidence / characters : 0};
 }
 export function routerProviders(key: string): RouterProviders {
-  return {ai: new GroqImageRecognition(key), ocr: async bytes => {
+  return {ai: new GeminiImageRecognition(key), ocr: async bytes => {
     const [result] = await (vision ||= new ImageAnnotatorClient()).documentTextDetection({image: {content: bytes}});
     if (result.error?.code) throw new InputError("OCR_UNAVAILABLE", true);
     return compactOCR(result);

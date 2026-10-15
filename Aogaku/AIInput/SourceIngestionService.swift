@@ -95,6 +95,11 @@ final class SourceIngestionService {
     private func decode(_ value: [String: Any]) throws -> AIRemoteSource {
         try JSONDecoder().decode(AIRemoteSource.self, from: JSONSerialization.data(withJSONObject: value))
     }
+    /// 画像を選んだ時点でアップロードを始め、送信前に読み取りを進める。
+    func prefetch(sourceIDs: [String], uid: String) {
+        guard let store = try? store(uid: uid), (try? store.markPrefetch(sourceIDs)) != nil else { return }
+        resume(uid: uid)
+    }
     func resume(uid: String) {
         guard !AppBackend.isOffline, !blockedUIDs.contains(uid), !running.contains(uid), AppBackend.currentUID == uid else { return }
         running.insert(uid)
@@ -104,7 +109,7 @@ final class SourceIngestionService {
                 let store = try store(uid: uid)
                 // Take one item at a time; foreground returns/retries can safely call resume again.
                 var processed: Set<String> = []
-                while let item = store.ledger.sources.first(where: { !processed.contains($0.id) && ($0.wantsDeletion || ($0.submitted && $0.localState == "queued")) }) {
+                while let item = store.ledger.sources.first(where: { !processed.contains($0.id) && ($0.wantsDeletion || ($0.submitted && $0.localState == "queued") || (!$0.submitted && $0.localState == "prefetch")) }) {
                     processed.insert(item.id)
                     activeSourceIDs[uid] = item.id
                     defer { activeSourceIDs[uid] = nil }
@@ -114,7 +119,9 @@ final class SourceIngestionService {
                         try await upload(item, store: store)
                     } catch {
                         if var latest = store.ledger.sources.first(where: { $0.id == item.id }) {
-                            latest.localState = "failed"; latest.lastError = error.localizedDescription
+                            // 先行アップロードの失敗は表に出さず、送信時にやり直す。
+                            if latest.submitted { latest.localState = "failed"; latest.lastError = error.localizedDescription }
+                            else { latest.localState = "draft"; latest.lastError = nil }
                             try store.update(latest); notify()
                         }
                     }

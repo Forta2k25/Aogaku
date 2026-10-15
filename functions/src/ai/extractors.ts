@@ -4,7 +4,7 @@ import {promisify} from "node:util";
 import {readFile, mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join, dirname} from "node:path";
-import {GroqImageRecognition, ImageRecognitionProvider, assertImageExtraction} from "./recognition";
+import {GeminiImageRecognition, ImageRecognitionProvider, assertImageExtraction} from "./recognition";
 import {audioUsage, RECOGNITION_PRICING} from "./pricing";
 import {Extraction, InputError, Unit} from "./domain";
 
@@ -22,7 +22,7 @@ async function cached(cp: Checkpoint, key: string, fn: () => Promise<any>) {
   await cp.save(key, result);
   return result;
 }
-export async function extractImage(path: string, mime: string, key: string, cp: Checkpoint, provider: ImageRecognitionProvider = new GroqImageRecognition(key)): Promise<Extraction> {
+export async function extractImage(path: string, mime: string, key: string, cp: Checkpoint, provider: ImageRecognitionProvider = new GeminiImageRecognition(key)): Promise<Extraction> {
   const result = await cached(cp, "image-ai-v2", async () => {
     await cp.reserveProviderCall?.();
     const value = await provider.recognize(await readFile(path), mime);

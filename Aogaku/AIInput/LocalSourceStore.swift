@@ -36,7 +36,7 @@ final class LocalSourceStore {
             guard ledger.schemaVersion == 1 else { throw AIInputError.message("保存データの形式を確認してください") }
         } else { ledger = Ledger() }
         // A killed upload is retried with the same receipt; never reattribute another user's data.
-        for i in ledger.sources.indices where ledger.sources[i].localState == "uploading" { ledger.sources[i].localState = "queued" }
+        for i in ledger.sources.indices where ledger.sources[i].localState == "uploading" { ledger.sources[i].localState = ledger.sources[i].submitted ? "queued" : "prefetch" }
         let referenced = Set(ledger.sources.compactMap(\.fileName))
         for file in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
         where ["jpg", "m4a", "pdf"].contains(file.pathExtension) && !referenced.contains(file.lastPathComponent) {
@@ -97,7 +97,17 @@ final class LocalSourceStore {
         guard source.context == ledger.sources[i].context, source.courseSnapshot == ledger.sources[i].courseSnapshot else {
             throw AIInputError.message("資料保存時の授業情報は変更できません")
         }
+        // 送信済みの印は戻らない(先行アップロード中に送信されても、古いコピーで上書きしない)。
+        var source = source; source.submitted = source.submitted || ledger.sources[i].submitted
         var value = ledger; value.sources[i] = source; try commit(value)
+    }
+    /// 送信前の写真を、先にアップロードして読み取りを始められる状態にする。
+    func markPrefetch(_ ids: [String]) throws {
+        var value = ledger
+        for i in value.sources.indices where ids.contains(value.sources[i].id) && !value.sources[i].submitted && !value.sources[i].wantsDeletion && value.sources[i].localState == "draft" {
+            value.sources[i].localState = "prefetch"
+        }
+        try commit(value)
     }
     func submit(context: AIInputContext, snapshots: [AIChatSnapshot], replacingFrom messageID: String? = nil) throws {
         guard context.ownerUID == uid, snapshots.allSatisfy({ sameSession($0.context, context) }) else { throw AIInputError.message("保存先が一致しません") }
@@ -115,7 +125,11 @@ final class LocalSourceStore {
         }
         for sourceID in snapshots.flatMap(\.sourceIDs) {
             guard let i = value.sources.firstIndex(where: { $0.id == sourceID && sameSession($0.context, context) && !$0.wantsDeletion }) else { throw AIInputError.message("添付資料が見つかりません") }
-            if !value.sources[i].submitted { value.sources[i].submitted = true; value.sources[i].localState = "queued" }
+            if !value.sources[i].submitted {
+                value.sources[i].submitted = true
+                // 先行アップロード中・完了済みの資料は、そのまま使う。
+                if ["draft", "prefetch", "failed"].contains(value.sources[i].localState) { value.sources[i].localState = "queued" }
+            }
         }
         value.messages.append(contentsOf: snapshots); try commit(value)
     }
@@ -145,9 +159,13 @@ final class LocalSourceStore {
     func retainDraftPhotos(context: AIInputContext, photos: [Data]) throws {
         let keep = Set(photos.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() })
         let removed = ledger.sources.filter { $0.context == context && $0.kind == .image && !$0.submitted && !keep.contains($0.checksum) }
-        var value = ledger; let ids = Set(removed.map(\.id)); value.sources.removeAll { ids.contains($0.id) }
+        // 先行アップロードが始まっているものは、サーバー側も消すため削除予約にする。
+        let remote = removed.filter { $0.remote != nil || ["uploading", "uploaded"].contains($0.localState) }
+        var value = ledger; let ids = Set(removed.map(\.id)); let remoteIDs = Set(remote.map(\.id))
+        value.sources.removeAll { ids.contains($0.id) && !remoteIDs.contains($0.id) }
+        for i in value.sources.indices where remoteIDs.contains(value.sources[i].id) { value.sources[i].wantsDeletion = true }
         try commit(value)
-        for source in removed { if let url = fileURL(source) { try? FileManager.default.removeItem(at: url) } }
+        for source in removed where !remoteIDs.contains(source.id) { if let url = fileURL(source) { try? FileManager.default.removeItem(at: url) } }
     }
     func sources(context: AIInputContext, includeOtherDays: Bool = false) -> [AIStoredSource] {
         ledger.sources.filter {

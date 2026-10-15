@@ -1,27 +1,32 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {GroqImageRecognition,IMAGE_INSTRUCTIONS}=require('../lib/ai/recognition');
+const {GeminiImageRecognition,IMAGE_INSTRUCTIONS}=require('../lib/ai/recognition');
+const {GEMINI_RETRY}=require('../lib/ai/gemini');GEMINI_RETRY.delaysMs=[0,0];
 const {imageUsage,audioUsage}=require('../lib/ai/pricing');
 const {admissionAllowed}=require('../lib/ai/admission');
 const {chunksFor}=require('../lib/ai/domain');
-const model='qwen/qwen3.8-27b',jpeg=Buffer.from([255,216,255,0]);
+const model='gemini-3.5-flash-lite',jpeg=Buffer.from([255,216,255,0]);
 const response=(body,status=200)=>new Response(JSON.stringify(body),{status});
+const gem=(text,{finish='STOP',usage={promptTokenCount:10,candidatesTokenCount:5,totalTokenCount:15},modelVersion=model}={})=>({modelVersion,usageMetadata:usage,candidates:[{finishReason:finish,content:{parts:[{text}]}}]});
 test('image original bytes -> AI-only text -> chunks, measured usage and pricing',async()=>{
- const calls=[];const provider=new GroqImageRecognition('test-only',async(url,options)=>{calls.push([url,options]);return response(calls.length===1?{data:[{id:model,active:true}]}:{model,usage:{prompt_tokens:2940,completion_tokens:417,total_tokens:3357},choices:[{finish_reason:'stop',message:{content:JSON.stringify({finalText:'親から子へ特徴が遺伝する。'})}}]});});
+ const calls=[];const provider=new GeminiImageRecognition('test-only',async(url,options)=>{calls.push([url,options]);return response(gem(JSON.stringify({finalText:'親から子へ特徴が遺伝する。'}),{usage:{promptTokenCount:2940,candidatesTokenCount:317,thoughtsTokenCount:100,totalTokenCount:3357}}));});
  const e=await provider.recognize(jpeg,'image/jpeg');assert.equal(e.units[0].text,'親から子へ特徴が遺伝する。');assert.equal(e.units[0].method,'multimodal_ai');assert.equal(e.raw,undefined);
- const request=JSON.parse(calls[1][1].body);assert.equal(request.model,model);assert.equal(request.reasoning_effort,'none');assert(request.messages[1].content[0].image_url.url.endsWith(jpeg.toString('base64')));assert(IMAGE_INSTRUCTIONS.includes('推測・補完しない'));
- assert.equal(e.recognition.totalTokens,3357);assert(Math.abs(e.recognition.estimatedCostUSD-.004020)<1e-12);assert.equal(chunksFor(e.units)[0].method,'multimodal_ai');
- assert(calls.every(c=>c[0].startsWith('https://api.groq.com/')));
+ const request=JSON.parse(calls[0][1].body);assert.equal(request.generationConfig.temperature,0);assert.equal(request.generationConfig.responseMimeType,'application/json');assert.equal(request.contents[0].parts[0].inline_data.data,jpeg.toString('base64'));assert.equal(request.systemInstruction.parts[0].text,IMAGE_INSTRUCTIONS);assert(IMAGE_INSTRUCTIONS.includes('推測・補完しない'));
+ assert.equal(calls[0][0],'https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent');assert.equal(calls[0][1].headers['x-goog-api-key'],'test-only');
+ assert.equal(e.recognition.provider,'gemini');assert.equal(e.recognition.outputTokens,417,'thinking tokens are billed as output');assert.equal(e.recognition.totalTokens,3357);assert(Math.abs(e.recognition.estimatedCostUSD-(2940/1e6*.30+417/1e6*2.50))<1e-12);assert.equal(chunksFor(e.units)[0].method,'multimodal_ai');
+ assert(calls.every(c=>c[0].startsWith('https://generativelanguage.googleapis.com/')));
 });
-test('provider 429/5xx safely fail retryable; no OCR/model fallback or automatic retry',async()=>{
- for(const status of [429,500,503]) { let calls=0;const p=new GroqImageRecognition('test-only',async()=>++calls===1?response({data:[{id:model}]}):response({},status));await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable);assert.equal(calls,2); }
+test('overload (429/503) is retried briefly then fails retryable; other errors are not retried; no OCR/model fallback',async()=>{
+ for(const status of [429,503]) { let calls=0;const p=new GeminiImageRecognition('test-only',async()=>{calls++;return response({},status)});await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.code===(status===429?'IMAGE_AI_RATE_LIMIT':'IMAGE_AI_UNAVAILABLE'));assert.equal(calls,3); }
+ let calls=0;const p=new GeminiImageRecognition('test-only',async()=>{calls++;return response({},500)});await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable);assert.equal(calls,1);
+ calls=0;const q=new GeminiImageRecognition('test-only',async()=>++calls===1?response({},503):response(gem(JSON.stringify({finalText:'復旧後の結果'}))));assert.equal((await q.recognize(jpeg,'image/jpeg')).units[0].text,'復旧後の結果');assert.equal(calls,2);
 });
 test('missing/invalid usage remains unknown; returned unpriced model never gets invented price',()=>{
  assert.equal(imageUsage({},model,1).estimatedCostUSD,null);assert.equal(imageUsage({prompt_tokens:1,completion_tokens:1,total_tokens:-1},'unknown',1).estimatedCostUSD,null);assert.equal(imageUsage({prompt_tokens:3,total_tokens:4},model,1).outputTokens,null);
 });
 test('invalid/truncated JSON never becomes evidence and measured usage survives',async()=>{
- for(const finish of ['stop','length']) {let calls=0;const p=new GroqImageRecognition('test-only',async()=>response(++calls===1?{data:[{id:model}]}:{model,usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15},choices:[{finish_reason:finish,message:{content:'bad'}}]}));await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.recognition.totalTokens===15);}
+ for(const finish of ['STOP','MAX_TOKENS']) {const p=new GeminiImageRecognition('test-only',async()=>response(gem('bad',{finish})));await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.recognition.totalTokens===15);}
 });
-test('missing model rejects before billable request',async()=>{let calls=0;const p=new GroqImageRecognition('test-only',async()=>{calls++;return response({data:[]});});await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.code==='IMAGE_MODEL_UNAVAILABLE');assert.equal(calls,1);});
+test('missing key rejects before any provider request',async()=>{let calls=0;const p=new GeminiImageRecognition('',async()=>{calls++;return response({})});await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.code==='IMAGE_AI_NOT_CONFIGURED');assert.equal(calls,0);});
 test('audio costs use billed seconds including per-part minimum; never tokens',()=>{const m=audioUsage(180,180,1);assert.equal(m.estimatedCostUSD,.002);assert.equal(m.inputTokens,null);assert.equal(m.model,'whisper-large-v3-turbo');assert.equal(audioUsage(3,10,1).billedAudioSeconds,10);});
 test('public mode is opt-in, requires enforcement; existing production pilot contract preserved',()=>{
  assert(!admissionAllowed('forta-aogaku','public','[]',false,'anon'));
@@ -43,7 +48,7 @@ test('UTF-16 chunk offsets preserve complete surrogate pairs and exact source te
 });
 
 test('unexpected provider model is refused, never silently priced or published',async()=>{
- let calls=0;const p=new GroqImageRecognition('test-only',async()=>response(++calls===1?{data:[{id:model}]}:{model:'other',usage:{prompt_tokens:1,completion_tokens:1},choices:[{finish_reason:'stop',message:{content:'{"finalText":"wrong model"}'}}]}));
+ const p=new GeminiImageRecognition('test-only',async()=>response(gem('{"finalText":"wrong model"}',{modelVersion:'gemini-other'})));
  await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.code==='IMAGE_MODEL_MISMATCH'&&e.retryable);
 });
 test('image AI checkpoint contract rejects old OCR and missing metadata without any provider call',async()=>{
@@ -57,11 +62,10 @@ test('image AI checkpoint contract rejects old OCR and missing metadata without 
 });
 
 test('structured visible-only response publishes only readable finalText, never intermediate fields',async()=>{
- let calls=0;const finalText='Observation → Question → Hypothesis → Experiment → Conclusion → Result の順に矢印で示されている。戻り矢印は確認できない。';
- const p=new GroqImageRecognition('test-only',async(url,options)=>{
-  if(++calls===1)return response({data:[{id:model}]});
-  const sent=JSON.parse(options.body);assert.equal(sent.messages[0].role,'system');assert.equal(sent.messages[0].content,IMAGE_INSTRUCTIONS);assert.equal(sent.messages[1].role,'user');assert.equal(sent.messages[1].content.length,1);
-  return response({model,usage:{prompt_tokens:1000,completion_tokens:120,total_tokens:1120},choices:[{finish_reason:'stop',message:{content:JSON.stringify({visibleText:['Observation','Result'],visibleRelations:['Observation → Question'],description:'円形配置',uncertainty:['戻り矢印は確認できない'],finalText})}}]});
+ const finalText='Observation → Question → Hypothesis → Experiment → Conclusion → Result の順に矢印で示されている。戻り矢印は確認できない。';
+ const p=new GeminiImageRecognition('test-only',async(url,options)=>{
+  const sent=JSON.parse(options.body);assert.equal(sent.systemInstruction.parts[0].text,IMAGE_INSTRUCTIONS);assert.equal(sent.contents[0].role,'user');assert.equal(sent.contents[0].parts.length,1);
+  return response(gem(JSON.stringify({visibleText:['Observation','Result'],visibleRelations:['Observation → Question'],description:'円形配置',uncertainty:['戻り矢印は確認できない'],finalText}),{usage:{promptTokenCount:1000,candidatesTokenCount:120,totalTokenCount:1120}}));
  });
  const e=await p.recognize(jpeg,'image/jpeg');assert.equal(e.units[0].text,finalText);assert.equal(e.raw,undefined);
  assert(!JSON.stringify(chunksFor(e.units)).includes('visibleRelations'));assert.equal(e.recognition.totalTokens,1120);

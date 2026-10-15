@@ -4,7 +4,7 @@ const {extractAutoImage,extractAutoPDF}=require('../lib/ai/visualExtraction');
 const {imageUsage}=require('../lib/ai/pricing');
 const fixture=require('../../scripts/visual_router_fixtures.cjs');const dir=path.resolve(__dirname,'../../build/visual-router-fixtures'),manifest=fixture.generate(dir);
 function checkpoint(){const values=new Map();let reservations=0;return {alive:async()=>{},load:async k=>values.get(k),save:async(k,v)=>values.set(k,v),reserveProviderCall:async()=>{reservations++},values,get reservations(){return reservations}};}
-function providers(probe){const calls={ocr:0,ai:0};return {calls,ocr:async()=>{calls.ocr++;return probe},ai:{recognize:async()=>{calls.ai++;return {units:[{text:'Observation leads to a question and then an experiment. Synthetic visual evidence.',method:'multimodal_ai',locator:{imageIndex:1},flags:[]}],totalUnits:1,failedUnits:[],recognition:imageUsage({prompt_tokens:1969,completion_tokens:82,total_tokens:2051},'qwen/qwen3.8-27b',10)}}}};}
+function providers(probe){const calls={ocr:0,ai:0};return {calls,ocr:async()=>{calls.ocr++;return probe},ai:{recognize:async()=>{calls.ai++;return {units:[{text:'Observation leads to a question and then an experiment. Synthetic visual evidence.',method:'multimodal_ai',locator:{imageIndex:1},flags:[]}],totalUnits:1,failedUnits:[],recognition:imageUsage({prompt_tokens:1969,completion_tokens:82,total_tokens:2051},'gemini-3.5-flash-lite',10)}}}};}
 test('routing uses semantics even when OCR/native quality is perfect; ambiguous zone chooses AI',()=>{
  for(const extra of [{relationMark:true},{drawingScore:.8},{lineScore:.7},{nonTextCoverage:.7},{blockDispersion:1,readingOrderPenalty:1}]){const f={...emptyFeatures(),nativeTextLength:400,nativeTextQuality:1,ocrQuality:1,probeAvailable:true,...extra};assert.equal(chooseVisualRoute('pdf',f).route,'multimodal_ai');}
  assert.equal(chooseVisualRoute('pdf',{...emptyFeatures(),nativeTextLength:400,nativeTextQuality:1}).route,'native_text');assert.equal(chooseVisualRoute('image',{...emptyFeatures(),ocrQuality:1,probeAvailable:true}).route,'vision_ocr');
@@ -25,9 +25,9 @@ test('selected AI failure remains retryable; completed probes survive retry; no 
  await assert.rejects(extractAutoImage(path.join(dir,f.file),'test-only',cp,p,{skipLocalFastPath:true}));assert.equal(p.calls.ocr,1,'OCR probe not billed again on retry');
 });
 test('billing includes OCR probe even for AI route; no unknown token/cost becomes zero',()=>{
- const f={...emptyFeatures(),relationMark:true};const ai=routedPage(chooseVisualRoute('image',f),{imageIndex:1},1,1,imageUsage({prompt_tokens:1969,completion_tokens:82,total_tokens:2051},'qwen/qwen3.8-27b',1));const total=aggregateRouting([ai],'image',1);assert.equal(total.routing.ocrUnits,1);assert(Math.abs(total.estimatedCostUSD-(.0019032+.0015))<1e-10);
+ const f={...emptyFeatures(),relationMark:true};const ai=routedPage(chooseVisualRoute('image',f),{imageIndex:1},1,1,imageUsage({prompt_tokens:1969,completion_tokens:82,total_tokens:2051},'gemini-3.5-flash-lite',1));const total=aggregateRouting([ai],'image',1);assert.equal(total.routing.ocrUnits,1);assert(Math.abs(total.estimatedCostUSD-(1969/1e6*.30+82/1e6*2.50+.0015))<1e-10);
  const native=routedPage(chooseVisualRoute('pdf',{...emptyFeatures(),nativeTextQuality:1}),{pageNumber:1},1,0);assert.equal(native.totalTokens,0);assert.equal(native.estimatedCostUSD,0);
- const unknown=routedPage(chooseVisualRoute('image',f),{imageIndex:1},1,1,imageUsage({},'qwen/qwen3.8-27b',1));assert.equal(aggregateRouting([unknown],'image',1).estimatedCostUSD,null);
+ const unknown=routedPage(chooseVisualRoute('image',f),{imageIndex:1},1,1,imageUsage({},'gemini-3.5-flash-lite',1));assert.equal(aggregateRouting([unknown],'image',1).estimatedCostUSD,null);
 });
 test('provided science PDF: Scientific Method and image page use AI; simple text stays native',{skip:!fs.existsSync(path.resolve(__dirname,'../../build/visual-router-before/science.pdf'))},async()=>{
  const {openRouterPDF,analyzePDFPage}=require('../lib/ai/visualExtraction'),pdf=await openRouterPDF(path.resolve(__dirname,'../../build/visual-router-before/science.pdf'));
@@ -39,7 +39,7 @@ for(const f of imageCases)test('image-only connector regression, OCR has no arro
  const cp=checkpoint(),p=providers(f.probe),file=path.resolve(__dirname,'../../build/image-router-fixtures',f.file);
  const e=await (f.type==='pdf'?extractAutoPDF:extractAutoImage)(file,'test-only',cp,p),pages=e.recognition.routing.pages;
  assert.deepEqual(pages.map(x=>x.route),f.type==='pdf'?f.expected:[f.expected]);
- if(f.key.includes('arrow')){assert.equal(pages[0].features.relationMark,false);assert.equal(pages[0].features.lineScore,0);assert(pages[0].features.connectorComponents>0);assert.equal(pages[0].provider,'groq');assert.equal(pages[0].model,'qwen/qwen3.8-27b');assert.equal(e.units[0].text,'Observation leads to a question and then an experiment. Synthetic visual evidence.');}
+ if(f.key.includes('arrow')){assert.equal(pages[0].features.relationMark,false);assert.equal(pages[0].features.lineScore,0);assert(pages[0].features.connectorComponents>0);assert.equal(pages[0].provider,'gemini');assert.equal(pages[0].model,'gemini-3.5-flash-lite');assert.equal(e.units[0].text,'Observation leads to a question and then an experiment. Synthetic visual evidence.');}
  if(f.type==='pdf')assert(pages.every(x=>x.features.connectorComponents===undefined),'PDF signals must remain unchanged');
 });
 test('image-only geometry never changes PDF decisions or unreadable-probe fail-closed routing',()=>{

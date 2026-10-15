@@ -1,7 +1,8 @@
 import {InputError} from "./domain";
 import {RECOGNITION_PRICING} from "./pricing";
+import {geminiFetch, geminiUsage, logGeminiFailure, sameGeminiModel} from "./gemini";
 
-// Conversational reply over the caller's own recognized sources. Same Groq key/model/pricing snapshot as image recognition.
+// Conversational reply over the caller's own recognized sources. Same Gemini key/model/pricing snapshot as image recognition.
 export const CHAT = {
   version: "chat-v1", provider: RECOGNITION_PRICING.image.provider, model: RECOGNITION_PRICING.image.model,
   maxTurns: 12, maxTurnChars: 2000, maxSources: 8, contextChars: 12000, maxOutputTokens: 1600, timeoutMs: 60000,
@@ -76,50 +77,54 @@ export function chatUsage(usage: any, model: string, processingMs: number) {
     pricingAsOf: RECOGNITION_PRICING.pricingAsOf, pricingVersion: RECOGNITION_PRICING.pricingVersion};
 }
 
-export async function groqChat(key: string, messages: {role: string; content: string}[], request: typeof fetch = fetch) {
+/** Chat messages -> Gemini request parts: the system turn becomes systemInstruction; same-role neighbours are merged; assistant -> model. */
+export function geminiChatBody(messages: {role: string; content: string}[]) {
+  const system = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
+  const contents: {role: string; parts: {text: string}[]}[] = [];
+  for (const m of messages.filter(m => m.role !== "system")) {
+    const role = m.role === "assistant" ? "model" : "user", last = contents[contents.length - 1];
+    if (last?.role === role) last.parts.push({text: m.content}); else contents.push({role, parts: [{text: m.content}]});
+  }
+  return {systemInstruction: {parts: [{text: system}]}, contents,
+    generationConfig: {temperature: 0.3, maxOutputTokens: CHAT.maxOutputTokens}};
+}
+const partsText = (candidate: any) => (candidate?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("");
+
+export async function geminiChat(key: string, messages: {role: string; content: string}[], request: typeof fetch = fetch) {
   if (!key) throw new InputError("CHAT_NOT_CONFIGURED");
   const start = Date.now();
   let response: Response;
-  try {
-    response = await request("https://api.groq.com/openai/v1/chat/completions", {method: "POST",
-      headers: {Authorization: `Bearer ${key}`, "Content-Type": "application/json"}, signal: AbortSignal.timeout(CHAT.timeoutMs),
-      body: JSON.stringify({model: CHAT.model, temperature: 0.3, reasoning_effort: "none", max_completion_tokens: CHAT.maxOutputTokens, messages})});
-  } catch { throw new InputError("CHAT_UNAVAILABLE", true); }
-  if (!response.ok) throw new InputError(response.status === 429 ? "CHAT_RATE_LIMIT" : "CHAT_UNAVAILABLE", true);
+  try { response = await geminiFetch(request, key, CHAT.model, "generateContent", geminiChatBody(messages), CHAT.timeoutMs); }
+  catch { throw new InputError("CHAT_UNAVAILABLE", true); }
+  if (!response.ok) { await logGeminiFailure("chat", response); throw new InputError(response.status === 429 ? "CHAT_RATE_LIMIT" : "CHAT_UNAVAILABLE", true); }
   let result: any;
   try { result = await response.json(); } catch { throw new InputError("CHAT_INVALID_RESULT", true); }
-  if (result.model !== CHAT.model) throw new InputError("CHAT_MODEL_MISMATCH", true);
-  const text = result.choices?.[0]?.message?.content;
-  if (typeof text !== "string" || !text.trim() || text.length > 8000) throw new InputError("CHAT_INVALID_RESULT", true);
-  return {text: text.trim(), recognition: chatUsage(result.usage, result.model, Date.now() - start)};
+  if (!sameGeminiModel(result.modelVersion, CHAT.model)) throw new InputError("CHAT_MODEL_MISMATCH", true);
+  const text = partsText(result.candidates?.[0]);
+  if (!text.trim() || text.length > 8000) throw new InputError("CHAT_INVALID_RESULT", true);
+  return {text: text.trim(), recognition: chatUsage(geminiUsage(result.usageMetadata), CHAT.model, Date.now() - start)};
 }
 
-/** Streaming variant: yields text deltas as Groq produces them, then returns the full text with measured usage. */
-export async function groqChatStream(key: string, messages: {role: string; content: string}[],
+/** Streaming variant: yields text deltas as Gemini produces them, then returns the full text with measured usage. */
+export async function geminiChatStream(key: string, messages: {role: string; content: string}[],
   onDelta: (text: string) => void | Promise<void>, request: typeof fetch = fetch) {
   if (!key) throw new InputError("CHAT_NOT_CONFIGURED");
   const start = Date.now();
   let response: Response;
-  try {
-    response = await request("https://api.groq.com/openai/v1/chat/completions", {method: "POST",
-      headers: {Authorization: `Bearer ${key}`, "Content-Type": "application/json"}, signal: AbortSignal.timeout(CHAT.timeoutMs),
-      body: JSON.stringify({model: CHAT.model, temperature: 0.3, reasoning_effort: "none", max_completion_tokens: CHAT.maxOutputTokens,
-        stream: true, stream_options: {include_usage: true}, messages})});
-  } catch { throw new InputError("CHAT_UNAVAILABLE", true); }
-  if (!response.ok) throw new InputError(response.status === 429 ? "CHAT_RATE_LIMIT" : "CHAT_UNAVAILABLE", true);
+  try { response = await geminiFetch(request, key, CHAT.model, "streamGenerateContent", geminiChatBody(messages), CHAT.timeoutMs); }
+  catch { throw new InputError("CHAT_UNAVAILABLE", true); }
+  if (!response.ok) { await logGeminiFailure("chat", response); throw new InputError(response.status === 429 ? "CHAT_RATE_LIMIT" : "CHAT_UNAVAILABLE", true); }
   if (!response.body) throw new InputError("CHAT_INVALID_RESULT", true);
   const decoder = new TextDecoder();
-  let buffer = "", text = "", usage: any, model = "", firstTokenMs: number | null = null, done = false;
+  let buffer = "", text = "", usage: any, model = "", firstTokenMs: number | null = null;
   const handle = async (line: string) => {
     if (!line.startsWith("data:")) return;
-    const payload = line.slice(5).trim();
-    if (payload === "[DONE]") { done = true; return; }
     let chunk: any;
-    try { chunk = JSON.parse(payload); } catch { return; }
-    model = chunk.model || model;
-    usage = chunk.usage || chunk.x_groq?.usage || usage;
-    const delta = chunk.choices?.[0]?.delta?.content;
-    if (typeof delta === "string" && delta) {
+    try { chunk = JSON.parse(line.slice(5).trim()); } catch { return; }
+    model = chunk.modelVersion || model;
+    usage = chunk.usageMetadata || usage;
+    const delta = partsText(chunk.candidates?.[0]);
+    if (delta) {
       if (firstTokenMs === null) firstTokenMs = Date.now() - start;
       text += delta;
       if (text.length > 8000) throw new InputError("CHAT_INVALID_RESULT", true);
@@ -128,7 +133,7 @@ export async function groqChatStream(key: string, messages: {role: string; conte
   };
   try {
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    while (!done) {
+    for (;;) {
       const {value, done: finished} = await reader.read();
       if (finished) break;
       buffer += decoder.decode(value, {stream: true});
@@ -138,6 +143,6 @@ export async function groqChatStream(key: string, messages: {role: string; conte
     if (buffer.trim()) await handle(buffer.trim());
   } catch (e) { if (e instanceof InputError) throw e; throw new InputError("CHAT_UNAVAILABLE", true); }
   if (!text.trim()) throw new InputError("CHAT_INVALID_RESULT", true);
-  if (model !== CHAT.model) throw new InputError("CHAT_MODEL_MISMATCH", true);
-  return {text: text.trim(), recognition: {...chatUsage(usage, model, Date.now() - start), firstTokenMs}};
+  if (!sameGeminiModel(model, CHAT.model)) throw new InputError("CHAT_MODEL_MISMATCH", true);
+  return {text: text.trim(), recognition: {...chatUsage(geminiUsage(usage), CHAT.model, Date.now() - start), firstTokenMs}};
 }

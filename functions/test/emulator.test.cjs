@@ -27,11 +27,10 @@ before(()=>{
       assert.equal(options.headers.Authorization,'Bearer emulator-only');
       return new Response(JSON.stringify({name,serviceConfig:{uri:'https://emulator-worker.a.run.app'}}),{status:200});
     }
-    if(String(url)==='https://secretmanager.googleapis.com/v1/projects/demo-aogaku-input/secrets/GROQ_API_KEY/versions/latest:access')return new Response(JSON.stringify({payload:{data:Buffer.from('synthetic-test-only').toString('base64')}}));
-    if(String(url)==='https://api.groq.com/openai/v1/models')return new Response(JSON.stringify({data:[{id:'qwen/qwen3.8-27b',active:true}]}));
-    if(String(url)==='https://api.groq.com/openai/v1/chat/completions') {
-      imageRequests++;const body=JSON.parse(options.body);assert.equal(body.model,'qwen/qwen3.8-27b');assert.equal(body.messages[0].role,'system');assert.equal(body.messages[0].content,require('../lib/ai/recognition').IMAGE_INSTRUCTIONS);assert.equal(body.messages[1].role,'user');assert(body.messages[1].content[0].image_url.url.startsWith('data:image/png;base64,'));
-      return new Response(JSON.stringify({model:body.model,usage:{prompt_tokens:2940,completion_tokens:417,total_tokens:3357},choices:[{finish_reason:'stop',message:{content:JSON.stringify({finalText:'親から子へ特徴が遺伝する。'+ '階層を説明する。'.repeat(200)})}}]}),{status:recognitionStatus});
+    if(/^https:\/\/secretmanager\.googleapis\.com\/v1\/projects\/demo-aogaku-input\/secrets\/(GROQ|GEMINI)_API_KEY\/versions\/latest:access$/.test(String(url)))return new Response(JSON.stringify({payload:{data:Buffer.from('synthetic-test-only').toString('base64')}}));
+    if(String(url)==='https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent') {
+      imageRequests++;const body=JSON.parse(options.body);assert.equal(options.headers['x-goog-api-key'],'synthetic-test-only');assert.equal(body.systemInstruction.parts[0].text,require('../lib/ai/recognition').IMAGE_INSTRUCTIONS);assert.equal(body.contents[0].role,'user');assert(body.contents[0].parts[0].inline_data.data.length>0);assert.equal(body.contents[0].parts[0].inline_data.mime_type,'image/png');
+      return new Response(JSON.stringify({modelVersion:'gemini-3.5-flash-lite',usageMetadata:{promptTokenCount:2940,candidatesTokenCount:417,totalTokenCount:3357},candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({finalText:'親から子へ特徴が遺伝する。'+ '階層を説明する。'.repeat(200)})}]}}]}),{status:recognitionStatus});
     }
     if(String(url)==='https://api.groq.com/openai/v1/audio/transcriptions') {
       audioRequests++;assert.equal(options.body.get('model'),'whisper-large-v3-turbo');return new Response(JSON.stringify({duration:1,segments:[{start:0,end:1,text:'カントを学ぶ講義。',no_speech_prob:0}]}));
@@ -281,7 +280,7 @@ async function recognitionSource(id,owner,type,bytes,mime){
 test('recognition: AI-only image worker, real evidence overlap/usage/retrieval, old evidence and UID boundaries',{skip:!enabled},async()=>{
  const bytes=Buffer.from([137,80,78,71,13,10,26,10,0]);await recognitionSource('det-image','det-owner','image',bytes,'image/png');
  await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:'det-image'}});
- const source=await call('aiGetSource','det-owner',{sourceId:'det-image'});assert.equal(source.status,'ready');assert.equal(source.pipelineVersion,'image-ai-v2');assert.equal(source.recognition.totalTokens,3357);assert.equal((await call('aiListSources','det-owner',{courseOfferingId:source.courseOfferingId})).inputCapabilities.image.model,'qwen/qwen3.8-27b');assert(Math.abs(source.recognition.estimatedCostUSD-.00402)<1e-12);
+ const source=await call('aiGetSource','det-owner',{sourceId:'det-image'});assert.equal(source.status,'ready');assert.equal(source.pipelineVersion,'image-ai-v2');assert.equal(source.recognition.totalTokens,3357);assert.equal((await call('aiListSources','det-owner',{courseOfferingId:source.courseOfferingId})).inputCapabilities.image.model,'gemini-3.5-flash-lite');assert(Math.abs(source.recognition.estimatedCostUSD-(2940/1e6*.30+417/1e6*2.50))<1e-12);
  const evidence=await call('aiGetEvidence','det-owner',{sourceId:'det-image'});assert.equal(evidence.activeVersion,source.activeVersion);assert(evidence.items.length>1);assert(evidence.items.every(x=>x.method==='multimodal_ai'&&x.unitIndex===0));
  let text='',end=0;for(const item of evidence.items){text+=item.text.slice(Math.max(0,end-item.locator.startChar));end=item.locator.endChar;}assert.equal(text,'親から子へ特徴が遺伝する。'+'階層を説明する。'.repeat(200));
  const r=await call('aiRetrieveContext','det-owner',{courseOfferingId:'course-a',query:'遺伝'});assert(r.items.some(x=>x.sourceId==='det-image'));assert.equal((await legacyDb.doc('aiSources/det-image').get()).exists,false);
@@ -355,7 +354,7 @@ test('image connector geometry: real worker -> named chunks -> Evidence -> retri
  const f=require('../../scripts/image_router_fixtures.cjs').relation(false),id='short-raster-arrow',owner='short-raster-owner';routerProbe=f.probe;
  try{await recognitionSource(id,owner,'image',f.bytes,'image/png');await db.doc('aiSources/'+id).update({pipelineVersion:'image-auto-v1',schemaVersion:5});
   const beforeCalls=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});assert.equal(imageRequests,beforeCalls+1);
-  const source=await call('aiGetSource',owner,{sourceId:id});assert.equal(source.status,'ready');const page=source.recognition.routing.pages[0];assert.equal(page.route,'multimodal_ai');assert.equal(page.provider,'groq');assert.equal(page.model,'qwen/qwen3.8-27b');assert.equal(page.features.relationMark,false);assert.equal(page.features.lineScore,0);assert(page.features.connectorComponents>0);
+  const source=await call('aiGetSource',owner,{sourceId:id});assert.equal(source.status,'ready');const page=source.recognition.routing.pages[0];assert.equal(page.route,'multimodal_ai');assert.equal(page.provider,'gemini');assert.equal(page.model,'gemini-3.5-flash-lite');assert.equal(page.features.relationMark,false);assert.equal(page.features.lineScore,0);assert(page.features.connectorComponents>0);
   const items=[];let after;do{const e=await call('aiGetEvidence',owner,{sourceId:id,...(after?{after}:{})});items.push(...e.items);after=e.nextCursor;}while(after);
   const {joinChunks}=require('../../scripts/evidence_adoption_dev.cjs'),expected='親から子へ特徴が遺伝する。'+'階層を説明する。'.repeat(200);
   const stored=(await db.collection(`aiSources/${id}/runs/${source.activeVersion}/chunks`).orderBy('chunkId').get()).docs.map(x=>x.data()),retrieved=(await call('aiRetrieveContext',owner,{courseOfferingId:'course-a',purpose:'lecture_summary',maxCharacters:30000})).items.filter(x=>x.sourceId===id);
@@ -367,7 +366,7 @@ test('progressive PDF: owner-only preview precedes ready, excluded from Evidence
  const fixture=require('../../scripts/visual_router_fixtures.cjs'),uid='progressive-owner',sid='progressive-pdf';
  await recognitionSource(sid,uid,'pdf',fixture.pdf(['text','diagram','text']),'application/pdf');await db.doc('aiSources/'+sid).update({pipelineVersion:'pdf-auto-v1'});
  let release;const barrier=new Promise(r=>release=r),fetchBefore=global.fetch;
- global.fetch=async(u,o)=>{if(String(u)==='https://api.groq.com/openai/v1/chat/completions')await barrier;return fetchBefore(u,o)};
+ global.fetch=async(u,o)=>{if(String(u).startsWith('https://generativelanguage.googleapis.com/'))await barrier;return fetchBefore(u,o)};
  const worker=api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:sid}});
  try{
   let source;for(let i=0;i<100;i++){source=await call('aiGetSource',uid,{sourceId:sid});if(source.previewProgress?.completed===2)break;await new Promise(r=>setTimeout(r,20));}

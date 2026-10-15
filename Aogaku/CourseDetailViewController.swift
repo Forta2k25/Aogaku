@@ -501,6 +501,11 @@ final class CourseDetailViewController: UIViewController {
     private func stageAIPhoto(_ photo: CapturedPhoto, context: AIInputContext) throws -> AIStoredSource {
         try SourceIngestionService.shared.store(uid: context.ownerUID).stage(context: context, kind: .image, title: "授業の写真", mime: "image/jpeg", data: photo.jpeg)
     }
+    /// 送信前の写真を保存し、すぐにアップロード・読み取りを始める。
+    private func stageAIPhotosForPrefetch(_ photos: [CapturedPhoto], context: AIInputContext) throws {
+        let ids = try photos.map { try stageAIPhoto($0, context: context).id }
+        SourceIngestionService.shared.prefetch(sourceIDs: ids, uid: context.ownerUID)
+    }
 
     private func restoreAIInput() {
         guard let context = try? aiContext(day: noteChatCurrentSession) else { return }
@@ -3204,7 +3209,7 @@ final class CourseDetailViewController: UIViewController {
         guard !photos.isEmpty else { return }
         do {
             let context = try aiContext(day: noteChatCurrentSession)
-            for photo in photos { _ = try stageAIPhoto(photo, context: context) }
+            try stageAIPhotosForPrefetch(photos, context: context)
         } catch { showNoteAlert(title: "写真を保存できませんでした", message: error.localizedDescription); return }
         noteChatPending.items.append(contentsOf: photos)
         reloadNoteChatAttachments(animated: true)
@@ -3348,6 +3353,7 @@ final class CourseDetailViewController: UIViewController {
         do {
             let context = try aiContext(day: noteChatCurrentSession)
             try SourceIngestionService.shared.store(uid: context.ownerUID).retainDraftPhotos(context: context, photos: set.items.map(\.jpeg))
+            SourceIngestionService.shared.resume(uid: context.ownerUID)
         } catch { showNoteAlert(title: "変更を保存できませんでした", message: error.localizedDescription) }
         reloadNoteChatAttachments(animated: true)
     }
@@ -3360,6 +3366,7 @@ final class CourseDetailViewController: UIViewController {
             do {
                 let context = try self.aiContext(day: self.noteChatCurrentSession)
                 try SourceIngestionService.shared.store(uid: context.ownerUID).retainDraftPhotos(context: context, photos: self.noteChatPending.items.map(\.jpeg))
+                SourceIngestionService.shared.resume(uid: context.ownerUID)
             } catch { self.showNoteAlert(title: "変更を保存できませんでした", message: error.localizedDescription) }
             self.reloadNoteChatAttachments(animated: false)
         }
@@ -6499,7 +6506,7 @@ extension CourseDetailViewController: PHPickerViewControllerDelegate {
                 }
                 // Preserve the picker opening context even when loading an iCloud image takes time.
                 let context = try aiContext(day: selectedDay)
-                for photo in photos { _ = try stageAIPhoto(photo, context: context) }
+                try stageAIPhotosForPrefetch(photos, context: context)
                 if selectedDay == noteChatCurrentSession { restoreAIInput() }
             } catch { showNoteAlert(title: "写真を追加できませんでした", message: error.localizedDescription) }
         }

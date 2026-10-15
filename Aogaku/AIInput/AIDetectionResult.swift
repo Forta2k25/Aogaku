@@ -2,10 +2,14 @@ import Foundation
 
 enum AIImagePipeline {
     static let version = "image-ai-v2"
-    static let provider = "groq"
-    static let model = "qwen/qwen3.8-27b"
+    static let provider = "gemini"
+    static let model = "gemini-3.5-flash-lite"
+    /// 現在の画像AIと、保存済みの旧結果(Groq/Qwen)。旧結果も読めるように、組み合わせで照合する。
+    static func isKnownPipeline(provider p: String, model m: String) -> Bool {
+        (p == provider && m == model) || (p == "groq" && m == "qwen/qwen3.8-27b")
+    }
     static let method = "multimodal_ai"
-    static let unavailableMessage = "接続先はQwen画像AIに未対応です。画像は送信していません。Dev確認はAogaku-Dev Schemeを使用してください。本番はバックエンド更新が必要です。"
+    static let unavailableMessage = "接続先は新しい画像AI(Gemini)に未対応です。画像は送信していません。Dev確認はAogaku-Dev Schemeを使用してください。本番はバックエンド更新が必要です。"
     static func requireCapability(_ response: [String: Any]) throws {
         let image = (response["inputCapabilities"] as? [String: Any])?["image"] as? [String: Any]
         if image?["pipelineVersion"] as? String == "image-auto-v1" {
@@ -32,16 +36,16 @@ enum AIImagePipeline {
                 guard let page = routing.pages.first(where: { p in
                     pipelineVersion == "pdf-auto-v1" ? p.pageNumber == chunk.locator.pageNumber : p.imageIndex == chunk.locator.imageIndex
                 }), page.route == chunk.method, ["native_text", "vision_ocr", "multimodal_ai"].contains(page.route),
-                  page.route != "multimodal_ai" || (page.provider == provider && page.model == model) else {
+                  page.route != "multimodal_ai" || isKnownPipeline(provider: page.provider, model: page.model ?? "") else {
                     throw AIInputError.message("資料RouterのEvidenceと処理方式が一致しません")
                 }
             }
             return
         }
         guard pipelineVersion == version else { return } // Stored legacy OCR remains readable.
-        guard let r = recognition, r.provider == provider, r.model == model, r.method == method,
+        guard let r = recognition, isKnownPipeline(provider: r.provider, model: r.model), r.method == method,
               r.pipelineVersion == version, !chunks.isEmpty, chunks.allSatisfy({ $0.method == method }) else {
-            throw AIInputError.message("画像AIの処理情報が一致しません。OCR結果をQwen結果として表示しません。")
+            throw AIInputError.message("画像AIの処理情報が一致しません。OCR結果を画像AIの結果として表示しません。")
         }
     }
     static func requireReceipt(_ source: AIRemoteSource) throws {
@@ -237,7 +241,8 @@ struct AIDetectionResult {
         let model: String
         if let recognition {
             switch recognition.provider {
-            case "groq", "mixed": model = "Groq / " + recognition.model
+            case "gemini", "mixed": model = "Gemini / " + recognition.model
+            case "groq": model = "Groq / " + recognition.model
             case "google_vision": model = "Google Vision OCR / " + recognition.model
             case "pdfjs": model = "PDF本文抽出"
             default: model = recognition.model

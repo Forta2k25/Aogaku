@@ -1,5 +1,6 @@
 import {InputError, Extraction} from "./domain";
 import {imageUsage, RECOGNITION_PRICING, IMAGE_PIPELINE} from "./pricing";
+import {geminiFetch, geminiUsage, logGeminiFailure, sameGeminiModel} from "./gemini";
 
 export interface ImageRecognitionProvider {
   recognize(bytes: Buffer, mime: string): Promise<Extraction>;
@@ -17,7 +18,7 @@ Return JSON only: {"visibleText":["readable original text"],"visibleRelations":[
 export class RecognitionError extends InputError {
   constructor(code: string, retryable: boolean, public recognition?: ReturnType<typeof imageUsage>) { super(code, retryable); }
 }
-export class GroqImageRecognition implements ImageRecognitionProvider {
+export class GeminiImageRecognition implements ImageRecognitionProvider {
   constructor(private key: string, private request: typeof fetch = fetch) {}
   async recognize(bytes: Buffer, mime: string): Promise<Extraction> {
     if (!this.key) throw new InputError("IMAGE_AI_NOT_CONFIGURED");
@@ -27,27 +28,21 @@ export class GroqImageRecognition implements ImageRecognitionProvider {
     const start = Date.now(), model = RECOGNITION_PRICING.image.model;
     let response: Response;
     try {
-      const available = await this.request("https://api.groq.com/openai/v1/models", {
-        headers: {Authorization: `Bearer ${this.key}`}, signal: AbortSignal.timeout(20000)});
-      if (!available.ok) throw new InputError("IMAGE_AI_UNAVAILABLE", true);
-      const models = await available.json() as any;
-      if (!models.data?.some((m: any) => m.id === model && m.active !== false)) throw new InputError("IMAGE_MODEL_UNAVAILABLE", true);
-      response = await this.request("https://api.groq.com/openai/v1/chat/completions", {method: "POST",
-        headers: {Authorization: `Bearer ${this.key}`, "Content-Type": "application/json"}, signal: AbortSignal.timeout(120000),
-        body: JSON.stringify({model, temperature: 0, reasoning_effort: "none", max_completion_tokens: 3000,
-          response_format: {type: "json_object"}, messages: [{role: "system", content: IMAGE_INSTRUCTIONS}, {role: "user", content: [
-            {type: "image_url", image_url: {url: `data:${mime};base64,${bytes.toString("base64")}`}}
-          ]}]})});
-    } catch (e) { if (e instanceof InputError) throw e; throw new InputError("IMAGE_AI_UNAVAILABLE", true); }
-    if (!response.ok) throw new InputError(response.status === 429 ? "IMAGE_AI_RATE_LIMIT" : "IMAGE_AI_UNAVAILABLE", true);
+      response = await geminiFetch(this.request, this.key, model, "generateContent", {
+        systemInstruction: {parts: [{text: IMAGE_INSTRUCTIONS}]},
+        contents: [{role: "user", parts: [{inline_data: {mime_type: mime, data: bytes.toString("base64")}}]}],
+        generationConfig: {temperature: 0, maxOutputTokens: 4000, responseMimeType: "application/json"}}, 120000);
+    } catch { throw new InputError("IMAGE_AI_UNAVAILABLE", true); }
+    if (!response.ok) { await logGeminiFailure("image", response); throw new InputError(response.status === 429 ? "IMAGE_AI_RATE_LIMIT" : "IMAGE_AI_UNAVAILABLE", true); }
     let result: any;
     try { result = await response.json(); } catch { throw new InputError("IMAGE_AI_INVALID_RESULT", true); }
-    if (result.model !== model) throw new InputError("IMAGE_MODEL_MISMATCH", true);
-    const recognition = imageUsage(result.usage, result.model, Date.now() - start);
-    const raw = result.choices?.[0]?.message?.content;
-    if (result.choices?.[0]?.finish_reason !== "stop" || typeof raw !== "string" || raw.length > 100000) throw new RecognitionError("IMAGE_AI_INCOMPLETE", true, recognition);
+    if (!sameGeminiModel(result.modelVersion, model)) throw new InputError("IMAGE_MODEL_MISMATCH", true);
+    const recognition = imageUsage(geminiUsage(result.usageMetadata), model, Date.now() - start);
+    const candidate = result.candidates?.[0];
+    const raw = (candidate?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("");
+    if (candidate?.finishReason !== "STOP" || !raw || raw.length > 100000) throw new RecognitionError("IMAGE_AI_INCOMPLETE", true, recognition);
     let parsed: any;
-    try { parsed = JSON.parse(raw); } catch { throw new RecognitionError("IMAGE_AI_INVALID_RESULT", true, recognition); }
+    try { parsed = JSON.parse(raw); } catch { console.error(`image: unparsable JSON from Gemini (finishReason ${candidate?.finishReason}, ${raw.length} chars)`); throw new RecognitionError("IMAGE_AI_INVALID_RESULT", true, recognition); }
     if (typeof parsed?.finalText !== "string" || !parsed.finalText.trim() || parsed.finalText.length > 60000) throw new RecognitionError("IMAGE_AI_INVALID_RESULT", true, recognition);
     const text = parsed.finalText.trim();
     return {units: [{text, locator: {imageIndex: 1}, method: "multimodal_ai", flags: []}], totalUnits: 1, failedUnits: [], recognition};

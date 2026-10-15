@@ -48,6 +48,19 @@ final class SourceIngestionService {
         if let existing = stores[uid] { try existing.eraseAccount() }
         else { try LocalSourceStore.eraseAccount(uid: uid) }
     }
+    private var lastWarmUp = Date.distantPast
+    /// AI画面を開いたとき、眠っているサーバー関数を先に起こす。認証なしの軽い GET を送るだけで、データは送らない
+    /// (関数は起動して 400 を返す)。コールドスタートの待ちを、送信ボタンを押す前に済ませるのが目的。
+    func warmUp() {
+        guard !AppBackend.isOffline, AppBackend.currentUID != nil, Date().timeIntervalSince(lastWarmUp) > 240,
+              let project = FirebaseApp.app()?.options.projectID else { return }
+        lastWarmUp = Date()
+        for name in ["aiCreateSource", "aiCompleteSource", "aiChat"] {
+            guard let url = URL(string: "https://asia-northeast1-\(project).cloudfunctions.net/\(name)") else { continue }
+            var request = URLRequest(url: url); request.timeoutInterval = 20
+            URLSession.shared.dataTask(with: request).resume()
+        }
+    }
     func call(_ name: String, data: [String: Any], uid: String) async throws -> [String: Any] {
         try checkUser(uid)
         if AppBackend.isOffline { throw AIInputError.message("ローカル確認モードではクラウド通信を行いません") }
@@ -286,14 +299,14 @@ final class SourceIngestionService {
     }
     /// AIの返信をストリーミングで受け取る。できた文字から順に `.delta` が届き、最後に `.final`(全文と実測の token・料金)が届く。
     /// サーバーが古くてストリーミングに未対応でも、`.final` だけが届くので同じように扱える。
-    func chatReplyStream(uid: String, remoteSourceIDs: [String], mode: String, turns: [AIChatTurn]) -> AsyncThrowingStream<AIChatEvent, Error> {
+    func chatReplyStream(uid: String, remoteSourceIDs: [String], mode: String, turns: [AIChatTurn], images: [AIChatImage] = []) -> AsyncThrowingStream<AIChatEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 do {
                     try self.checkUser(uid)
                     if AppBackend.isOffline { throw AIInputError.message("ローカル確認モードではクラウド通信を行いません") }
                     let callable: Callable<AIChatRequest, StreamResponse<AIChatDelta, AIChatReply>> = self.functions.httpsCallable("aiChat")
-                    let request = AIChatRequest(mode: mode, sourceIds: remoteSourceIDs, turns: turns)
+                    let request = AIChatRequest(mode: mode, sourceIds: remoteSourceIDs, turns: turns, images: images)
                     for try await item in try callable.stream(request) {
                         try self.checkUser(uid)
                         switch item {

@@ -275,31 +275,62 @@ final class AIReplyBubbleView: UIView {
         NSAttributedString(string: text, attributes: [.font: bodyFont, .foregroundColor: color, .paragraphStyle: paragraphStyle()])
     }
 
-    /// 返信のMarkdownを、見出し→太字、区切り線→空行、**太字**/*斜体*/`コード` に変えて表示用の文字にする。
+    /// 太字の範囲を示す目印(私用領域の文字)。CommonMark は「は**「…」**と」のように、日本語や括弧に接した ** を太字と認めないため、
+    /// `**…**` はこちらで先に見つけて、目印で囲む。
+    private static let boldOpen: Character = "\u{E100}", boldClose: Character = "\u{E101}"
+    private static let boldRegex = try? NSRegularExpression(pattern: #"\*\*([^*\n]+?)\*\*"#)
+
+    /// 返信のMarkdownを、見出し→太字、区切り線→空行、**太字**/*斜体*/`コード`、LaTeX の数式→数式の画像 に変えて表示用の文字にする。
     static func markdown(_ text: String) -> NSAttributedString {
-        let lines = text.components(separatedBy: "\n").map { line -> String in
+        let math = MathTypesetting.extract(from: text)
+        let lines = math.text.components(separatedBy: "\n").map { line -> String in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.range(of: #"^(\*{3,}|-{3,}|_{3,})$"#, options: .regularExpression) != nil { return "" }
             if let range = trimmed.range(of: #"^#{1,6}\s+"#, options: .regularExpression) {
                 return "**" + trimmed[range.upperBound...].replacingOccurrences(of: "**", with: "") + "**"
             }
+            // 箇条書きの `* ` / `- ` は、そのまま記号が見えてしまうので「• 」にする。
+            if let range = line.range(of: #"^\s*[*-]\s+"#, options: .regularExpression) {
+                let indent = line[..<range.upperBound].prefix { $0 == " " || $0 == "\t" }
+                return indent + "• " + line[range.upperBound...]
+            }
             return line
         }
-        let source = lines.joined(separator: "\n")
+        var source = lines.joined(separator: "\n")
+        if let regex = boldRegex {
+            source = regex.stringByReplacingMatches(in: source, range: NSRange(location: 0, length: (source as NSString).length),
+                                                    withTemplate: "\(boldOpen)$1\(boldClose)")
+        }
         guard let parsed = try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) else {
-            return styled(source, color: .label)
+            return styled(source.replacingOccurrences(of: String(boldOpen), with: "").replacingOccurrences(of: String(boldClose), with: ""), color: .label)
         }
         let output = NSMutableAttributedString()
+        var bold = false
         for run in parsed.runs {
             var font = bodyFont
+            let strong = run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
             if let intent = run.inlinePresentationIntent {
-                if intent.contains(.stronglyEmphasized) { font = .systemFont(ofSize: bodySize, weight: .bold) }
                 if intent.contains(.code) { font = .monospacedSystemFont(ofSize: bodySize - 1, weight: .regular) }
                 if intent.contains(.emphasized), let italic = font.fontDescriptor.withSymbolicTraits(.traitItalic) { font = UIFont(descriptor: italic, size: bodySize) }
             }
-            output.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: [.font: font, .foregroundColor: UIColor.label]))
+            // 目印で太字を切り替えながら、1文字ずつではなく、区切りごとにまとめて足す。
+            var piece = ""
+            func flush() {
+                guard !piece.isEmpty else { return }
+                let weight = strong || bold
+                output.append(NSAttributedString(string: piece, attributes: [.font: weight ? UIFont.systemFont(ofSize: bodySize, weight: .bold) : font, .foregroundColor: UIColor.label]))
+                piece = ""
+            }
+            for character in String(parsed[run.range].characters) {
+                if character == boldOpen { flush(); bold = true }
+                else if character == boldClose { flush(); bold = false }
+                else { piece.append(character) }
+            }
+            flush()
         }
         output.addAttribute(.paragraphStyle, value: paragraphStyle(), range: NSRange(location: 0, length: output.length))
+        let centered = NSMutableParagraphStyle(); centered.setParagraphStyle(paragraphStyle()); centered.alignment = .center
+        MathTypesetting.substitute(in: output, spans: math.spans, bodySize: bodySize, centered: centered)
         return output
     }
 

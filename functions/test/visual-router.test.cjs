@@ -54,3 +54,10 @@ test('short arrow raster survives resolution changes and AI failures never publi
  const fcase=imageCases.find(x=>x.key==='short-arrow-flow'),file=path.resolve(__dirname,'../../build/image-router-fixtures',fcase.file),p=providers(fcase.probe),cp=checkpoint();p.ai.recognize=async()=>{p.calls.ai++;throw Object.assign(Error('IMAGE_AI_UNAVAILABLE'),{retryable:true});};
  await assert.rejects(extractAutoImage(file,'test-only',cp,p),e=>e.retryable);assert.equal(p.calls.ocr,0);assert.equal(p.calls.ai,1);assert(!cp.values.has('image-auto-v1-final'));
 });
+test('directImageAI: a photo goes straight to the image AI without the Vision OCR probe',async()=>{
+ for(const f of manifest.images){
+  const cp=checkpoint(),p=providers(f.probe),e=await extractAutoImage(path.join(dir,f.file),'test-only',cp,p,{directImageAI:true});
+  assert.equal(p.calls.ocr,0,'no OCR probe: '+f.kind);assert.equal(p.calls.ai,1);
+  assert.equal(e.recognition.routing.pages[0].route,'multimodal_ai');assert.equal(e.recognition.routing.pages[0].ocrUnits,0);
+ }
+});

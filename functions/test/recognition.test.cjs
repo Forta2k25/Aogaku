@@ -23,8 +23,23 @@ test('overload (429/503) is retried briefly then fails retryable; other errors a
 test('missing/invalid usage remains unknown; returned unpriced model never gets invented price',()=>{
  assert.equal(imageUsage({},model,1).estimatedCostUSD,null);assert.equal(imageUsage({prompt_tokens:1,completion_tokens:1,total_tokens:-1},'unknown',1).estimatedCostUSD,null);assert.equal(imageUsage({prompt_tokens:3,total_tokens:4},model,1).outputTokens,null);
 });
-test('invalid/truncated JSON never becomes evidence and measured usage survives',async()=>{
- for(const finish of ['STOP','MAX_TOKENS']) {const p=new GeminiImageRecognition('test-only',async()=>response(gem('bad',{finish})));await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.recognition.totalTokens===15);}
+test('invalid/truncated JSON never becomes evidence; usage survives (invalid JSON is retried once in place, truncation is not)',async()=>{
+ let calls=0;const p=new GeminiImageRecognition('test-only',async()=>{calls++;return response(gem('bad',{finish:'STOP'}))});
+ await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.code==='IMAGE_AI_INVALID_RESULT'&&e.recognition.totalTokens===30);assert.equal(calls,2);
+ calls=0;const q=new GeminiImageRecognition('test-only',async()=>{calls++;return response(gem('bad',{finish:'MAX_TOKENS'}))});
+ await assert.rejects(q.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.code==='IMAGE_AI_INCOMPLETE'&&e.recognition.totalTokens===15);assert.equal(calls,1);
+});
+test('a malformed JSON answer is retried once in place; both calls are billed; schema is requested',async()=>{
+ const sent=[];let calls=0;const p=new GeminiImageRecognition('test-only',async(u,o)=>{sent.push(JSON.parse(o.body));return response(++calls===1?gem('{"finalText": "壊れた',{finish:'STOP'}):gem(JSON.stringify({finalText:'直った結果'})))});
+ const e=await p.recognize(jpeg,'image/jpeg');assert.equal(e.units[0].text,'直った結果');assert.equal(calls,2);assert.equal(e.recognition.totalTokens,30);
+ assert.equal(sent[0].generationConfig.responseSchema.required[0],'finalText');assert.equal(sent[0].generationConfig.responseSchema.type,'OBJECT');
+});
+test('parseFinalText: valid JSON, salvage of finalText from broken JSON, and null when absent',()=>{
+ const {parseFinalText}=require('../lib/ai/recognition');
+ assert.equal(parseFinalText('{"finalText":"a\\nb"}'),'a\nb');
+ assert.equal(parseFinalText('{"visibleText":["x" "y"],"finalText":"救えた\\"文\\"章"}'),'救えた"文"章');
+ assert.equal(parseFinalText('{"visibleText":["x" "y"],"finalText":"生の\n改行"}'),'生の\n改行');
+ assert.equal(parseFinalText('not json'),null);assert.equal(parseFinalText('{"a":1}'),null);
 });
 test('missing key rejects before any provider request',async()=>{let calls=0;const p=new GeminiImageRecognition('',async()=>{calls++;return response({})});await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.code==='IMAGE_AI_NOT_CONFIGURED');assert.equal(calls,0);});
 test('audio costs use billed seconds including per-part minimum; never tokens',()=>{const m=audioUsage(180,180,1);assert.equal(m.estimatedCostUSD,.002);assert.equal(m.inputTokens,null);assert.equal(m.model,'whisper-large-v3-turbo');assert.equal(audioUsage(3,10,1).billedAudioSeconds,10);});

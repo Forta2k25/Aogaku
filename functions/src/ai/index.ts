@@ -492,7 +492,7 @@ export const aiChat = callable(async (uid, data, stream) => {
   try {
     const messages = buildMessages(input, context);
     // ストリーミング対応のクライアントには、できた文字から順に送る。未対応のクライアントは、これまでどおり全文を1回で返す。
-    const reply = stream?.streaming ? await geminiChatStream(key, messages, async delta => { await stream.send({delta}); }) : await geminiChat(key, messages);
+    const reply = stream?.streaming ? await geminiChatStream(key, messages, async delta => { await stream.send({delta}); }, fetch, input.images) : await geminiChat(key, messages, fetch, input.images);
     return {schemaVersion: 1, pipelineVersion: CHAT.version, text: reply.text, recognition: reply.recognition, sourceCount: context.length};
   } catch (e) {
     await reserveChatCall(uid, -1).catch(() => undefined);   // A failed provider attempt does not consume the user's daily budget.
@@ -585,7 +585,7 @@ export const aiProcessSource = onTaskDispatched({region, serviceAccount: runtime
       const pdfMagic = bytes.subarray(0, 5).toString() === "%PDF-";
       if (source.sourceType === "pdf" && !pdfMagic) throw new InputError("INVALID_PDF");
       if (source.sourceType === "image") extraction = source.pipelineVersion === "image-auto-v1" ?
-        await extractAutoImage(path, await geminiSecret(), cp, undefined, devVisualOptions(runtimeProject(), request.data)) : await extractImage(path, source.mime, await geminiSecret(), cp);
+        await extractAutoImage(path, await geminiSecret(), cp, undefined, {...devVisualOptions(runtimeProject(), request.data), directImageAI: true}) : await extractImage(path, source.mime, await geminiSecret(), cp);
       else if (source.sourceType === "pdf") extraction = source.pipelineVersion === "pdf-auto-v1" ?
         await extractAutoPDF(path, await geminiSecret(), cp) : await extractPDF(path, `gs://${bucket().name}/${source.storagePath}`, cp);
       else {

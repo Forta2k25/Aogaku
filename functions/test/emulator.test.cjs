@@ -325,7 +325,7 @@ test('visual router: new receipts, native/OCR/AI evidence, retry and deletion bo
   }
  }finally{proto.getSignedUrl=signed;}
  for(const [id,type,bytes,routes]of [
-  ['router-ocr','image',fixture.image('plain').bytes,['vision_ocr']],
+  ['router-ocr','image',fixture.image('plain').bytes,['multimodal_ai']], // 写真はOCR下調べを省き、直接画像AIへ
   ['router-diagram','image',fixture.image('arrows').bytes,['multimodal_ai']],
   ['router-mixed','pdf',fixture.pdf(['text','scanned','diagram']),['native_text','vision_ocr','multimodal_ai']]]){
   await recognitionSource(id,'router-owner',type,bytes,type==='image'?'image/png':'application/pdf');await db.doc('aiSources/'+id).update({pipelineVersion:type+'-auto-v1',schemaVersion:5});
@@ -354,7 +354,7 @@ test('image connector geometry: real worker -> named chunks -> Evidence -> retri
  const f=require('../../scripts/image_router_fixtures.cjs').relation(false),id='short-raster-arrow',owner='short-raster-owner';routerProbe=f.probe;
  try{await recognitionSource(id,owner,'image',f.bytes,'image/png');await db.doc('aiSources/'+id).update({pipelineVersion:'image-auto-v1',schemaVersion:5});
   const beforeCalls=imageRequests;await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:id}});assert.equal(imageRequests,beforeCalls+1);
-  const source=await call('aiGetSource',owner,{sourceId:id});assert.equal(source.status,'ready');const page=source.recognition.routing.pages[0];assert.equal(page.route,'multimodal_ai');assert.equal(page.provider,'gemini');assert.equal(page.model,'gemini-3.5-flash-lite');assert.equal(page.features.relationMark,false);assert.equal(page.features.lineScore,0);assert(page.features.connectorComponents>0);
+  const source=await call('aiGetSource',owner,{sourceId:id});assert.equal(source.status,'ready');const page=source.recognition.routing.pages[0];assert.equal(page.route,'multimodal_ai');assert.equal(page.provider,'gemini');assert.equal(page.model,'gemini-3.5-flash-lite');assert.equal(page.features.relationMark,false);assert.equal(page.features.lineScore,0);assert.equal(page.ocrUnits,0,'photos skip the OCR probe');
   const items=[];let after;do{const e=await call('aiGetEvidence',owner,{sourceId:id,...(after?{after}:{})});items.push(...e.items);after=e.nextCursor;}while(after);
   const {joinChunks}=require('../../scripts/evidence_adoption_dev.cjs'),expected='親から子へ特徴が遺伝する。'+'階層を説明する。'.repeat(200);
   const stored=(await db.collection(`aiSources/${id}/runs/${source.activeVersion}/chunks`).orderBy('chunkId').get()).docs.map(x=>x.data()),retrieved=(await call('aiRetrieveContext',owner,{courseOfferingId:'course-a',purpose:'lecture_summary',maxCharacters:30000})).items.filter(x=>x.sourceId===id);

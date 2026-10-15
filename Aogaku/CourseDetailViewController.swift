@@ -363,6 +363,21 @@ final class CourseDetailViewController: UIViewController {
         return Array(turns.suffix(10))
     }
 
+    /// 送ったばかりの写真(最大3枚・合計6MBまで)を、返信のAIに直接見せるための形にする。
+    /// 超える分や大きすぎる写真は対象外で、従来どおり読み取りの完了を待つ。
+    private func directChatImages(batchSourceIDs: [String], store: LocalSourceStore) -> (images: [AIChatImage], localIDs: Set<String>) {
+        var images: [AIChatImage] = [], ids = Set<String>(), total = 0
+        for localID in batchSourceIDs {
+            guard images.count < 3, let source = store.ledger.sources.first(where: { $0.id == localID }), source.kind == .image,
+                  !source.wantsDeletion, let url = store.fileURL(source), let data = try? Data(contentsOf: url),
+                  data.count <= 3 * 1024 * 1024, total + data.count <= 6 * 1024 * 1024,
+                  data.starts(with: [0xFF, 0xD8]) else { continue }
+            total += data.count
+            images.append(AIChatImage(mime: "image/jpeg", data: data.base64EncodedString())); ids.insert(localID)
+        }
+        return (images, ids)
+    }
+
     /// 「思考プロセス」の記録。段階(送信・読み取り・返信の作成)ごとに、かかった時間を残す。
     private struct AIReplyTimeline {
         let startedAt: Date
@@ -421,13 +436,15 @@ final class CourseDetailViewController: UIViewController {
                 return
             }
             let batchSourceIDs = batch.flatMap(\.sourceIDs)
-            try await awaitSourcesReady(localIDs: batchSourceIDs, uid: uid, bubble: bubble, timeline: &timeline)
-            try Task.checkCancellation()
             let store = try SourceIngestionService.shared.store(uid: uid)
+            // 送ったばかりの写真は、読み取りの完了を待たず、返信のAIに直接見せる(裏で読み取りは続く)。
+            let inline = directChatImages(batchSourceIDs: batchSourceIDs, store: store)
+            try await awaitSourcesReady(localIDs: batchSourceIDs.filter { !inline.localIDs.contains($0) }, uid: uid, bubble: bubble, timeline: &timeline)
+            try Task.checkCancellation()
             // 会話に使う資料: この授業回の読み取り済みの資料(新しい順に最大8件)。
             let remotes = store.ledger.sources.filter {
                 $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID && $0.submitted && !$0.wantsDeletion &&
-                    ["ready", "partial_ready"].contains($0.remote?.status ?? "")
+                    !inline.localIDs.contains($0.id) && ["ready", "partial_ready"].contains($0.remote?.status ?? "")
             }.sorted { $0.createdAt < $1.createdAt }.suffix(8).compactMap { $0.remote?.sourceId }
             let hasQuestion = batch.contains { $0.kind == "question" && !($0.text ?? "").isEmpty }
             let mode = hasQuestion ? "reply" : "intro"
@@ -442,7 +459,7 @@ final class CourseDetailViewController: UIViewController {
             }()
             var reply: AIChatReply?
             // できた文字から順に受け取り、画面には打っているように出す。
-            for try await event in SourceIngestionService.shared.chatReplyStream(uid: uid, remoteSourceIDs: remotes, mode: mode, turns: turns) {
+            for try await event in SourceIngestionService.shared.chatReplyStream(uid: uid, remoteSourceIDs: remotes, mode: mode, turns: turns, images: inline.images) {
                 try Task.checkCancellation()
                 switch event {
                 case .delta(let part): bubble.appendStream(part)
@@ -3913,6 +3930,7 @@ final class CourseDetailViewController: UIViewController {
     private func showNoteChatDetail(_ show: Bool) {
         guard show != noteShowsChatDetail else { return }
         view.endEditing(true)
+        if show { SourceIngestionService.shared.warmUp() }   // 送信前に、眠っているサーバー関数を起こしておく
 
         let incoming = show ? noteChatContainer : noteListContainer
         let outgoing = show ? noteListContainer : noteChatContainer

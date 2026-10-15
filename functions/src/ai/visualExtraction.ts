@@ -11,7 +11,7 @@ import {LatencyMeter, VISUAL_EXECUTION, semaphore, boundedPages} from "./latency
 import {localConnectorSignal} from "./localVisual";
 
 export type PageResult = {unit: Unit; page: import("./visualRouter").RoutedPage};
-export interface VisualOptions {sequential?: boolean; skipLocalFastPath?: boolean; providerMaxSide?: number}
+export interface VisualOptions {sequential?: boolean; skipLocalFastPath?: boolean; providerMaxSide?: number; directImageAI?: boolean}
 
 type Checkpoint = {alive: () => Promise<void>; load: (key: string) => Promise<any>;
   save: (key: string, value: any) => Promise<void>; reserveProviderCall?: () => Promise<void>; pageReady?: (result: PageResult, pageCount: number) => Promise<void>; flushPreview?: () => Promise<void>};
@@ -76,10 +76,10 @@ async function probeFeatures(bytes: Buffer, cp: Checkpoint, providers: RouterPro
     ocrQuality: clamp(probe.confidence * textQuality(probe.text)), probeAvailable: true}};
 }
 async function pageResult(bytes: Buffer | undefined, nativeText: string, features: VisualFeatures,
-  locator: {pageNumber?: number; imageIndex?: number}, cp: Checkpoint, providers: RouterProviders, name: string, kind: "pdf" | "image", meter = new LatencyMeter()) {
+  locator: {pageNumber?: number; imageIndex?: number}, cp: Checkpoint, providers: RouterProviders, name: string, kind: "pdf" | "image", meter = new LatencyMeter(), directAI = false) {
   const started = Date.now(); let decision = chooseVisualRoute(kind, features), ocrUnits = 0, ocrText = "";
   // Native/simple pages and structurally obvious visuals need no OCR round trip.
-  if (decision.route !== "native_text" && decision.visualComplexity < .55) {
+  if (!directAI && decision.route !== "native_text" && decision.visualComplexity < .55) {
     if (!bytes) throw new InputError("MISSING_PAGE_RENDER", true);
     const probe = await probeFeatures(bytes, cp, providers, name, features, kind, meter);
     ocrUnits = 1; ocrText = probe.probe.text; decision = chooseVisualRoute(kind, probe.features);
@@ -116,9 +116,10 @@ export async function extractAutoImage(path: string, key: string, cp: Checkpoint
     const ctx = canvas.getContext("2d"); ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     const bytes = canvas.toBuffer("image/png"), features = emptyFeatures();
-    const local = options.skipLocalFastPath ? null : await meter.measure("routerMs", () => raster(bytes, [], false, true));
+    const local = options.skipLocalFastPath || options.directImageAI ? null : await meter.measure("routerMs", () => raster(bytes, [], false, true));
     if (local && (local.connectorComponents || 0) > 0) features.connectorComponents = local.connectorComponents;
-    const result = await pageResult(bytes, "", features, {imageIndex: 1}, cp, providers, "image-auto-v1", "image", meter);
+    // 写真は、OCRの下調べ(Vision)を省いて直接AIに渡す。下調べの往復(約1秒)とラスター判定を省ける。
+    const result = await pageResult(bytes, "", features, {imageIndex: 1}, cp, providers, "image-auto-v1", "image", meter, options.directImageAI ?? false);
     if (features.connectorComponents) { result.page.ocrProbeSkipped = true; result.page.ocrProbeSkipReason = "local_connector_signal"; }
     return result;
   });

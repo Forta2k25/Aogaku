@@ -205,10 +205,16 @@ struct AIChatReply: Decodable, Sendable {
 }
 
 /// aiChat へ送る内容。
+/// 返信と一緒にAIへ直接見せる写真(読み取りの完了を待たずに、見ながら答えてもらう)。
+struct AIChatImage: Encodable, Sendable {
+    let mime: String
+    let data: String   // base64
+}
 struct AIChatRequest: Encodable, Sendable {
     let mode: String
     let sourceIds: [String]
     let turns: [AIChatTurn]
+    var images: [AIChatImage] = []
 }
 /// ストリーミングで届く、できたところまでの文字。
 struct AIChatDelta: Decodable, Sendable { let delta: String }

@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {CHAT,validateChat,buildMessages,chatUsage,geminiChat,geminiChatBody}=require('../lib/ai/chat');
+const {CHAT,validateChat,validateImages,buildMessages,chatUsage,geminiChat,geminiChatBody}=require('../lib/ai/chat');
 const {GEMINI_RETRY}=require('../lib/ai/gemini');GEMINI_RETRY.delaysMs=[0,0];
 const {INPUT_QUOTAS}=require('../lib/ai/admission');
 
@@ -9,7 +9,7 @@ const reply=(over={})=>({modelVersion:CHAT.model,candidates:[{finishReason:'STOP
 test('validateChat: reply needs a user turn, intro needs a source',()=>{
  assert.throws(()=>validateChat({mode:'reply',turns:[],sourceIds:['a']}),e=>e.code==='EMPTY_CHAT');
  assert.throws(()=>validateChat({mode:'intro',turns:[],sourceIds:[]}),e=>e.code==='EMPTY_CHAT');
- assert.deepEqual(validateChat({mode:'intro',sourceIds:['a']}),{mode:'intro',turns:[],sourceIds:['a']});
+ assert.deepEqual(validateChat({mode:'intro',sourceIds:['a']}),{mode:'intro',turns:[],sourceIds:['a'],images:[]});
  assert.equal(validateChat({turns:[{role:'user',text:' 要約して '}]}).turns[0].text,'要約して');
 });
 test('validateChat: limits and shapes are enforced',()=>{
@@ -83,4 +83,29 @@ test('geminiChatStream: missing usage stays null (never zero); errors map to ret
  await assert.rejects(geminiChatStream('k',[],()=>{},sse([],429)),e=>e.code==='CHAT_RATE_LIMIT'&&e.retryable);
  await assert.rejects(geminiChatStream('k',[],()=>{},sse([])),e=>e.code==='CHAT_INVALID_RESULT');
  await assert.rejects(geminiChatStream('k',[],()=>{},sse([ev({modelVersion:'x-y',candidates:[{content:{parts:[{text:'a'}]}}]})])),e=>e.code==='CHAT_MODEL_MISMATCH');
+});
+
+const jpegB64=Buffer.from([255,216,255,224,0,16]).toString('base64'),pngB64=Buffer.from([137,80,78,71,13,10,26,10,0]).toString('base64');
+test('validateImages: shape, magic bytes, count and size limits',()=>{
+ assert.deepEqual(validateImages(undefined),[]);assert.deepEqual(validateImages([{mime:'image/jpeg',data:jpegB64},{mime:'image/png',data:pngB64}]).map(i=>i.mime),['image/jpeg','image/png']);
+ const bad=v=>assert.throws(()=>validateImages(v),e=>e.code==='INVALID_CHAT_IMAGES');
+ bad('x');bad([{mime:'image/gif',data:jpegB64}]);bad([{mime:'image/jpeg',data:'***'}]);bad([{mime:'image/jpeg',data:pngB64}]);bad([{mime:'image/png',data:jpegB64}]);bad([{mime:'image/jpeg',data:''}]);
+ bad(Array(CHAT.maxImages+1).fill({mime:'image/jpeg',data:jpegB64}));
+ const big=Buffer.concat([Buffer.from([255,216]),Buffer.alloc(CHAT.maxImageBytes)]).toString('base64');bad([{mime:'image/jpeg',data:big}]);
+ const mid=Buffer.concat([Buffer.from([255,216]),Buffer.alloc(2*1024*1024)]).toString('base64');bad([{mime:'image/jpeg',data:mid},{mime:'image/jpeg',data:mid},{mime:'image/jpeg',data:mid}]);
+});
+test('validateChat: images are validated; an intro may rest on images alone',()=>{
+ assert.deepEqual(validateChat({mode:'intro',sourceIds:[],images:[{mime:'image/jpeg',data:jpegB64}]}).images.length,1);
+ assert.throws(()=>validateChat({mode:'intro',sourceIds:[]}),e=>e.code==='EMPTY_CHAT');
+ assert.throws(()=>validateChat({turns:[{role:'user',text:'a'}],images:[{mime:'image/jpeg',data:'!!'}]}),e=>e.code==='INVALID_CHAT_IMAGES');
+ assert.deepEqual(validateChat({turns:[{role:'user',text:'a'}]}).images,[]);
+});
+test('geminiChatBody: direct images go first on the last user turn only',()=>{
+ const b=geminiChatBody([{role:'system',content:'S'},{role:'user',content:'前'},{role:'assistant',content:'答'},{role:'user',content:'今'}],[{mime:'image/jpeg',data:jpegB64}]);
+ assert.equal(b.contents[0].parts.length,1);const last=b.contents.at(-1);assert.equal(last.role,'user');assert.equal(last.parts[0].inline_data.mime_type,'image/jpeg');assert.equal(last.parts[0].inline_data.data,jpegB64);assert.equal(last.parts.at(-1).text,'今');
+ assert.equal(geminiChatBody([{role:'user',content:'a'}]).contents[0].parts.length,1);
+});
+test('geminiChat: images are sent to the provider with the request',async()=>{
+ let sent;await geminiChat('k',[{role:'user',content:'a'}],async(u,init)=>{sent=JSON.parse(init.body);return ok(reply())()},[{mime:'image/png',data:pngB64}]);
+ assert.equal(sent.contents[0].parts[0].inline_data.data,pngB64);
 });

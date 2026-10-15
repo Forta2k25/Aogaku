@@ -26,27 +26,50 @@ export class GeminiImageRecognition implements ImageRecognitionProvider {
     const isPNG = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
     if (!(mime === "image/png" ? isPNG : bytes[0] === 255 && bytes[1] === 216)) throw new InputError("INVALID_IMAGE");
     const start = Date.now(), model = RECOGNITION_PRICING.image.model;
-    let response: Response;
-    try {
-      response = await geminiFetch(this.request, this.key, model, "generateContent", {
-        systemInstruction: {parts: [{text: IMAGE_INSTRUCTIONS}]},
-        contents: [{role: "user", parts: [{inline_data: {mime_type: mime, data: bytes.toString("base64")}}]}],
-        generationConfig: {temperature: 0, maxOutputTokens: 4000, responseMimeType: "application/json"}}, 120000);
-    } catch { throw new InputError("IMAGE_AI_UNAVAILABLE", true); }
-    if (!response.ok) { await logGeminiFailure("image", response); throw new InputError(response.status === 429 ? "IMAGE_AI_RATE_LIMIT" : "IMAGE_AI_UNAVAILABLE", true); }
-    let result: any;
-    try { result = await response.json(); } catch { throw new InputError("IMAGE_AI_INVALID_RESULT", true); }
-    if (!sameGeminiModel(result.modelVersion, model)) throw new InputError("IMAGE_MODEL_MISMATCH", true);
-    const recognition = imageUsage(geminiUsage(result.usageMetadata), model, Date.now() - start);
-    const candidate = result.candidates?.[0];
-    const raw = (candidate?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("");
-    if (candidate?.finishReason !== "STOP" || !raw || raw.length > 100000) throw new RecognitionError("IMAGE_AI_INCOMPLETE", true, recognition);
-    let parsed: any;
-    try { parsed = JSON.parse(raw); } catch { console.error(`image: unparsable JSON from Gemini (finishReason ${candidate?.finishReason}, ${raw.length} chars)`); throw new RecognitionError("IMAGE_AI_INVALID_RESULT", true, recognition); }
-    if (typeof parsed?.finalText !== "string" || !parsed.finalText.trim() || parsed.finalText.length > 60000) throw new RecognitionError("IMAGE_AI_INVALID_RESULT", true, recognition);
-    const text = parsed.finalText.trim();
-    return {units: [{text, locator: {imageIndex: 1}, method: "multimodal_ai", flags: []}], totalUnits: 1, failedUnits: [], recognition};
+    // 出力が壊れたJSON(引用符や改行の入れ違い)になったときは、タスクの再試行(30秒以上の待ち)ではなく、その場で1回だけ呼び直す。
+    // 使った token は、両方の呼び出しを合算して記録する。
+    let used = {prompt_tokens: 0 as number | null, completion_tokens: 0 as number | null, total_tokens: 0 as number | null};
+    const add = (u: ReturnType<typeof geminiUsage>) => { for (const k of ["prompt_tokens", "completion_tokens", "total_tokens"] as const) used[k] = used[k] === null || u[k] === null ? null : used[k]! + u[k]!; };
+    for (let attempt = 0; ; attempt++) {
+      let response: Response;
+      try {
+        response = await geminiFetch(this.request, this.key, model, "generateContent", {
+          systemInstruction: {parts: [{text: IMAGE_INSTRUCTIONS}]},
+          contents: [{role: "user", parts: [{inline_data: {mime_type: mime, data: bytes.toString("base64")}}]}],
+          generationConfig: {temperature: 0, maxOutputTokens: 4000, responseMimeType: "application/json", responseSchema: IMAGE_RESPONSE_SCHEMA}}, 120000);
+      } catch { throw new InputError("IMAGE_AI_UNAVAILABLE", true); }
+      if (!response.ok) { await logGeminiFailure("image", response); throw new InputError(response.status === 429 ? "IMAGE_AI_RATE_LIMIT" : "IMAGE_AI_UNAVAILABLE", true); }
+      let result: any;
+      try { result = await response.json(); } catch { throw new InputError("IMAGE_AI_INVALID_RESULT", true); }
+      if (!sameGeminiModel(result.modelVersion, model)) throw new InputError("IMAGE_MODEL_MISMATCH", true);
+      add(geminiUsage(result.usageMetadata));
+      const recognition = imageUsage({...used}, model, Date.now() - start);
+      const candidate = result.candidates?.[0];
+      const raw = (candidate?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("");
+      if (candidate?.finishReason !== "STOP" || !raw || raw.length > 100000) throw new RecognitionError("IMAGE_AI_INCOMPLETE", true, recognition);
+      const finalText = parseFinalText(raw);
+      if (finalText === null) {
+        console.error(`image: unparsable JSON from Gemini (attempt ${attempt + 1}, ${raw.length} chars)`);
+        if (attempt === 0) continue;
+        throw new RecognitionError("IMAGE_AI_INVALID_RESULT", true, recognition);
+      }
+      if (!finalText.trim() || finalText.length > 60000) throw new RecognitionError("IMAGE_AI_INVALID_RESULT", true, recognition);
+      const text = finalText.trim();
+      return {units: [{text, locator: {imageIndex: 1}, method: "multimodal_ai", flags: []}], totalUnits: 1, failedUnits: [], recognition};
+    }
   }
+}
+
+/** Gemini の構造化出力の指定。形を縛って、壊れたJSONになるのを防ぐ(finalText は必須)。 */
+export const IMAGE_RESPONSE_SCHEMA = {type: "OBJECT", required: ["finalText"], properties: {
+  visibleText: {type: "ARRAY", items: {type: "STRING"}}, visibleRelations: {type: "ARRAY", items: {type: "STRING"}},
+  description: {type: "STRING"}, uncertainty: {type: "ARRAY", items: {type: "STRING"}}, finalText: {type: "STRING"}}};
+/** 出力から finalText を取り出す。正しいJSONならそのまま、壊れていても finalText の文字列だけは救う。取り出せなければ null。 */
+export function parseFinalText(raw: string): string | null {
+  try { const parsed = JSON.parse(raw); return typeof parsed?.finalText === "string" ? parsed.finalText : null; } catch { /* fall through */ }
+  const match = /"finalText"\s*:\s*"((?:[^"\\]|\\.)*)"/s.exec(raw);
+  if (!match) return null;
+  try { return JSON.parse('"' + match[1].replace(/\r?\n/g, "\\n") + '"'); } catch { return null; }
 }
 
 // Apply to both fresh provider results and resumable checkpoints before publishing chunks.

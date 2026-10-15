@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE00010000000000000003 /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00010000000000000002 /* SwiftMath */; };
 		A10000010000000000000001 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = A10000010000000000000002 /* FirebaseAppCheck */; };
 		A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = A40AACB82E7556BC009104D2 /* GoogleMobileAds */; };
 		A49491AE2E7E7EB60027AA8F /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = A49491AD2E7E7EB60027AA8F /* FirebaseMessaging */; };
@@ -182,6 +183,7 @@
 				A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */,
 				A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */,
 				B3618AB02FC1C1BE0060C703 /* GoogleSignIn in Frameworks */,
+				C0DE00010000000000000003 /* SwiftMath in Frameworks */,
 				B37651392E7E8D3400E77AF2 /* FirebaseFunctions in Frameworks */,
 				B3F9F09C2E79952E00BFB330 /* FirebaseStorage in Frameworks */,
 				B3F9F0962E79546D00BFB330 /* FirebaseAuth in Frameworks */,
@@ -329,6 +331,7 @@
 				B3F9F0952E79546D00BFB330 /* FirebaseAuth */,
 				A10000010000000000000002 /* FirebaseAppCheck */,
 				B3F9F09B2E79952E00BFB330 /* FirebaseStorage */,
+				C0DE00010000000000000002 /* SwiftMath */,
 				B37651382E7E8D3400E77AF2 /* FirebaseFunctions */,
 				A4EFF9A02E84E99000135008 /* FirebaseRemoteConfig */,
 				B3618AAF2FC1C1BE0060C703 /* GoogleSignIn */,
@@ -425,6 +428,7 @@
 				A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
 				B3618AAE2FC1C1BE0060C703 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				C0DE00010000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B3A17B202E40A19700ACCA3A /* Products */;
@@ -1036,6 +1040,14 @@
 				minimumVersion = 9.1.0;
 			};
 		};
+		C0DE00010000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath";
+			requirement = {
+				kind = exactVersion;
+				version = 1.7.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1093,6 +1105,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		C0DE00010000000000000002 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DE00010000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

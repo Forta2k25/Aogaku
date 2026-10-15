@@ -241,8 +241,7 @@ struct AIDetectionResult {
         let model: String
         if let recognition {
             switch recognition.provider {
-            case "gemini", "mixed": model = "Gemini / " + recognition.model
-            case "groq": model = "Groq / " + recognition.model
+            case "gemini", "groq", "mixed": model = (recognition.model.hasPrefix("gemini") ? "Gemini / " : "Groq / ") + recognition.model
             case "google_vision": model = "Google Vision OCR / " + recognition.model
             case "pdfjs": model = "PDF本文抽出"
             default: model = recognition.model

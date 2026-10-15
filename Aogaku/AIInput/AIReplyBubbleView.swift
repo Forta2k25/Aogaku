@@ -23,6 +23,9 @@ final class AIReplyBubbleView: UIView {
     private let retryButton = UIButton(type: .system)
     private let metaButton = UIButton(type: .system)
     private let detailLabel = UILabel()
+    // 追質問のボタン(返信の下に、横に並べる)
+    private let suggestionScroll = UIScrollView()
+    private let suggestionStack = UIStackView()
     private var plainText = ""
     private var detailVisible = false
     // 打っているような表示(Groqは全文を1秒ほどで返すため、表示側でペースを作る)
@@ -33,6 +36,8 @@ final class AIReplyBubbleView: UIView {
     private var pendingFinish: (metrics: AIReplyMetrics?, usdJPY: Double?)?
     /// 失敗後の「もう一度」と、「…」メニューの「もう一度生成」の両方で呼ばれる。
     var onRetry: (() -> Void)?
+    /// 追質問のボタンが押されたとき、そのボタンの文言で呼ばれる(そのまま質問として送る)。
+    var onSuggestion: ((String) -> Void)?
     /// 文章が伸びたときに呼ばれる(一番下にいるときに、画面を追従させるため)。
     var onContentGrow: (() -> Void)?
 
@@ -103,7 +108,22 @@ final class AIReplyBubbleView: UIView {
         detailLabel.textColor = .secondaryLabel
         detailLabel.numberOfLines = 0
 
-        let column = UIStackView(arrangedSubviews: [header, stepsLabel, bodyView, retryButton, actionRow, metaButton, detailLabel])
+        suggestionScroll.showsHorizontalScrollIndicator = false
+        suggestionScroll.isHidden = true
+        suggestionScroll.translatesAutoresizingMaskIntoConstraints = false
+        suggestionStack.axis = .horizontal
+        suggestionStack.spacing = 8
+        suggestionStack.translatesAutoresizingMaskIntoConstraints = false
+        suggestionScroll.addSubview(suggestionStack)
+        NSLayoutConstraint.activate([
+            suggestionStack.topAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.topAnchor),
+            suggestionStack.bottomAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.bottomAnchor),
+            suggestionStack.leadingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.leadingAnchor),
+            suggestionStack.trailingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.trailingAnchor),
+            suggestionStack.heightAnchor.constraint(equalTo: suggestionScroll.frameLayoutGuide.heightAnchor),
+            suggestionScroll.heightAnchor.constraint(equalToConstant: 32)
+        ])
+        let column = UIStackView(arrangedSubviews: [header, stepsLabel, bodyView, retryButton, actionRow, suggestionScroll, metaButton, detailLabel])
         column.axis = .vertical
         column.spacing = 6
         column.alignment = .fill
@@ -130,7 +150,27 @@ final class AIReplyBubbleView: UIView {
         plainText = ""
         bodyView.isHidden = true; bodyView.attributedText = nil
         retryButton.isHidden = true; actionRow.isHidden = true; metaButton.isHidden = true; detailLabel.isHidden = true
+        suggestionScroll.isHidden = true
+        suggestionStack.arrangedSubviews.forEach { suggestionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         detailVisible = false
+    }
+
+    // MARK: 追質問のボタン
+    /// 返信の下に、ワンタップで送れる追質問を並べる。空なら隠す。
+    func setSuggestions(_ titles: [String]) {
+        suggestionStack.arrangedSubviews.forEach { suggestionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
+        guard !titles.isEmpty else { suggestionScroll.isHidden = true; return }
+        for title in titles {
+            var configuration = UIButton.Configuration.gray()
+            configuration.attributedTitle = AttributedString(title, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 13)]))
+            configuration.cornerStyle = .capsule
+            configuration.baseForegroundColor = .label
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12)
+            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onSuggestion?(title) })
+            button.accessibilityIdentifier = "ai-suggestion"
+            suggestionStack.addArrangedSubview(button)
+        }
+        suggestionScroll.isHidden = actionRow.isHidden   // 文章を打ち終えて、下の行が出るまでは隠しておく
     }
 
     // MARK: 思考プロセス
@@ -252,6 +292,7 @@ final class AIReplyBubbleView: UIView {
 
     private func showFooter(metrics: AIReplyMetrics?, usdJPY: Double?) {
         actionRow.isHidden = false
+        suggestionScroll.isHidden = suggestionStack.arrangedSubviews.isEmpty
         moreButton.menu = UIMenu(children: [
             UIAction(title: "もう一度生成", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in self?.onRetry?() }
         ])

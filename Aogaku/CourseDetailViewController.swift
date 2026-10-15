@@ -284,6 +284,7 @@ final class CourseDetailViewController: UIViewController {
     private func makeAIReplyBubble(_ id: String) -> AIReplyBubbleView {
         let bubble = AIReplyBubbleView()
         bubble.onRetry = { [weak self] in self?.retryAIReply(afterMessageID: id) }
+        bubble.onSuggestion = { [weak self] text in self?.sendAISuggestion(text) }
         return bubble
     }
     /// メッセージ列のうち、AIの返信を除いた「ユーザーのメッセージ」の行。
@@ -299,6 +300,31 @@ final class CourseDetailViewController: UIViewController {
         noteChatMessageStack.insertArrangedSubview(bubble, at: at + 1)
         scrollNoteChatToBottom(animated: true)
     }
+    /// 最後のメッセージへの返信にだけ、追質問のボタンを出す。画像・資料だけを送ったときは「リアペ」などの頼み方、
+    /// 質問への返信のときは「もっと簡単に」などの深掘りを出す。新しいメッセージを送ると、ボタンは消える。
+    private func refreshAISuggestions() {
+        for bubble in aiReplyBubbles.values { bubble.setSuggestions([]) }
+        guard noteShowsChatDetail, let uid = aiSessionUID, let context = try? aiContext(day: noteChatCurrentSession),
+              let store = try? SourceIngestionService.shared.store(uid: uid),
+              let last = store.messages(context: context).last, let reply = store.reply(afterMessageID: last.id),
+              let bubble = aiReplyBubbles[last.id] else { return }
+        let titles: [String]
+        if last.kind == "question" {
+            let hasMath = reply.text.contains("$") || reply.text.contains("\\(")
+            titles = hasMath ? ["もっと簡単に", "式変形だけ詳しく", "テストに出そうな3問", "高校数学から説明して"]
+                             : ["もっと簡単に", "具体例を出して", "テストに出そうな3問", "要点を3行で"]
+        } else {
+            titles = ["リアクションペーパーを書いて", "要約して", "小テストを作って", "ノートにまとめて"]
+        }
+        bubble.setSuggestions(titles)
+    }
+    /// 追質問のボタンを、入力欄から送ったのと同じように送る。
+    private func sendAISuggestion(_ text: String) {
+        guard noteShowsChatDetail, !text.isEmpty else { return }
+        noteChatTextField.text = text
+        noteChatSendTapped()
+    }
+
     /// 吹き出し列を作り直す。各メッセージの直後に、そのメッセージへのAIの返信を挟む。
     private func rebuildNoteChatStack(session: Int) {
         noteChatMessageStack.arrangedSubviews.forEach {
@@ -313,6 +339,7 @@ final class CourseDetailViewController: UIViewController {
                 noteChatMessageStack.addArrangedSubview(reply)
             }
         }
+        refreshAISuggestions()
     }
 
     /// 送信したメッセージへのAIの返信を作る(資料の読み取りを待つ → サーバーのAIに会話を作らせる → 吹き出しに出して保存)。
@@ -478,6 +505,7 @@ final class CourseDetailViewController: UIViewController {
                 detail: read?.detail, totalMs: timeline.totalMs, steps: timeline.steps)
             try? store.addReply(AIStoredReply(id: UUID().uuidString, context: context, afterMessageID: id, text: reply.text, createdAt: Date(), metrics: metrics))
             bubble.completeStream(fullText: reply.text, metrics: metrics, usdJPY: AIReplyBubbleView.displayUSDJPY)
+            refreshAISuggestions()
         } catch {
             if Task.isCancelled || error is CancellationError { return }
             let message = (error as? AIInputError)?.errorDescription
@@ -2963,6 +2991,7 @@ final class CourseDetailViewController: UIViewController {
             noteChatPendingRecordingsBySession[noteChatCurrentSession] = []
             reloadNoteChatAttachments(animated: true)
             appendNoteChatMessages(messages)
+            refreshAISuggestions()
             updateNoteChatSendButton(animated: true)
             SourceIngestionService.shared.resume(uid: context.ownerUID)
             // 送ったメッセージへのAIの返信を作る(資料なら読み取りを待ってから、会話として返す)。

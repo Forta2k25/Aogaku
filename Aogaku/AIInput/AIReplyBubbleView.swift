@@ -321,8 +321,32 @@ final class AIReplyBubbleView: UIView {
         }
     }
 
+    /// 打っている途中は、閉じていない数式($$ ... や $ ...)を隠す。書きかけの LaTeX がそのまま見えてしまうのを防ぐ(閉じたら数式として出る)。
+    static func hidingOpenMath(_ text: String) -> String {
+        var result = text
+        if let open = openMathStart(result, token: "$$") { result = String(result[..<open]) }
+        else {
+            // $$ を除いたうえで、1個余っている $ があれば、そこから先を隠す。
+            let scalars = Array(result)
+            var singles: [Int] = [], i = 0
+            while i < scalars.count {
+                if scalars[i] == "$" { if i + 1 < scalars.count, scalars[i + 1] == "$" { i += 2; continue }; singles.append(i) }
+                i += 1
+            }
+            if singles.count % 2 == 1, let last = singles.last { result = String(scalars[..<last]) }
+        }
+        // 「$」の直前の空白だけが残らないように整える。
+        while result.last == " " || result.last == "\n" { result.removeLast() }
+        return result
+    }
+    private static func openMathStart(_ text: String, token: String) -> String.Index? {
+        var count = 0, last: String.Index?, search = text.startIndex..<text.endIndex
+        while let r = text.range(of: token, range: search) { count += 1; last = r.lowerBound; search = r.upperBound..<text.endIndex }
+        return count % 2 == 1 ? last : nil
+    }
+
     private func render(_ text: String, final: Bool) {
-        let attributed = Self.markdown(text)
+        let attributed = Self.markdown(final ? text : Self.hidingOpenMath(text))
         plainText = attributed.string
         bodyView.attributedText = attributed
     }

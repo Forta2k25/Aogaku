@@ -215,6 +215,10 @@ struct AIChatRequest: Encodable, Sendable {
     let sourceIds: [String]
     let turns: [AIChatTurn]
     var images: [AIChatImage] = []
+    /// 資料を送った会話か。true なのに資料を1つも渡せないとき、サーバーは作り話をせずに止める。
+    var materialExpected = false
+    /// 送ったのに、まだ読み取り中・失敗していて、今回は渡せなかった資料の数。
+    var unreadSources = 0
 }
 /// ストリーミングで届く、できたところまでの文字。
 struct AIChatDelta: Decodable, Sendable { let delta: String }

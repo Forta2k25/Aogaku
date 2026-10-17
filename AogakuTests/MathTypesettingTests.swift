@@ -77,4 +77,12 @@ import UIKit
         XCTAssertGreaterThan(width, 0)
         XCTAssertLessThanOrEqual(width, UIScreen.main.bounds.width)
     }
+
+    func testStreamingHidesOnlyUnclosedMath() {
+        XCTAssertEqual(AIReplyBubbleView.hidingOpenMath("答えは $x$ です"), "答えは $x$ です")
+        XCTAssertEqual(AIReplyBubbleView.hidingOpenMath("まず\n$$\\sqrt{0} \\le"), "まず")
+        XCTAssertEqual(AIReplyBubbleView.hidingOpenMath("閉じた $$a=b$$ のあと $y = "), "閉じた $$a=b$$ のあと")
+        XCTAssertEqual(AIReplyBubbleView.hidingOpenMath("式 $$a=b$$ 完了"), "式 $$a=b$$ 完了")
+        XCTAssertEqual(AIReplyBubbleView.hidingOpenMath("数式なし"), "数式なし")
+    }
 }

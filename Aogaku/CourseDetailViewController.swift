@@ -390,19 +390,24 @@ final class CourseDetailViewController: UIViewController {
         return Array(turns.suffix(10))
     }
 
-    /// 送ったばかりの写真(最大3枚・合計6MBまで)を、返信のAIに直接見せるための形にする。
-    /// 超える分や大きすぎる写真は対象外で、従来どおり読み取りの完了を待つ。
-    private func directChatImages(batchSourceIDs: [String], store: LocalSourceStore) -> (images: [AIChatImage], localIDs: Set<String>) {
-        var images: [AIChatImage] = [], ids = Set<String>(), total = 0
-        for localID in batchSourceIDs {
-            guard images.count < 3, let source = store.ledger.sources.first(where: { $0.id == localID }), source.kind == .image,
+    /// 返信のAIに直接見せる写真(最大3枚・合計6MBまで)。今回送った写真を優先し、足りなければ同じ授業回で送った写真を新しい順に足す。
+    /// 追質問(「解答作成して」など)でも、元の写真そのものを毎回根拠として渡すためで、前回のAIの返信文だけに頼らない。
+    /// 超える分や大きすぎる写真は対象外で、読み取り結果(あれば)で補う。渡す順番は送った順で、毎回そろえる。
+    private func directChatImages(batchSourceIDs: [String], context: AIInputContext, store: LocalSourceStore) -> (images: [AIChatImage], localIDs: Set<String>) {
+        let history = store.ledger.sources.filter {
+            $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID && $0.submitted && !batchSourceIDs.contains($0.id)
+        }.sorted { $0.createdAt > $1.createdAt }.map(\.id)
+        var picked: [(source: AIStoredSource, data: Data)] = [], total = 0
+        for localID in batchSourceIDs + history {
+            guard picked.count < 3, let source = store.ledger.sources.first(where: { $0.id == localID }), source.kind == .image,
                   !source.wantsDeletion, let url = store.fileURL(source), let data = try? Data(contentsOf: url),
                   data.count <= 3 * 1024 * 1024, total + data.count <= 6 * 1024 * 1024,
                   data.starts(with: [0xFF, 0xD8]) else { continue }
             total += data.count
-            images.append(AIChatImage(mime: "image/jpeg", data: data.base64EncodedString())); ids.insert(localID)
+            picked.append((source, data))
         }
-        return (images, ids)
+        picked.sort { $0.source.createdAt < $1.source.createdAt }
+        return (picked.map { AIChatImage(mime: "image/jpeg", data: $0.data.base64EncodedString()) }, Set(picked.map(\.source.id)))
     }
 
     /// 「思考プロセス」の記録。段階(送信・読み取り・返信の作成)ごとに、かかった時間を残す。
@@ -465,7 +470,7 @@ final class CourseDetailViewController: UIViewController {
             let batchSourceIDs = batch.flatMap(\.sourceIDs)
             let store = try SourceIngestionService.shared.store(uid: uid)
             // 送ったばかりの写真は、読み取りの完了を待たず、返信のAIに直接見せる(裏で読み取りは続く)。
-            let inline = directChatImages(batchSourceIDs: batchSourceIDs, store: store)
+            let inline = directChatImages(batchSourceIDs: batchSourceIDs, context: context, store: store)
             try await awaitSourcesReady(localIDs: batchSourceIDs.filter { !inline.localIDs.contains($0) }, uid: uid, bubble: bubble, timeline: &timeline)
             try Task.checkCancellation()
             // 会話に使う資料: この授業回の読み取り済みの資料(新しい順に最大8件)。
@@ -473,6 +478,11 @@ final class CourseDetailViewController: UIViewController {
                 $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID && $0.submitted && !$0.wantsDeletion &&
                     !inline.localIDs.contains($0.id) && ["ready", "partial_ready"].contains($0.remote?.status ?? "")
             }.sorted { $0.createdAt < $1.createdAt }.suffix(8).compactMap { $0.remote?.sourceId }
+            // この授業回で送った資料のうち、今回の返信に渡せていないもの(読み取り中・失敗)。AIには「その内容は推測しない」と伝える。
+            let daySources = store.ledger.sources.filter {
+                $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID && $0.submitted && !$0.wantsDeletion
+            }
+            let unreadSources = daySources.filter { !inline.localIDs.contains($0.id) && !["ready", "partial_ready"].contains($0.remote?.status ?? "") }.count
             let hasQuestion = batch.contains { $0.kind == "question" && !($0.text ?? "").isEmpty }
             let mode = hasQuestion ? "reply" : "intro"
             let turns = mode == "intro" ? [] : aiChatTurns(store: store, context: context)
@@ -495,7 +505,8 @@ final class CourseDetailViewController: UIViewController {
             }
             defer { stageTask?.cancel() }
             // できた文字から順に受け取り、画面には打っているように出す。
-            for try await event in SourceIngestionService.shared.chatReplyStream(uid: uid, remoteSourceIDs: remotes, mode: mode, turns: turns, images: inline.images) {
+            for try await event in SourceIngestionService.shared.chatReplyStream(uid: uid, remoteSourceIDs: remotes, mode: mode, turns: turns, images: inline.images,
+                                                                                 materialExpected: !daySources.isEmpty, unreadSources: unreadSources) {
                 try Task.checkCancellation()
                 switch event {
                 case .delta(let part):
@@ -6552,7 +6563,7 @@ extension CourseDetailViewController: PHPickerViewControllerDelegate {
                             do {
                                 guard let url else { throw AIInputError.message("写真を読み込めませんでした") }
                                 let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                                guard let image = PhotoCodec.downsample(data, maxPixel: 4096), let jpeg = image.jpegData(compressionQuality: 0.9) else {
+                                guard let image = PhotoCodec.downsample(data, maxPixel: 2048), let jpeg = image.jpegData(compressionQuality: 0.8) else {
                                     throw AIInputError.message("この写真の形式は読み込めませんでした")
                                 }
                                 continuation.resume(returning: jpeg)

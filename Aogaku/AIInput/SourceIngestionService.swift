@@ -94,6 +94,7 @@ final class SourceIngestionService {
         case "CHAT_QUOTA_EXCEEDED": return AIInputError.message("今日のAIとの会話の上限に達しました。明日また使えます")
         case "CHAT_RATE_LIMIT": return AIInputError.message("AIが混み合っています。少し待ってもう一度お試しください")
         case "CHAT_UNAVAILABLE", "CHAT_INVALID_RESULT", "CHAT_MODEL_MISMATCH": return AIInputError.message("AIの返信を作れませんでした。もう一度お試しください")
+        case "MATERIAL_UNAVAILABLE": return AIInputError.message("送った資料をまだ読み込めていません。少し待つか、もう一度送ってください")
         case "CHAT_NOT_CONFIGURED": return AIInputError.message("AIとの会話は現在準備中です")
         case "CHAT_TURN_TOO_LONG": return AIInputError.message("メッセージが長すぎます。短くして送ってください")
         default:
@@ -299,14 +300,16 @@ final class SourceIngestionService {
     }
     /// AIの返信をストリーミングで受け取る。できた文字から順に `.delta` が届き、最後に `.final`(全文と実測の token・料金)が届く。
     /// サーバーが古くてストリーミングに未対応でも、`.final` だけが届くので同じように扱える。
-    func chatReplyStream(uid: String, remoteSourceIDs: [String], mode: String, turns: [AIChatTurn], images: [AIChatImage] = []) -> AsyncThrowingStream<AIChatEvent, Error> {
+    func chatReplyStream(uid: String, remoteSourceIDs: [String], mode: String, turns: [AIChatTurn], images: [AIChatImage] = [],
+                         materialExpected: Bool = false, unreadSources: Int = 0) -> AsyncThrowingStream<AIChatEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 do {
                     try self.checkUser(uid)
                     if AppBackend.isOffline { throw AIInputError.message("ローカル確認モードではクラウド通信を行いません") }
                     let callable: Callable<AIChatRequest, StreamResponse<AIChatDelta, AIChatReply>> = self.functions.httpsCallable("aiChat")
-                    let request = AIChatRequest(mode: mode, sourceIds: remoteSourceIDs, turns: turns, images: images)
+                    let request = AIChatRequest(mode: mode, sourceIds: remoteSourceIDs, turns: turns, images: images,
+                                               materialExpected: materialExpected, unreadSources: unreadSources)
                     for try await item in try callable.stream(request) {
                         try self.checkUser(uid)
                         switch item {

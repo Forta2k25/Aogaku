@@ -27,7 +27,16 @@ test('invalid/truncated JSON never becomes evidence; usage survives (invalid JSO
  let calls=0;const p=new GeminiImageRecognition('test-only',async()=>{calls++;return response(gem('bad',{finish:'STOP'}))});
  await assert.rejects(p.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.code==='IMAGE_AI_INVALID_RESULT'&&e.recognition.totalTokens===30);assert.equal(calls,2);
  calls=0;const q=new GeminiImageRecognition('test-only',async()=>{calls++;return response(gem('bad',{finish:'MAX_TOKENS'}))});
- await assert.rejects(q.recognize(jpeg,'image/jpeg'),e=>e.retryable&&e.code==='IMAGE_AI_INCOMPLETE'&&e.recognition.totalTokens===15);assert.equal(calls,1);
+ await assert.rejects(q.recognize(jpeg,'image/jpeg'),e=>!e.retryable&&e.code==='IMAGE_AI_INCOMPLETE'&&e.recognition.totalTokens===15);assert.equal(calls,1);
+ calls=0;const r=new GeminiImageRecognition('test-only',async()=>{calls++;return response(gem('',{finish:'OTHER'}))});
+ await assert.rejects(r.recognize(jpeg,'image/jpeg'),e=>!e.retryable&&e.code==='IMAGE_AI_INCOMPLETE');assert.equal(calls,2);
+});
+test('RECITATION is retried once in place with a summarize-not-transcribe instruction, then fails without task retry',async()=>{
+ const bodies=[];let calls=0;
+ const ok=new GeminiImageRecognition('test-only',async(u,init)=>{bodies.push(JSON.parse(init.body).systemInstruction.parts[0].text);calls++;return calls===1?response(gem('',{finish:'RECITATION'})):response(gem(JSON.stringify({finalText:'要約です'}),{finish:'STOP'}))});
+ const out=await ok.recognize(jpeg,'image/jpeg');assert.equal(out.units[0].text,'要約です');assert.equal(calls,2);assert.ok(!bodies[0].includes('RETRY MODE')&&bodies[1].includes('RETRY MODE'));
+ calls=0;const bad=new GeminiImageRecognition('test-only',async()=>{calls++;return response(gem('',{finish:'RECITATION'}))});
+ await assert.rejects(bad.recognize(jpeg,'image/jpeg'),e=>!e.retryable&&e.code==='IMAGE_AI_INCOMPLETE');assert.equal(calls,2);
 });
 test('a malformed JSON answer is retried once in place; both calls are billed; schema is requested',async()=>{
  const sent=[];let calls=0;const p=new GeminiImageRecognition('test-only',async(u,o)=>{sent.push(JSON.parse(o.body));return response(++calls===1?gem('{"finalText": "壊れた',{finish:'STOP'}):gem(JSON.stringify({finalText:'直った結果'})))});

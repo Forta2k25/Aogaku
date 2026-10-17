@@ -487,6 +487,8 @@ export const aiChat = callable(async (uid, data, stream) => {
   const context: ContextItem[] = [...new Set(selected.map(s => s.sourceId))].map(sourceId => ({
     title: titles.get(sourceId) || "資料",
     text: selected.filter(s => s.sourceId === sourceId).sort((a, b) => String(a.chunkId).localeCompare(String(b.chunkId))).map(s => s.text).join("\n")}));
+  // 資料を送った会話なのに、画像も読み取り結果も1つも渡せない。モデルを呼ぶと、無いはずの資料を作り話で埋めかねないので、ここで止める。
+  if (input.mode === "reply" && input.materialExpected && !context.length && !input.images.length) throw new InputError("MATERIAL_UNAVAILABLE");
   const key = await geminiSecret();
   await reserveChatCall(uid);
   try {

@@ -495,7 +495,7 @@ export const aiChat = callable(async (uid, data, stream) => {
     const messages = buildMessages(input, context);
     // ストリーミング対応のクライアントには、できた文字から順に送る。未対応のクライアントは、これまでどおり全文を1回で返す。
     const reply = stream?.streaming ? await geminiChatStream(key, messages, async delta => { await stream.send({delta}); }, fetch, input.images) : await geminiChat(key, messages, fetch, input.images);
-    return {schemaVersion: 1, pipelineVersion: CHAT.version, text: reply.text, recognition: reply.recognition, sourceCount: context.length};
+    return {schemaVersion: 1, pipelineVersion: CHAT.version, text: reply.text, suggestions: reply.suggestions, recognition: reply.recognition, sourceCount: context.length};
   } catch (e) {
     await reserveChatCall(uid, -1).catch(() => undefined);   // A failed provider attempt does not consume the user's daily budget.
     throw e;

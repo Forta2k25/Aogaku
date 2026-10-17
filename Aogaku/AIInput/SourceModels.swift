@@ -202,6 +202,8 @@ struct AIChatReply: Decodable, Sendable {
     let text: String
     let recognition: AIRecognitionMetadata?
     let sourceCount: Int?
+    /// AIが返信に合わせて添えた、次に送りそうな依頼(最大2つ)。古いサーバーでは無い。
+    let suggestions: [String]?
 }
 
 /// aiChat へ送る内容。
@@ -258,6 +260,8 @@ struct AIStoredReply: Codable, Identifiable {
     let createdAt: Date
     var metrics: AIReplyMetrics? = nil
     var hidden = false
+    /// この返信に添えられた、AIの次の候補。再起動後にも同じボタンを出すために保存する(以前の返信には無い)。
+    var suggestions: [String]? = nil
 }
 
 enum AIInputError: LocalizedError {

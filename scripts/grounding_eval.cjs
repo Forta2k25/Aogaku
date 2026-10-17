@@ -22,6 +22,8 @@ async function ask(label, turns, images, {materialExpected = true, unreadSources
   const bad = forbid.filter(w => reply.text.includes(w));
   console.log(`\n[${label}] ${((Date.now() - t0) / 1000).toFixed(1)}秒 / ${reply.recognition.totalTokens} tokens / ${reply.recognition.estimatedCostUSD == null ? "?" : (reply.recognition.estimatedCostUSD * 150).toFixed(2) + "円"}`);
   console.log(reply.text);
+  console.log(`  [次の候補] ${JSON.stringify(reply.suggestions || [])}`);
+  if (reply.text.includes("[[")) console.log(">>> FAIL: 候補の目印が本文に残っています");
   if (bad.length) console.log(`>>> FAIL: 画像にないはずの語が出ました: ${bad.join(", ")}`);
   return reply.text;
 }

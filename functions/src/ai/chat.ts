@@ -85,6 +85,9 @@ const SYSTEM = `あなたは、大学生の授業を一緒に進める日本語�
 - です・ます調で、自然で読みやすく。
 - 質問への返事は簡潔に(300字程度まで)。リアクションペーパー・要約・小テストなど「作るもの」は、字数の指定がなければ500〜800字程度で、必要なら見出しや箇条書きを使う。
 - リアクションペーパーは、要約だけで終わらせず、授業内容を踏まえた気づき・疑問・具体例・今後考えたいことまで書く。小テストは問題を先に並べ、そのあとに「解答と解説」を分ける。`;
+/** 返信の最後に、次に送りそうな依頼を添えさせる目印。アプリには本文と分けて渡し、本文の途中では見せない。 */
+export const SUGGEST_MARKER = "[[次]]";
+const SUGGEST = `返信の本文を書き終えたら、最後に改行して「${SUGGEST_MARKER}」だけの行を置き、その次の行から、ユーザーが次に送りそうな短い依頼や質問を2つ、1行に1つ、20文字以内で書いてください(例: 「問2も解いて」「この式の意味は?」)。いまの返信の内容に合った、具体的なものにします。「もっと詳しく」「もっと簡単に」は、アプリが別に出すので書きません。候補以外の説明・番号・記号は付けません。`;
 const INTRO = `ユーザーは資料だけを送り、まだ何も頼んでいません。次の順で返してください。
 1. 資料に何が書かれているかを、1〜2文で短く伝える(板書・スライド・プリント等、種類が分かれば添える)。見切れている・読めない部分があれば、どこかを1文で添える。
 2. 続けて、この資料でできそうなこと(要約、ノートにまとめる、小テストを作る、気になる点を質問する、など)を自然な言葉で2〜3個挙げ、どうしたいか聞く。`;
@@ -99,7 +102,7 @@ export function buildMessages(input: ChatInput, context: ContextItem[]) {
   if (unread > 0) parts.push(`【注意】送られた資料のうち${unread}件は、まだ読み取り中か、読み取れなかったため、ここには含まれていません。その資料の内容は推測しないでください。`);
   const material = parts.length ? parts.join("\n\n") : "(手元に資料はありません)";
   const messages: {role: string; content: string}[] = [
-    {role: "system", content: SYSTEM + (input.mode === "intro" ? `\n\n${INTRO}` : "")},
+    {role: "system", content: SYSTEM + (input.mode === "intro" ? `\n\n${INTRO}` : `\n\n${SUGGEST}`)},
     {role: "user", content: `<資料>\n${material}\n</資料>\n以上が、この会話で根拠にできる資料のすべてです。これに書かれていないことは、書かれていないものとして扱ってください。`},
     {role: "assistant", content: hasMaterial ? "資料を確認しました。書かれていないことは補いません。" : "手元に資料はありません。"},
   ];
@@ -134,6 +137,38 @@ export function geminiChatBody(messages: {role: string; content: string}[], imag
   return {systemInstruction: {parts: [{text: system}]}, contents,
     generationConfig: {temperature: 0.3, maxOutputTokens: CHAT.maxOutputTokens}};
 }
+/** 返信を、本文と次の候補に分ける。目印が無い・候補が取れないときは、本文だけ(候補は空)。 */
+export function splitSuggestions(raw: string): {body: string; suggestions: string[]} {
+  const at = raw.lastIndexOf(SUGGEST_MARKER);
+  if (at < 0) return {body: raw.trim(), suggestions: []};
+  const seen = new Set<string>();
+  const suggestions = raw.slice(at + SUGGEST_MARKER.length).split("\n")
+    .map(l => l.replace(/^\s*(?:[-*・•]|\d+[.)、])\s*/, "").replace(/^[「『"]|[」』"]$/g, "").trim())
+    .filter(l => l && l.length <= 24 && !/^もっと(詳しく|簡単|わかりやすく|やさしく)/.test(l) && !seen.has(l) && seen.add(l)).slice(0, 2);
+  return {body: raw.slice(0, at).trim(), suggestions};
+}
+/** ストリーミング中、目印(またはその書きかけ)から先の文字を、画面へ流さないための仕分け。 */
+export class SuggestionHider {
+  private all = ""; private sent = 0; private cut = false;
+  /** 届いた文字を渡すと、画面へ流してよい分だけを返す。 */
+  push(delta: string): string {
+    if (this.cut) return "";
+    this.all += delta;
+    const at = this.all.indexOf(SUGGEST_MARKER);
+    let safe: number;
+    if (at >= 0) { this.cut = true; safe = at; }
+    else {
+      // 末尾が目印の書きかけ(「[」「[[」「[[次」)なら、次の文字が来るまで止めておく。
+      let hold = 0;
+      for (let k = Math.min(SUGGEST_MARKER.length - 1, this.all.length); k > 0; k--) if (SUGGEST_MARKER.startsWith(this.all.slice(-k))) { hold = k; break; }
+      safe = this.all.length - hold;
+    }
+    const out = this.all.slice(this.sent, Math.max(safe, this.sent)); this.sent = Math.max(safe, this.sent);
+    return out;
+  }
+  /** 終わりに、止めておいた分を流す(目印が現れなかったとき)。本文の末尾の空白だけは、最終の全文に任せる。 */
+  flush(): string { if (this.cut) return ""; const out = this.all.slice(this.sent); this.sent = this.all.length; return out; }
+}
 const partsText = (candidate: any) => (candidate?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("");
 
 export async function geminiChat(key: string, messages: {role: string; content: string}[], request: typeof fetch = fetch, images: ChatImage[] = []) {
@@ -146,9 +181,11 @@ export async function geminiChat(key: string, messages: {role: string; content: 
   let result: any;
   try { result = await response.json(); } catch { throw new InputError("CHAT_INVALID_RESULT", true); }
   if (!sameGeminiModel(result.modelVersion, CHAT.model)) throw new InputError("CHAT_MODEL_MISMATCH", true);
-  const text = partsText(result.candidates?.[0]);
-  if (!text.trim() || text.length > 8000) throw new InputError("CHAT_INVALID_RESULT", true);
-  return {text: text.trim(), recognition: chatUsage(geminiUsage(result.usageMetadata), CHAT.model, Date.now() - start)};
+  const raw = partsText(result.candidates?.[0]);
+  if (!raw.trim() || raw.length > 8000) throw new InputError("CHAT_INVALID_RESULT", true);
+  const {body, suggestions} = splitSuggestions(raw);
+  if (!body) throw new InputError("CHAT_INVALID_RESULT", true);
+  return {text: body, suggestions, recognition: chatUsage(geminiUsage(result.usageMetadata), CHAT.model, Date.now() - start)};
 }
 
 /** Streaming variant: yields text deltas as Gemini produces them, then returns the full text with measured usage. */
@@ -163,6 +200,7 @@ export async function geminiChatStream(key: string, messages: {role: string; con
   if (!response.body) throw new InputError("CHAT_INVALID_RESULT", true);
   const decoder = new TextDecoder();
   let buffer = "", text = "", usage: any, model = "", firstTokenMs: number | null = null;
+  const hider = new SuggestionHider();
   const handle = async (line: string) => {
     if (!line.startsWith("data:")) return;
     let chunk: any;
@@ -174,7 +212,8 @@ export async function geminiChatStream(key: string, messages: {role: string; con
       if (firstTokenMs === null) firstTokenMs = Date.now() - start;
       text += delta;
       if (text.length > 8000) throw new InputError("CHAT_INVALID_RESULT", true);
-      await onDelta(delta);
+      const visible = hider.push(delta);
+      if (visible) await onDelta(visible);
     }
   };
   try {
@@ -190,5 +229,8 @@ export async function geminiChatStream(key: string, messages: {role: string; con
   } catch (e) { if (e instanceof InputError) throw e; throw new InputError("CHAT_UNAVAILABLE", true); }
   if (!text.trim()) throw new InputError("CHAT_INVALID_RESULT", true);
   if (!sameGeminiModel(model, CHAT.model)) throw new InputError("CHAT_MODEL_MISMATCH", true);
-  return {text: text.trim(), recognition: {...chatUsage(geminiUsage(usage), CHAT.model, Date.now() - start), firstTokenMs}};
+  const rest = hider.flush(); if (rest) await onDelta(rest);
+  const {body, suggestions} = splitSuggestions(text);
+  if (!body) throw new InputError("CHAT_INVALID_RESULT", true);
+  return {text: body, suggestions, recognition: {...chatUsage(geminiUsage(usage), CHAT.model, Date.now() - start), firstTokenMs}};
 }

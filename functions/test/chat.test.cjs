@@ -127,3 +127,33 @@ test('geminiChat: images are sent to the provider with the request',async()=>{
  let sent;await geminiChat('k',[{role:'user',content:'a'}],async(u,init)=>{sent=JSON.parse(init.body);return ok(reply())()},[{mime:'image/png',data:pngB64}]);
  assert.equal(sent.contents[0].parts.at(-1).inline_data.data,pngB64);
 });
+
+const {splitSuggestions,SuggestionHider,SUGGEST_MARKER}=require('../lib/ai/chat');
+test('suggestions: body and up to 2 clean candidates are split; fixed buttons and junk are dropped',()=>{
+ const r=splitSuggestions('答えは3です。\n\n[[次]]\n- 問2も解いて\n2. 「この式の意味は?」\nもっと詳しく解説して\nもっと簡単に\n');
+ assert.equal(r.body,'答えは3です。');assert.deepEqual(r.suggestions,['問2も解いて','この式の意味は?']);
+ assert.deepEqual(splitSuggestions('本文だけ').suggestions,[]);assert.equal(splitSuggestions('本文だけ').body,'本文だけ');
+ assert.deepEqual(splitSuggestions('本文\n[[次]]\n'+'あ'.repeat(40)+'\nはい').suggestions,['はい']);
+ assert.deepEqual(splitSuggestions('本文\n[[次]]\n同じ\n同じ\nもう一つ\n三つ目').suggestions,['同じ','もう一つ']);
+});
+test('suggestions: the marker never reaches the screen, even when split across chunks; text without marker streams in full',()=>{
+ for(const cut of [1,2,3,4,5]){
+  const h=new SuggestionHider(),full='本文です。\n'+SUGGEST_MARKER+'\n候補A\n候補B';let out='';
+  const chunks=[full.slice(0,6+cut),full.slice(6+cut,6+cut+2),full.slice(6+cut+2)];
+  for(const c of chunks) out+=h.push(c);out+=h.flush();
+  assert.equal(out,'本文です。\n');assert(!out.includes('[['));
+ }
+ const h=new SuggestionHider();let out='';for(const c of ['配列は [0] から始まり、','[[ではなく','です']) out+=h.push(c);out+=h.flush();
+ assert.equal(out,'配列は [0] から始まり、[[ではなくです');
+});
+test('suggestions: stream and non-stream return body + suggestions; deltas exclude them; usage still measured',async()=>{
+ const seen=[],r=await geminiChatStream('k',[{role:'user',content:'a'}],d=>{seen.push(d)},sse([ev(part('答えです。\n[')),ev(part('[次]]\n問2も\n要点を',{usageMetadata:{promptTokenCount:100,candidatesTokenCount:9,totalTokenCount:109}})),ev(part('3行で'))]));
+ assert.equal(r.text,'答えです。');assert.deepEqual(r.suggestions,['問2も','要点を3行で']);assert.equal(seen.join(''),'答えです。\n');
+ const n=await geminiChat('k',[{role:'user',content:'a'}],ok(reply({candidates:[{finishReason:'STOP',content:{parts:[{text:'結論です。\n[[次]]\n具体例を出して\n問1を解いて'}]}}]})));
+ assert.equal(n.text,'結論です。');assert.deepEqual(n.suggestions,['具体例を出して','問1を解いて']);
+});
+test('suggestions: asked for in replies, not in the intro',()=>{
+ const base={turns:[{role:'user',text:'a'}],sourceIds:[],images:[]};
+ assert(buildMessages({...base,mode:'reply'},[])[0].content.includes(SUGGEST_MARKER));
+ assert(!buildMessages({...base,mode:'intro'},[])[0].content.includes(SUGGEST_MARKER));
+});

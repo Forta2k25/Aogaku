@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "split": "dev",
+  "images": [],
+  "context": [
+    {
+      "title": "板書",
+      "text": "d/dx(x sin x) = sin x。"
+    }
+  ],
+  "questions": [
+    "この微分を説明して。どこが足りない？"
+  ],
+  "suggestionAnchors": [
+    "積の微分",
+    "cos"
+  ],
+  "rubric": {
+    "grounding": "資料にある内容と、計算・訂正・補足を明確に区別する。",
+    "correctness": "正解はsin x+x cos x。資料のsin xはxを微分した第1項。欠けるのはsin xを微分した第2項x cos xであり、「xの微分が欠ける」と説明しない。",
+    "task_completion": "質問の対象へ具体的に答え、必要な理由を示す。",
+    "uncertainty": "読める箇所を省かず、読めない箇所の内容は作らない。"
+  },
+  "id": "dev-product-terms",
+  "familyId": "derivative-product",
+  "tags": [
+    "math",
+    "explanation-correctness",
+    "variation"
+  ]
+}

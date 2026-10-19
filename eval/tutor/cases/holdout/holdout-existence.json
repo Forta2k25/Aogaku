@@ -1,0 +1,31 @@
+{
+  "id": "holdout-existence",
+  "version": 1,
+  "split": "holdout",
+  "familyId": "universal-existential",
+  "tags": [
+    "logic",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：箱の中の玉はすべて赤い。箱の中に玉があるかどうかは不明。結論：赤い玉が少なくとも1個必ず入っている。"
+    }
+  ],
+  "questions": [
+    "この結論は言える？"
+  ],
+  "rubric": {
+    "grounding": "資料の前提と結論をそのまま区別し、追加の例は仮定として示す。",
+    "correctness": "いえない。すべての玉が赤いという条件は玉の存在を保証せず、空箱も条件を満たす。少なくとも1個という存在条件が別に必要。",
+    "task_completion": "質問の結論を明示し、根拠となる短い理由を示す。",
+    "uncertainty": "前提が不足する場合は具体的に指摘し、十分な情報がある計算は曖昧にしない。"
+  },
+  "suggestionAnchors": [
+    "空箱",
+    "存在"
+  ]
+}

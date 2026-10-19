@@ -1,0 +1,31 @@
+{
+  "id": "dev-known-statistics",
+  "version": 1,
+  "split": "dev",
+  "familyId": "median-mean",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：データは1, 2, 100。中央値は(1+2+100)/3=103/3である。"
+    }
+  ],
+  "questions": [
+    "この中央値の求め方は正しい？"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と自分の計算を区別する。",
+    "correctness": "中央値は昇順の中央で2。103/3は算術平均であり、資料は平均と中央値を混同している。",
+    "task_completion": "正誤を判断し、正しい結果と短い理由を示す。",
+    "uncertainty": "与えられていない前提を作らず、確かめられる計算は具体的に答える。"
+  },
+  "suggestionAnchors": [
+    "中央値",
+    "平均"
+  ]
+}

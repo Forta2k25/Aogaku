@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "split": "dev",
+  "images": [],
+  "context": [
+    {
+      "title": "教材",
+      "text": "英文：I checked the list of items. 解説：ofの前にあるlistが主語である。"
+    }
+  ],
+  "questions": [
+    "この解説は正しい？"
+  ],
+  "suggestionAnchors": [
+    "主語",
+    "目的語"
+  ],
+  "rubric": {
+    "grounding": "資料にある内容と、計算・訂正・補足を明確に区別する。",
+    "correctness": "主語はI、動詞checked、the list of itemsは目的語。「ofの前は主語」という一般化は誤り。",
+    "task_completion": "質問の対象へ具体的に答え、必要な理由を示す。",
+    "uncertainty": "読める箇所を省かず、読めない箇所の内容は作らない。"
+  },
+  "id": "dev-subject-object",
+  "familyId": "subject-agreement",
+  "tags": [
+    "language",
+    "explanation-correctness",
+    "variation"
+  ]
+}

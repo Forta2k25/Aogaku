@@ -1,0 +1,31 @@
+{
+  "id": "dev-agreement",
+  "version": 1,
+  "split": "dev",
+  "familyId": "subject-agreement",
+  "tags": [
+    "language",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "プリント：The list of items are on the desk. 解説：itemsが複数なのでareを使う。"
+    }
+  ],
+  "questions": [
+    "この解説は正しい？"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と補足・訂正を区別する。",
+    "correctness": "主語の中心は単数listなのでis。itemsはof句の内部。資料の例文と訂正文を区別。",
+    "task_completion": "正誤を判断し、必要なら正しい内容と短い理由を示す。",
+    "uncertainty": "不要に曖昧にせず、与えられた内容から判断する。"
+  },
+  "suggestionAnchors": [
+    "主語",
+    "of句"
+  ]
+}

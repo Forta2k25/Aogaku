@@ -63,4 +63,6 @@ for (px_, py_, label) in [(1, 2, "A(1, 2)"), (3, 5, "B(3, 5)")]:
     cx, cy = ox + px_ * k, oy - py_ * k; d.ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=(200, 30, 30)); d.text((cx + 12, cy - 30), label, font=font(UNI, 28), fill=(200, 30, 30))
 d.line((ox, oy, ox + 4 * k, oy - 8 * k), fill=(30, 30, 200), width=3)
 save(im, "t8_mixed.jpg")
+# 別記号で各項の説明漏れ・ラベル欠落と式欠落の混同を確認するdevelopment variation。
+save(board(["y = p h(qx + r) + s", "p : vertical scale / reflection", "q : horizontal scale", "r : horizontal shift"], size=(1200, 680), fs=40, bg=(38, 62, 52), fg=(235, 235, 225)), "t9_parameters.jpg", rot=-2)
 print("作成:", out, sorted(os.listdir(out)))

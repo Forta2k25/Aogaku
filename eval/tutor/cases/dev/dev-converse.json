@@ -1,0 +1,31 @@
+{
+  "id": "dev-converse",
+  "version": 1,
+  "split": "dev",
+  "familyId": "implication-converse",
+  "tags": [
+    "logic",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：雨なら道路が濡れる。道路が濡れている。したがって必ず雨である。"
+    }
+  ],
+  "questions": [
+    "この推論は正しい？"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と補足・訂正を区別する。",
+    "correctness": "後件肯定で結論は必然ではない。散水など反例は資料の事実ではなく仮定として出す。",
+    "task_completion": "正誤を判断し、必要なら正しい内容と短い理由を示す。",
+    "uncertainty": "不要に曖昧にせず、与えられた内容から判断する。"
+  },
+  "suggestionAnchors": [
+    "逆",
+    "反例"
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "id": "legacy-04",
+  "version": 1,
+  "split": "dev",
+  "familyId": "function-reflection",
+  "tags": [
+    "math",
+    "correction"
+  ],
+  "images": [
+    "t4_wrong_math.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "この板書を説明して"
+  ],
+  "legacyCase": 4,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "資料は2f(-3x+1)。g(-x)を独立計算した正解は2f(-3x-1)。両者を区別して訂正する。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "反射",
+    "y軸"
+  ],
+  "checks": [
+    {
+      "gate": "correctness",
+      "kind": "includes",
+      "value": "2f(-3x-1)"
+    },
+    {
+      "gate": "grounding",
+      "kind": "includes",
+      "value": "2f(-3x+1)"
+    }
+  ]
+}

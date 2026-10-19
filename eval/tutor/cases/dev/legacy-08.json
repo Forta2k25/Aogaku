@@ -1,0 +1,28 @@
+{
+  "id": "legacy-08",
+  "version": 1,
+  "split": "dev",
+  "familyId": "diagram-line-conflict",
+  "tags": [
+    "logic",
+    "mixed-source"
+  ],
+  "images": [
+    "t8_mixed.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "この資料を説明して"
+  ],
+  "legacyCase": 8,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "図のB(3,5)は直線y=2x上にない。x=3ではy=6であることと資料の不一致を説明する。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "点B",
+    "直線"
+  ]
+}

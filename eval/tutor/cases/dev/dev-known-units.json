@@ -1,0 +1,41 @@
+{
+  "id": "dev-known-units",
+  "version": 1,
+  "split": "dev",
+  "familyId": "unit-conversion",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：自動車の速さ72 km/hは72 m/sと同じである。"
+    }
+  ],
+  "questions": [
+    "単位の変換は正しい？"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と自分の計算を区別する。",
+    "correctness": "1時間=3600秒、1km=1000mなので72 km/h=20 m/s。値がそのままという記述は誤り。",
+    "task_completion": "正誤を判断し、正しい結果と短い理由を示す。",
+    "uncertainty": "与えられていない前提を作らず、確かめられる計算は具体的に答える。"
+  },
+  "suggestionAnchors": [
+    "km/h",
+    "単位"
+  ],
+  "checks": [
+    {
+      "gate": "correctness",
+      "kind": "any",
+      "values": [
+        "20m/s",
+        "20メートル毎秒"
+      ]
+    }
+  ]
+}

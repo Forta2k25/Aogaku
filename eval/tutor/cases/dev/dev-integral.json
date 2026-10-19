@@ -1,0 +1,40 @@
+{
+  "id": "dev-integral",
+  "version": 1,
+  "split": "dev",
+  "familyId": "integral-chain",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "板書：∫ 2x cos(x²) dx = 2 sin(x²) + C。"
+    }
+  ],
+  "questions": [
+    "この積分を検算して。"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と補足・訂正を区別する。",
+    "correctness": "置換積分の正解はsin(x²)+C。資料の係数2は不要。",
+    "task_completion": "正誤を判断し、必要なら正しい内容と短い理由を示す。",
+    "uncertainty": "不要に曖昧にせず、与えられた内容から判断する。"
+  },
+  "suggestionAnchors": [
+    "置換積分",
+    "積分定数"
+  ],
+  "checks": [
+    {
+      "gate": "correctness",
+      "kind": "any",
+      "values": [
+        "sin(x^2)+C"
+      ]
+    }
+  ]
+}

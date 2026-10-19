@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-18",
+  "retiredHoldout": {
+    "reason": "初回baselineの返却本文を開発中に確認したため、以降はdevとして扱う。最終holdoutとして再利用しない。",
+    "runId": "holdout-initial",
+    "movedCases": {
+      "holdout-constraint": "dev-budget",
+      "holdout-english": "dev-agreement",
+      "holdout-logic": "dev-converse"
+    }
+  },
+  "replacementHoldout": [
+    "holdout-units",
+    "holdout-statistics",
+    "holdout-probability"
+  ],
+  "cycles": [
+    {
+      "date": "2026-10-19",
+      "reason": "前サイクルで返却内容と失敗を確認済みのholdoutを今回の開発に再利用しない。",
+      "movedCases": {
+        "holdout-units": "dev-known-units",
+        "holdout-statistics": "dev-known-statistics",
+        "holdout-probability": "dev-known-probability"
+      },
+      "replacementHoldout": [
+        "holdout-endpoint",
+        "holdout-discount",
+        "holdout-existence"
+      ]
+    }
+  ]
+}

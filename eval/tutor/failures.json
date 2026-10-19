@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "status": "open",
+  "note": "製品修正前の観測。自動判定とCodex内容レビューを分離。variationは独立holdoutと同一視しない。",
+  "failures": [
+    {
+      "id": "explanation-term-attribution",
+      "caseId": "dev-derivative",
+      "run": "dev-baseline-v2",
+      "rowId": "dev-derivative:3:1",
+      "category": "reasoning",
+      "evidence": "最終式は正しいが「xの部分の微分が抜けている」と逆の説明をした。",
+      "expected": "欠けているのはx e^x、すなわちe^xを微分した積の第2項。",
+      "variation": "dev-integralで別内容の検算・説明も確認。"
+    },
+    {
+      "id": "visible-text-misquote",
+      "caseId": "legacy-02",
+      "run": "dev-baseline-v2",
+      "rowId": "legacy-02:1:1",
+      "category": "vision",
+      "evidence": "会ったを合ったと引用した。",
+      "expected": "資料の文字に根拠づけて引用し、不確かな文字を確定しない。",
+      "variation": "legacy-01/legacy-03の同じ設問を別撮影条件・実会話で確認。"
+    },
+    {
+      "id": "uncertainty-false-absence",
+      "caseId": "legacy-02",
+      "run": "dev-baseline-v2",
+      "rowId": "legacy-02:3:1",
+      "category": "uncertainty",
+      "evidence": "見えているA/B文末を見切れていると説明した。",
+      "expected": "実際の切断箇所と読める選択肢を区別。",
+      "variation": "legacy-06は本当に読めない本文、legacy-07は読める小さな式の対照。"
+    },
+    {
+      "id": "language-unjustified-judgment",
+      "caseId": "legacy-03",
+      "run": "dev-baseline-v2",
+      "rowId": "legacy-03:3:1",
+      "category": "reasoning",
+      "evidence": "「拠点として活動する」を英語由来だから不自然と判断。",
+      "expected": "自然さを根拠なく断定しない。fixture自体の曖昧さも評価時に考慮。",
+      "variation": "legacy-01/legacy-02でも語法判断の揺れを観測。専門的goldは未整備。"
+    },
+    {
+      "id": "suggestion-already-answered",
+      "caseId": "legacy-08",
+      "run": "dev-baseline-v2",
+      "rowId": "legacy-08:2:1",
+      "category": "suggestion",
+      "evidence": "本文で点Bは直線上にないと説明後に「点Bは直線L上にありますか」を提案。",
+      "expected": "既に答えた問いの再提示ではなく、次の理解・計算へつなげる。",
+      "variation": "dev-integralでも計算済みの式を書き直す候補を観測。"
+    },
+    {
+      "id": "scorer-equivalent-expression",
+      "caseId": "legacy-04",
+      "run": "dev-baseline-v2",
+      "rowId": "legacy-04:1:1",
+      "category": "evaluator",
+      "evidence": "正しい2(-3x-1)^3を、2f(-3x-1)という文字列がないため落とした。",
+      "expected": "f(x)=x³に基づく同値表現は正答。レビューで自動誤検出を明示。",
+      "variation": "採点器unitでは正解キーワードだけの誤答も未採点のままに保つ。"
+    },
+    {
+      "id": "duplicate-discrepancy-note",
+      "caseId": "dev-integral",
+      "run": "dev-baseline-v2",
+      "rowId": "dev-integral:2:1",
+      "category": "postprocessing",
+      "status": "fixed-in-local-candidate",
+      "evidence": "本文が不一致を説明済みなのに保証層が注意文を追加。",
+      "expected": "一致しません/一致していません/合いませんを認識し、肯定の一致していますとは区別する。",
+      "variation": "chat.test.cjsの数学/英文法の表現とstream/nonstream回帰。"
+    },
+    {
+      "id": "source-unit-misquote",
+      "caseId": "dev-known-units",
+      "run": "holdout-final",
+      "rowId": "holdout-units:3:1",
+      "category": "grounding",
+      "status": "open",
+      "evidence": "資料の72 m/sを72 km/sと引用。計算結果20 m/sは正しい。",
+      "expected": "自分の計算が正しくても、資料にない単位を資料由来として書かない。",
+      "variation": "次回この結果を使って修正する場合はdevへ移動し、独立したholdoutを補充する。",
+      "observedCaseId": "holdout-units"
+    },
+    {
+      "id": "agreement-rule-overgeneralization",
+      "caseId": "dev-agreement",
+      "run": "dev-additional",
+      "rowId": "dev-agreement:3:1",
+      "category": "reasoning",
+      "status": "open",
+      "evidence": "正しいisを選ぶ一方、「ofの前が主語になる」という一般ルールを生成。",
+      "expected": "文全体の構造から主語句を特定し、その中心名詞がlistであると説明する。",
+      "variation": "dev-derivativeでも最終答えと理由の正しさを別々に確認する。"
+    },
+    {
+      "id": "chat-nonstop-accepted",
+      "caseId": "legacy-04",
+      "run": "cycle2-completion-baseline",
+      "rowId": "legacy-04:1:1",
+      "category": "provider_output",
+      "status": "fixed-in-local-candidate",
+      "evidence": "評価用Gemini 3.6 Flashと実験promptで、MAX_TOKENSの3試行すべてを正常な返信として返した。通常のLiteでの再現を主張するものではない。",
+      "expected": "STOPを確認できた返信だけを確定する。MAX_TOKENS/RECITATION/SAFETY/終了理由欠落は既存CHAT_INVALID_RESULTとして失敗させ、その場で再試行しない。",
+      "reproduction": "functions/test/chat.test.cjsのnon-stream/stream完了判定テスト。数式途中と、見た目が完結した本文でもprovider未完了なら拒否。"
+    },
+    {
+      "id": "missing-label-is-not-cropping",
+      "caseId": "dev-parameter-coverage",
+      "run": "cycle2-final-variations",
+      "rowId": "dev-parameter-coverage:1:1",
+      "category": "uncertainty",
+      "status": "open",
+      "evidence": "sの説明ラベルがそもそもない画像を「見切れている」と推測した。式にはsが存在する。",
+      "expected": "資料にない説明と判読不能な文字を分ける。式の項の役割は資料由来と偽らず補足する。",
+      "variation": "別記号の新規画像t9と既存legacy-07を同時評価。prompt候補は採用せず保存した。"
+    },
+    {
+      "id": "model-alias-drift",
+      "caseId": "dev-parameter-coverage",
+      "run": "cycle2-flash-pilot",
+      "rowId": "dev-parameter-coverage:1:1",
+      "category": "model_identity",
+      "status": "fixed-in-eval-runner",
+      "evidence": "要求名gemini-3.5-flashがAPI一覧に存在しても、返却modelVersionはgemini-3.6-flashだった。モデル一致チェックにより品質採点対象から除外。",
+      "expected": "一致チェックを回避せず、最初のモデル不一致で実験全体を停止する。別の単価を流用しない。"
+    },
+    {
+      "id": "overall-count-hides-gate-regression",
+      "caseId": "legacy-07",
+      "run": "cycle2-guard-critical",
+      "rowId": "legacy-07:10:1",
+      "category": "evaluator",
+      "status": "fixed-in-comparator",
+      "evidence": "試行合格数が28/30で同じでも、correctnessの失敗数は0→1に増えた。合計だけの旧比較では検出できなかった。",
+      "expected": "ケース別・hard gate別の不合格数増加も回帰として出す。"
+    },
+    {
+      "id": "stationary-extremum-conflation",
+      "caseId": "holdout-endpoint",
+      "run": "cycle2-guard-holdout",
+      "rowId": "holdout-endpoint:1:1",
+      "category": "reasoning",
+      "status": "open",
+      "evidence": "最小値0は正しいが、微分が0になる点を括弧内で極値と同一視した。",
+      "expected": "停留点は極値を与えるとは限らない。正しい最終値と説明の正確さを分けて評価する。",
+      "variation": "この結果を修正に使う次サイクルではdevへ移動し、独立holdoutを補充する。"
+    },
+    {
+      "id": "negative-correctness-duplicate-note",
+      "caseId": "dev-agreement",
+      "run": "cycle3-candidate",
+      "category": "postprocessing",
+      "status": "fixed-in-local-candidate",
+      "evidence": "cycle3-candidate:dev-agreement:2:1 と cycle3-context:dev-agreement:1:1,3:1で正しくありませんという訂正後に同じ注意文を追加。",
+      "expected": "明示的な否定の正誤判定を認識し、肯定の正しい/正しく計算とは区別する。",
+      "reproduction": "chat.test.cjsの新規テストは修正前に失敗、修正後に成功。"
+    },
+    {
+      "id": "coverage-prompt-necessary-check-false-confidence",
+      "caseId": "dev-parameter-coverage",
+      "run": "cycle3-candidate",
+      "rowId": "dev-parameter-coverage:1:1",
+      "category": "evaluator",
+      "status": "open",
+      "evidence": "候補の自動必要条件は12/12だが、sの説明抜けと存在しない見切れの断定を含む。",
+      "expected": "自動通過を意味的な正答とみなさず、全hard gateを本文レビューする。候補を不採用にする。"
+    },
+    {
+      "id": "correct-source-false-reflection-correction",
+      "caseId": "legacy-05",
+      "run": "cycle3-final-critical",
+      "rowId": "legacy-05:6:1",
+      "category": "reasoning",
+      "status": "open",
+      "evidence": "正しい-3x-1を誤りとし、-3x+1を正解と説明。",
+      "expected": "元の3x-1へx→-xを代入し、定数-1は維持する。正しい資料を訂正しない。",
+      "variation": "cycle3-no-example-criticalでは特定数式のprompt例示を除いたが、legacy-05:3:1で-3(-x)-1=-3x-1という誤等式が残り、legacy-04のtask_completionも悪化。採用せず。"
+    }
+  ]
+}

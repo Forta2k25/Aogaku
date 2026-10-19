@@ -1,0 +1,28 @@
+{
+  "id": "legacy-02",
+  "version": 1,
+  "split": "dev",
+  "familyId": "worksheet-grammar",
+  "tags": [
+    "uncertainty",
+    "worksheet"
+  ],
+  "images": [
+    "t2_cut.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "解答作成して"
+  ],
+  "legacyCase": 2,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "読める問1・問2に具体的に答え、途中で切れた問3の続きを作らない。見切れ画像には問3が問1付近に重なるため、実画像を確認して評価する。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "問1",
+    "問2"
+  ]
+}

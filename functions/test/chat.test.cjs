@@ -262,3 +262,8 @@ test('course background: syllabus and the user\'s memo go in their own block (no
  assert.equal(syllabusOnly[2].content,'手元に資料はありません。','syllabus alone is not material');
  for(const rule of ['授業の前提','(SOURCE)」ではありません','シラバスには書かれていません','資料を根拠にする']) assert(none[0].content.includes(rule),rule);
 });
+
+test('course background is used quietly: the prompt forbids citing it, with a good/bad example',()=>{
+ const sys=buildMessages({mode:'reply',turns:[{role:'user',text:'a'}],sourceIds:[],images:[]},[])[0].content;
+ for(const rule of ['静かに','「シラバスによると」','資料が手元にないため','悪い「シラバスによると、期末試験が70%です」']) assert(sys.includes(rule),rule);
+});

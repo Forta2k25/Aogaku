@@ -129,12 +129,12 @@ test('geminiChat: images are sent to the provider with the request',async()=>{
 });
 
 const {splitSuggestions,SuggestionHider,SUGGEST_MARKER}=require('../lib/ai/chat');
-test('suggestions: body and up to 2 clean candidates are split; fixed buttons and junk are dropped',()=>{
- const r=splitSuggestions('答えは3です。\n\n[[次]]\n- 問2も解いて\n2. 「この式の意味は?」\nもっと詳しく解説して\nもっと簡単に\n');
- assert.equal(r.body,'答えは3です。');assert.deepEqual(r.suggestions,['問2も解いて','この式の意味は?']);
+test('suggestions: body and up to 3 clean candidates are split; junk, duplicates and over-long lines are dropped',()=>{
+ const r=splitSuggestions('答えは3です。\n\n[[次]]\n- 問2も解いて\n2. 「この式の意味は?」\n類題を出して\n四つ目\n');
+ assert.equal(r.body,'答えは3です。');assert.deepEqual(r.suggestions,['問2も解いて','この式の意味は?','類題を出して']);
  assert.deepEqual(splitSuggestions('本文だけ').suggestions,[]);assert.equal(splitSuggestions('本文だけ').body,'本文だけ');
  assert.deepEqual(splitSuggestions('本文\n[[次]]\n'+'あ'.repeat(40)+'\nはい').suggestions,['はい']);
- assert.deepEqual(splitSuggestions('本文\n[[次]]\n同じ\n同じ\nもう一つ\n三つ目').suggestions,['同じ','もう一つ']);
+ assert.deepEqual(splitSuggestions('本文\n[[次]]\n同じ\n同じ\nもう一つ\n三つ目\n四つ目').suggestions,['同じ','もう一つ','三つ目']);
 });
 test('suggestions: the marker never reaches the screen, even when split across chunks; text without marker streams in full',()=>{
  for(const cut of [1,2,3,4,5]){

@@ -310,15 +310,8 @@ final class CourseDetailViewController: UIViewController {
               let bubble = aiReplyBubbles[last.id] else { return }
         let titles: [String]
         if last.kind == "question" {
-            // 先頭は固定の2つ。そのあとに、AIが返信に合わせて添えた候補(最大2つ)を並べる。AIの候補が無いときは、これまでの固定の候補にする。
-            let fixed = ["もっと詳しく", "もっと簡単に"]
-            let ai = (reply.suggestions ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty && !fixed.contains($0) }.prefix(2)
-            if ai.isEmpty {
-                let hasMath = reply.text.contains("$") || reply.text.contains("\\(")
-                titles = hasMath ? fixed + ["式変形だけ詳しく", "テストに出そうな3問"] : fixed + ["具体例を出して", "要点を3行で"]
-            } else {
-                titles = fixed + ai
-            }
+            // AIが返信に合わせて添えた候補(最大3つ)だけを出す。取れなかったとき(古い返信など)は、ボタンを出さない。
+            titles = Array((reply.suggestions ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(3))
         } else {
             titles = ["リアクションペーパーを書いて", "要約して", "小テストを作って", "ノートにまとめて"]
         }

@@ -26,7 +26,8 @@ final class AIReplyBubbleView: UIView {
     // 最初の文字が出るまでの「骨組み」(灰色の線が脈打つ)。待っている間も、何かが進んでいる感じを出す
     private let skeleton = UIStackView()
     // 追質問のボタン(返信の下に、横に並べる)
-    private let suggestionScroll = UIScrollView()
+    /// 次の候補の置き場。候補は3つだけなので、横スクロールではなく、縦に並べて、画面の幅に収める(端が見切れない)。
+    private let suggestionScroll = UIView()
     private let suggestionStack = UIStackView()
     private var plainText = ""
     private var detailVisible = false
@@ -124,20 +125,18 @@ final class AIReplyBubbleView: UIView {
             bar.widthAnchor.constraint(equalTo: skeleton.widthAnchor, multiplier: fraction).isActive = true
             bar.tag = index
         }
-        suggestionScroll.showsHorizontalScrollIndicator = false
         suggestionScroll.isHidden = true
         suggestionScroll.translatesAutoresizingMaskIntoConstraints = false
-        suggestionStack.axis = .horizontal
+        suggestionStack.axis = .vertical
+        suggestionStack.alignment = .leading
         suggestionStack.spacing = 8
         suggestionStack.translatesAutoresizingMaskIntoConstraints = false
         suggestionScroll.addSubview(suggestionStack)
         NSLayoutConstraint.activate([
-            suggestionStack.topAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.topAnchor),
-            suggestionStack.bottomAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.bottomAnchor),
-            suggestionStack.leadingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.leadingAnchor),
-            suggestionStack.trailingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.trailingAnchor),
-            suggestionStack.heightAnchor.constraint(equalTo: suggestionScroll.frameLayoutGuide.heightAnchor),
-            suggestionScroll.heightAnchor.constraint(equalToConstant: 32)
+            suggestionStack.topAnchor.constraint(equalTo: suggestionScroll.topAnchor),
+            suggestionStack.bottomAnchor.constraint(equalTo: suggestionScroll.bottomAnchor),
+            suggestionStack.leadingAnchor.constraint(equalTo: suggestionScroll.leadingAnchor),
+            suggestionStack.trailingAnchor.constraint(equalTo: suggestionScroll.trailingAnchor)
         ])
         let column = UIStackView(arrangedSubviews: [header, stepsLabel, skeleton, bodyView, retryButton, actionRow, suggestionScroll, metaButton, detailLabel])
         column.axis = .vertical
@@ -178,14 +177,10 @@ final class AIReplyBubbleView: UIView {
         suggestionStack.arrangedSubviews.forEach { suggestionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         guard !titles.isEmpty else { suggestionScroll.isHidden = true; return }
         for title in titles {
-            var configuration = UIButton.Configuration.gray()
-            configuration.attributedTitle = AttributedString(title, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 13)]))
-            configuration.cornerStyle = .capsule
-            configuration.baseForegroundColor = .label
-            configuration.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12)
-            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onSuggestion?(title) })
-            button.accessibilityIdentifier = "ai-suggestion"
-            suggestionStack.addArrangedSubview(button)
+            let chip = AISuggestionChip(title: title) { [weak self] in self?.onSuggestion?(title) }
+            suggestionStack.addArrangedSubview(chip)
+            // 長い候補は、幅いっぱいで折り返す(端で切らない)。
+            chip.widthAnchor.constraint(lessThanOrEqualTo: suggestionStack.widthAnchor).isActive = true
         }
         suggestionScroll.isHidden = actionRow.isHidden   // 文章を打ち終えて、下の行が出るまでは隠しておく
     }
@@ -508,4 +503,42 @@ final class AIReplyBubbleView: UIView {
         UIView.animate(withDuration: 0.2) { self.superview?.layoutIfNeeded() }
     }
     @objc private func retryTapped() { onRetry?() }
+}
+
+
+/// 返信の下の「次の候補」。文字を折り返せるように、ボタンではなく、ラベル入りのカプセルにしている。
+final class AISuggestionChip: UIControl {
+    private let label = UILabel()
+    private let onTap: () -> Void
+
+    init(title: String, onTap: @escaping () -> Void) {
+        self.onTap = onTap
+        super.init(frame: .zero)
+        backgroundColor = UIColor.systemGray5
+        layer.cornerRadius = 17
+        layer.masksToBounds = true
+        label.text = title
+        label.font = .systemFont(ofSize: 13)
+        label.textColor = .label
+        label.numberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        label.isUserInteractionEnabled = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14)
+        ])
+        accessibilityIdentifier = "ai-suggestion"
+        accessibilityLabel = title
+        accessibilityTraits = .button
+        isAccessibilityElement = true
+        addTarget(self, action: #selector(tapped), for: .touchUpInside)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.6 : 1 } }
+    @objc private func tapped() { onTap() }
 }

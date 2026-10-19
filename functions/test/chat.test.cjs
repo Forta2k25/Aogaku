@@ -9,7 +9,7 @@ const reply=(over={})=>({modelVersion:CHAT.model,candidates:[{finishReason:'STOP
 test('validateChat: reply needs a user turn, intro needs a source',()=>{
  assert.throws(()=>validateChat({mode:'reply',turns:[],sourceIds:['a']}),e=>e.code==='EMPTY_CHAT');
  assert.throws(()=>validateChat({mode:'intro',turns:[],sourceIds:[]}),e=>e.code==='EMPTY_CHAT');
- assert.deepEqual(validateChat({mode:'intro',sourceIds:['a']}),{mode:'intro',turns:[],sourceIds:['a'],images:[],materialExpected:false,unreadSources:0});
+ assert.deepEqual(validateChat({mode:'intro',sourceIds:['a']}),{mode:'intro',turns:[],sourceIds:['a'],images:[],materialExpected:false,unreadSources:0,courseMemo:'',syllabus:''});
  assert.equal(validateChat({turns:[{role:'user',text:' 要約して '}]}).turns[0].text,'要約して');
 });
 test('validateChat: limits and shapes are enforced',()=>{
@@ -242,4 +242,23 @@ test('discrepancy guarantee: explicit negative correctness is not duplicated, af
  const work='判定: 不一致';
  for(const body of ['資料の解説は正しくありません。正しい動詞はisです。','この解説は正しくないです。主語は単数です。']) assert.equal(discrepancyNote(body,work),'',body);
  for(const body of ['資料の解説は正しいです。','この式は正しく計算されています。']) assert.equal(discrepancyNote(body,work),DISCREPANCY_NOTE,body);
+});
+
+test('course background: syllabus and the user\'s memo go in their own block (not as material); clipped; absent when empty',()=>{
+ const t=[{role:'user',text:'a'}];
+ const v=validateChat({turns:t,courseMemo:'  先生は配布プリントから出す  ',syllabus:'成績評価: 期末70%'});
+ assert.equal(v.courseMemo,'先生は配布プリントから出す');assert.equal(v.syllabus,'成績評価: 期末70%');
+ assert.equal(validateChat({turns:t,courseMemo:'あ'.repeat(5000)}).courseMemo.length,CHAT.maxCourseMemoChars);
+ assert.equal(validateChat({turns:t,syllabus:'x'.repeat(9000)}).syllabus.length,CHAT.maxSyllabusChars);
+ assert.equal(validateChat({turns:t,courseMemo:42,syllabus:{a:1}}).courseMemo,'');
+ const m=buildMessages({...v,mode:'reply',sourceIds:[],images:[]},[{title:'板書',text:'式'}]);
+ const first=m[1].content;
+ assert(first.startsWith('<授業の前提>')&&first.includes('【シラバス(要約)】')&&first.includes('【ユーザーの授業メモ】'));
+ assert(first.indexOf('</授業の前提>')<first.indexOf('<資料>'));
+ assert(!first.slice(first.indexOf('<資料>')).includes('配布プリント'),'memo must not leak into the material block');
+ const none=buildMessages({...validateChat({turns:t}),mode:'reply',sourceIds:[],images:[]},[]);
+ assert(!none[1].content.includes('授業の前提>')||none[1].content.startsWith('<資料>'));
+ const syllabusOnly=buildMessages({...validateChat({turns:t,syllabus:'概要'}),mode:'reply',sourceIds:[],images:[]},[]);
+ assert.equal(syllabusOnly[2].content,'手元に資料はありません。','syllabus alone is not material');
+ for(const rule of ['授業の前提','(SOURCE)」ではありません','シラバスには書かれていません','資料を根拠にする']) assert(none[0].content.includes(rule),rule);
 });

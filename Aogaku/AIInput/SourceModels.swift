@@ -221,6 +221,10 @@ struct AIChatRequest: Encodable, Sendable {
     var materialExpected = false
     /// 送ったのに、まだ読み取り中・失敗していて、今回は渡せなかった資料の数。
     var unreadSources = 0
+    /// ユーザー自身が書いた、この授業のメモ(資料ではなく、授業の背景)。
+    var courseMemo = ""
+    /// 端末に保存済みのシラバスの要約(資料ではなく、授業の背景)。
+    var syllabus = ""
 }
 /// ストリーミングで届く、できたところまでの文字。
 struct AIChatDelta: Decodable, Sendable { let delta: String }

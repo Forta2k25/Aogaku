@@ -301,7 +301,8 @@ final class SourceIngestionService {
     /// AIの返信をストリーミングで受け取る。できた文字から順に `.delta` が届き、最後に `.final`(全文と実測の token・料金)が届く。
     /// サーバーが古くてストリーミングに未対応でも、`.final` だけが届くので同じように扱える。
     func chatReplyStream(uid: String, remoteSourceIDs: [String], mode: String, turns: [AIChatTurn], images: [AIChatImage] = [],
-                         materialExpected: Bool = false, unreadSources: Int = 0) -> AsyncThrowingStream<AIChatEvent, Error> {
+                         materialExpected: Bool = false, unreadSources: Int = 0,
+                         courseMemo: String = "", syllabus: String = "") -> AsyncThrowingStream<AIChatEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 do {
@@ -309,7 +310,8 @@ final class SourceIngestionService {
                     if AppBackend.isOffline { throw AIInputError.message("ローカル確認モードではクラウド通信を行いません") }
                     let callable: Callable<AIChatRequest, StreamResponse<AIChatDelta, AIChatReply>> = self.functions.httpsCallable("aiChat")
                     let request = AIChatRequest(mode: mode, sourceIds: remoteSourceIDs, turns: turns, images: images,
-                                               materialExpected: materialExpected, unreadSources: unreadSources)
+                                               materialExpected: materialExpected, unreadSources: unreadSources,
+                                               courseMemo: courseMemo, syllabus: syllabus)
                     for try await item in try callable.stream(request) {
                         try self.checkUser(uid)
                         switch item {

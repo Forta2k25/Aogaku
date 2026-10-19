@@ -512,7 +512,8 @@ final class CourseDetailViewController: UIViewController {
             defer { stageTask?.cancel() }
             // できた文字から順に受け取り、画面には打っているように出す。
             for try await event in SourceIngestionService.shared.chatReplyStream(uid: uid, remoteSourceIDs: remotes, mode: mode, turns: turns, images: inline.images,
-                                                                                 materialExpected: !daySources.isEmpty, unreadSources: unreadSources) {
+                                                                                 materialExpected: !daySources.isEmpty, unreadSources: unreadSources,
+                                                                                 courseMemo: AICourseMemoStore.load(courseKey: context.courseKey), syllabus: aiSyllabusSummary()) {
                 try Task.checkCancellation()
                 switch event {
                 case .delta(let part):
@@ -673,6 +674,20 @@ final class CourseDetailViewController: UIViewController {
             picker.directoryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("AIInputSamples")
         }
         present(picker, animated: true)
+    }
+
+    /// 端末に保存済みのシラバスの要約。まだ取得していなければ空(通信はしない)。
+    private func aiSyllabusSummary() -> String {
+        let resolved = resolvedSyllabusURLString().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let fields = SyllabusDataCache.shared.load(for: resolved.isEmpty ? course.id : resolved) else { return "" }
+        return AISyllabusSummary.make(fields: fields)
+    }
+
+    private func openCourseMemo() {
+        do {
+            let context = try aiContext(day: noteChatCurrentSession)
+            present(UINavigationController(rootViewController: CourseMemoViewController(courseKey: context.courseKey, courseTitle: course.title)), animated: true)
+        } catch { showNoteAlert(title: "授業メモを開けませんでした", message: error.localizedDescription) }
     }
 
     private func saveAIMemo() {
@@ -4090,6 +4105,7 @@ final class CourseDetailViewController: UIViewController {
             },
             UIAction(title: "PDFを追加", image: UIImage(systemName: "doc")) { [weak self] _ in self?.pickAIPDF() },
             UIAction(title: "入力した文章をメモとして保存", image: UIImage(systemName: "note.text")) { [weak self] _ in self?.saveAIMemo() },
+            UIAction(title: "授業メモ(AIが毎回読みます)", image: UIImage(systemName: "pencil.and.list.clipboard")) { [weak self] _ in self?.openCourseMemo() },
             UIAction(title: "資料と送信状況", image: UIImage(systemName: "tray")) { [weak self] _ in self?.openAISources(allDays: false) }
         ])
         plus.translatesAutoresizingMaskIntoConstraints = false

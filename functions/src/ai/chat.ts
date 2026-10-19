@@ -245,7 +245,12 @@ export function discrepancyNote(body: string, work: string): string {
 /** Gemini の生の返信 → ユーザーに見せる本文・次の候補・作業メモ(画面には出さない)。 */
 export function parseReply(raw: string) {
   const {work, rest} = splitWork(raw);
-  return {...splitSuggestions(rest), work};
+  const parsed = splitSuggestions(rest);
+  return {...parsed, body: stripPromptTags(parsed.body), work};
+}
+/** AIが指示文の区切り(<授業の前提>・<資料> など)をそのまま口に出したときに、画面へ出さない。 */
+export function stripPromptTags(text: string): string {
+  return text.replace(/<\/?(?:授業の前提|資料)>(?:の)?/g, "").replace(/ {2,}/g, " ").trim();
 }
 const partsText = (candidate: any) => (candidate?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text ?? "").join("");
 

@@ -267,3 +267,11 @@ test('course background is used quietly: the prompt forbids citing it, with a go
  const sys=buildMessages({mode:'reply',turns:[{role:'user',text:'a'}],sourceIds:[],images:[]},[])[0].content;
  for(const rule of ['静かに','「シラバスによると」','資料が手元にないため','悪い「シラバスによると、期末試験が70%です」']) assert(sys.includes(rule),rule);
 });
+
+const {stripPromptTags}=require('../lib/ai/chat');
+test('prompt delimiters the model echoes (<授業の前提>, <資料>) never reach the screen',()=>{
+ assert.equal(stripPromptTags('<授業の前提>のシラバスによると、成績評価は…'),'シラバスによると、成績評価は…');
+ assert.equal(stripPromptTags('A </授業の前提> B <資料>x</資料>'),'A B x');
+ assert.equal(stripPromptTags('配列 a<b と a>c は普通の文字'),'配列 a<b と a>c は普通の文字');
+ const r=parseReply('<授業の前提>の通り、答えは3です。\n[[次]]\n問2も');assert.equal(r.body,'の通り、答えは3です。'.replace(/^の/,'')||r.body);assert(!r.body.includes('授業の前提'));
+});

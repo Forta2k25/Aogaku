@@ -67,7 +67,7 @@ test('chat has its own daily budget separate from recognition provider calls',()
 const {geminiChatStream}=require('../lib/ai/chat');
 const sse=(lines,status=200)=>async()=>({ok:status>=200&&status<300,status,body:new ReadableStream({start(c){const e=new TextEncoder();for(const l of lines)c.enqueue(e.encode(l));c.close()}})});
 const ev=o=>'data: '+JSON.stringify(o)+'\r\n\r\n';
-const part=(text,extra={})=>({modelVersion:CHAT.model,candidates:[{content:{parts:[{text}]}}],...extra});
+const part=(text,extra={})=>({modelVersion:CHAT.model,candidates:[{finishReason:'STOP',content:{parts:[{text}]}}],...extra});
 test('geminiChatStream: yields deltas in order, joins text, reads usage from the last chunk',async()=>{
  const seen=[],r=await geminiChatStream('k',[{role:'user',content:'a'}],d=>{seen.push(d)},sse([ev(part('こん')),ev(part('にちは',{usageMetadata:{promptTokenCount:100,candidatesTokenCount:5,totalTokenCount:105}}))]));
  assert.deepEqual(seen,['こん','にちは']);assert.equal(r.text,'こんにちは');assert.equal(r.recognition.totalTokens,105);assert(r.recognition.firstTokenMs>=0);
@@ -197,4 +197,49 @@ test('discrepancy guarantee: added only when the memo says 不一致 and the bod
  assert.equal(seen.join(''),r.text);assert(r.text.endsWith(DISCREPANCY_NOTE));
  const ok2=await geminiChat('k',[{role:'user',content:'a'}],ok(reply({candidates:[{finishReason:'STOP',content:{parts:[{text:memo('一致')+'普通の解説です。'}]}}]})));
  assert.equal(ok2.text,'普通の解説です。');
+});
+
+test('discrepancy guarantee: polite negative forms already explain the mismatch',async()=>{
+ const bodies=[
+  '資料の結果とは一致しません。正しくは sin(x²)+C です。',
+  '資料の結果とは一致していません。正しくは sin(x²)+C です。',
+  '右辺を微分すると4x cos(x²)となり、元の式と合いません。',
+  'この英文では主語と動詞の数が合いません。単数のisを使います。',
+ ];
+ for(const body of bodies)assert.equal(discrepancyNote(body,'判定: 不一致'),'');
+ const raw=WORK_OPEN+'\n判定: 不一致\n'+WORK_CLOSE+'\n'+bodies[0];
+ const nonstream=await geminiChat('k',[{role:'user',content:'a'}],ok(reply({candidates:[{finishReason:'STOP',content:{parts:[{text:raw}]}}]})));
+ const seen=[],stream=await geminiChatStream('k',[{role:'user',content:'a'}],d=>seen.push(d),sse([ev(part(raw,{usageMetadata:{promptTokenCount:10,candidatesTokenCount:5,totalTokenCount:15}}))]));
+ assert.equal(nonstream.text,bodies[0]);assert.equal(stream.text,bodies[0]);assert.equal(seen.join('').trim(),bodies[0]);
+});
+test('discrepancy guarantee: agreement wording alone must not hide a detected mismatch',()=>{
+ assert.equal(discrepancyNote('資料の式と一致しています。','判定: 不一致'),DISCREPANCY_NOTE);
+ assert.equal(discrepancyNote('資料の式と一致しています。','判定: 一致'),'');
+});
+
+
+test('geminiChat: partial or unconfirmed completions never become a successful reply',async()=>{
+ for(const finishReason of ['MAX_TOKENS','RECITATION','SAFETY',undefined]) for(const text of ['答えは $2f(', 'The list of items is on the desk.']) {
+  let calls=0;const request=async()=>{calls++;return {ok:true,json:async()=>reply({candidates:[{finishReason,content:{parts:[{text}]}}]})};};
+  await assert.rejects(geminiChat('k',[],request),e=>e.code==='CHAT_INVALID_RESULT'&&!e.retryable);
+  assert.equal(calls,1,'do not repeatedly spend the same exhausted token budget');
+ }
+});
+test('geminiChatStream: missing STOP or non-STOP cannot return a final reply',async()=>{
+ for(const finishReason of ['MAX_TOKENS','RECITATION','SAFETY',undefined]) for(const text of ['答えは $2f(', 'The list of items is on the desk.']) {
+  const seen=[];const chunk={modelVersion:CHAT.model,candidates:[{finishReason,content:{parts:[{text}]}}]};
+  await assert.rejects(geminiChatStream('k',[],d=>seen.push(d),sse([ev(chunk)])),e=>e.code==='CHAT_INVALID_RESULT'&&!e.retryable);
+  assert(seen.length>0,'deltas may arrive, but there must be no successful final reply');
+ }
+ const seen=[];const textChunk={modelVersion:CHAT.model,candidates:[{content:{parts:[{text:'答えです。'}]}}]};
+ const finalChunk={modelVersion:CHAT.model,candidates:[{finishReason:'STOP',content:{parts:[]}}],usageMetadata:{promptTokenCount:10,candidatesTokenCount:5,totalTokenCount:15}};
+ const r=await geminiChatStream('k',[],d=>seen.push(d),sse([ev(textChunk),ev(finalChunk),ev({usageMetadata:{promptTokenCount:10,candidatesTokenCount:5,totalTokenCount:15}})]));
+ assert.equal(r.text,'答えです。');assert.equal(r.recognition.totalTokens,15);
+});
+
+// Observed in cycle3: an explicit Japanese correction already tells the student.
+test('discrepancy guarantee: explicit negative correctness is not duplicated, affirmative correctness still warns',()=>{
+ const work='判定: 不一致';
+ for(const body of ['資料の解説は正しくありません。正しい動詞はisです。','この解説は正しくないです。主語は単数です。']) assert.equal(discrepancyNote(body,work),'',body);
+ for(const body of ['資料の解説は正しいです。','この式は正しく計算されています。']) assert.equal(discrepancyNote(body,work),DISCREPANCY_NOTE,body);
 });

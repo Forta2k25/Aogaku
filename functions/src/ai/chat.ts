@@ -217,7 +217,7 @@ export function splitSuggestions(raw: string): {body: string; suggestions: strin
   return {body: raw.slice(0, at).trim(), suggestions};
 }
 /** 検算の保証: 作業メモが「不一致」と判定したのに、本文がそれに触れていないときだけ、決まった一文を足す(メモの細かい計算は誤りがありうるので出さない)。 */
-const DISCREPANCY_WORDS = /食い違|一致しな|一致して|異なり|異なる|ではなく|計算すると|矛盾|誤り|間違|確認が必要|成り立ち|ずれ/;
+const DISCREPANCY_WORDS = /食い違|一致し(?:な|ません|てい(?:な|ません))|合(?:わな|いません)|正しく(?:な|ありません)|異なり|異なる|ではなく|計算すると|矛盾|誤り|間違|確認が必要|成り立ち|ずれ/;
 export const DISCREPANCY_NOTE = "\n\n※ 検算したところ、資料の記述と計算結果が一致しない箇所がありました。上の説明で資料の式をそのまま使っている部分は、先生や教科書で確認してください。";
 export function discrepancyNote(body: string, work: string): string {
   return /判定\s*[:：]\s*不一致/.test(work) && !DISCREPANCY_WORDS.test(body) ? DISCREPANCY_NOTE : "";
@@ -239,8 +239,11 @@ export async function geminiChat(key: string, messages: {role: string; content: 
   let result: any;
   try { result = await response.json(); } catch { throw new InputError("CHAT_INVALID_RESULT", true); }
   if (!sameGeminiModel(result.modelVersion, CHAT.model)) throw new InputError("CHAT_MODEL_MISMATCH", true);
-  const raw = partsText(result.candidates?.[0]);
+  const candidate = result.candidates?.[0];
+  const raw = partsText(candidate);
   if (!raw.trim() || raw.length > 8000) throw new InputError("CHAT_INVALID_RESULT", true);
+  // A readable prefix is not a completed answer; do not retry an exhausted budget here.
+  if (candidate?.finishReason !== "STOP") throw new InputError("CHAT_INVALID_RESULT");
   const parsed = parseReply(raw), {suggestions, work} = parsed;
   if (!parsed.body) throw new InputError("CHAT_INVALID_RESULT", true);
   const body = parsed.body + discrepancyNote(parsed.body, work);
@@ -258,7 +261,7 @@ export async function geminiChatStream(key: string, messages: {role: string; con
   if (!response.ok) { await logGeminiFailure("chat", response); throw new InputError(response.status === 429 ? "CHAT_RATE_LIMIT" : "CHAT_UNAVAILABLE", true); }
   if (!response.body) throw new InputError("CHAT_INVALID_RESULT", true);
   const decoder = new TextDecoder();
-  let buffer = "", text = "", usage: any, model = "", firstTokenMs: number | null = null;
+  let buffer = "", text = "", usage: any, model = "", finishReason: unknown, firstTokenMs: number | null = null;
   const hider = new SuggestionHider();
   const handle = async (line: string) => {
     if (!line.startsWith("data:")) return;
@@ -266,6 +269,7 @@ export async function geminiChatStream(key: string, messages: {role: string; con
     try { chunk = JSON.parse(line.slice(5).trim()); } catch { return; }
     model = chunk.modelVersion || model;
     usage = chunk.usageMetadata || usage;
+    if (chunk.candidates?.[0]?.finishReason !== undefined) finishReason = chunk.candidates[0].finishReason;
     const delta = partsText(chunk.candidates?.[0]);
     if (delta) {
       text += delta;
@@ -287,6 +291,8 @@ export async function geminiChatStream(key: string, messages: {role: string; con
   } catch (e) { if (e instanceof InputError) throw e; throw new InputError("CHAT_UNAVAILABLE", true); }
   if (!text.trim()) throw new InputError("CHAT_INVALID_RESULT", true);
   if (!sameGeminiModel(model, CHAT.model)) throw new InputError("CHAT_MODEL_MISMATCH", true);
+  // Stream deltas remain provisional until the provider confirms completion.
+  if (finishReason !== "STOP") throw new InputError("CHAT_INVALID_RESULT");
   const tail = hider.flush(); if (tail) { if (firstTokenMs === null) firstTokenMs = Date.now() - start; await onDelta(tail); }
   const parsed = parseReply(text), {suggestions, work} = parsed;
   if (!parsed.body) throw new InputError("CHAT_INVALID_RESULT", true);

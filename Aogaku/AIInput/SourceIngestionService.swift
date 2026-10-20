@@ -40,6 +40,7 @@ final class SourceIngestionService {
     func cancelAccountDeletion(uid: String) { blockedUIDs.remove(uid) }
     func eraseDeletedAccount(uid: String) throws {
         pauseForAccountDeletion(uid: uid)
+        LiveRecordingService.shared.discard(uid: uid)
         defer {
             stores.removeValue(forKey: uid)
             NotificationCenter.default.post(name: .aiAccountDeleted, object: uid)
@@ -70,6 +71,37 @@ final class SourceIngestionService {
         try checkUser(uid)
         guard let object = result.data as? [String: Any] else { throw AIInputError.message("サーバーの応答を読み取れませんでした") }
         return object
+    }
+    /// ライブ録音の作業(1分の文字起こし・要約・ノート)を aiChat に頼む。失敗は、再試行してよいかが分かる形で返す。
+    func callTask(_ task: String, payload: [String: Any], uid: String) async throws -> [String: Any] {
+        try checkUser(uid)
+        if AppBackend.isOffline { throw LiveTaskError(code: "OFFLINE", retryable: false, message: "ローカル確認モードではクラウド通信を行いません") }
+        var data = payload; data["task"] = task
+        let result: HTTPSCallableResult
+        do { result = try await functions.httpsCallable("aiChat").call(data) }
+        catch { throw Self.liveTaskError(error) }
+        try checkUser(uid)
+        guard let object = result.data as? [String: Any] else { throw LiveTaskError(code: "BAD_RESPONSE", retryable: true, message: "サーバーの応答を読み取れませんでした") }
+        return object
+    }
+    nonisolated static func liveTaskError(_ error: Error) -> LiveTaskError {
+        let ns = error as NSError
+        let details = ns.userInfo[FunctionsErrorDetailsKey] as? [String: Any]
+        let code = details?["code"] as? String ?? ""
+        var retryable = details?["retryable"] as? Bool
+        if retryable == nil {
+            // サーバーの判断が無いときは、通信そのものの失敗だけを、やり直せるものとして扱う。
+            if ns.domain == NSURLErrorDomain { retryable = true }
+            else if ns.domain == FunctionsErrorDomain, let kind = FunctionsErrorCode(rawValue: ns.code) { retryable = [.unavailable, .deadlineExceeded, .internal].contains(kind) }
+        }
+        let message: String
+        switch code {
+        case "QUOTA_EXCEEDED": message = "今週(または今日)の録音の文字起こしの上限に達しました"
+        case "AI_INPUT_NOT_ENABLED": message = "AIの利用が許可されていません"
+        case "ASR_UNAVAILABLE", "ASR_MISSING_TIMESTAMPS": message = "音声を文字にできませんでした"
+        default: message = ns.localizedDescription
+        }
+        return LiveTaskError(code: code.isEmpty ? "UNKNOWN" : code, retryable: retryable ?? false, message: message)
     }
     /// サーバーのエラーを、利用者に分かる文言に直す(通常の呼び出しとストリーミングの両方で使う)。
     func mapFunctionsError(_ error: Error, name: String) -> Error {

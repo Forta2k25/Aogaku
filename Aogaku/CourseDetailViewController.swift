@@ -84,6 +84,8 @@ final class CourseDetailViewController: UIViewController {
     private let noteBackdrop = NoteBackdropView()
     private var noteSchedule: [NoteSessionCard] = []
     private var noteRecordingSession = 0
+    /// 録音中・仕上げ中の文字起こしのカード(チャットの一番下)。
+    private var liveCard: LiveTranscriptCardView?
 
     /// 録音ボタン(大きいカード/ヘッダーの省略版)ごとの、更新が必要な部品
     private final class NoteUsageParts {
@@ -338,6 +340,8 @@ final class CourseDetailViewController: UIViewController {
                 noteChatMessageStack.addArrangedSubview(reply)
             }
         }
+        liveCard = nil
+        attachLiveCardIfNeeded()
         refreshAISuggestions()
     }
 
@@ -578,6 +582,7 @@ final class CourseDetailViewController: UIViewController {
         guard let context = try? aiContext(day: noteChatCurrentSession) else { return }
         do {
             if !NoteRecorder.shared.isRecording { try RecordingRecovery.finish(uid: context.ownerUID) }
+            LiveRecordingService.shared.resumePending(uid: context.ownerUID, isRecording: NoteRecorder.shared.isRecording)
             let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
             noteChatMessagesBySession = [:]; aiMessageIDs = [:]
             noteChatPendingBySession = [:]; noteChatPendingRecordingsBySession = [:]
@@ -598,6 +603,12 @@ final class CourseDetailViewController: UIViewController {
                     if let source = selected.first, let url = store.fileURL(source) {
                         rendered = .recording(url: url, duration: Double(source.durationSeconds ?? 0))
                     } else { rendered = .document("削除した録音") }
+                case "recording":
+                    // ライブ録音: 再生できる録音ファイル(端末の中)。文字起こしとノートは、資料とAIの返信として別に保存してある。
+                    if let id = message.text, let url = LiveRecordingService.shared.playbackURL(uid: context.ownerUID, recordingID: id),
+                       let duration = LiveRecordingService.shared.loadSession(uid: context.ownerUID, id: id)?.durationSeconds {
+                        rendered = .recording(url: url, duration: duration)
+                    } else { rendered = .document("録音(再生できません)") }
                 case "pdf": rendered = .document("PDF · \(selected.first?.title ?? "削除した資料")")
                 case "note": rendered = .document("メモ · \(selected.first?.text ?? "削除したメモ")")
                 default: rendered = .text(message.text ?? "")
@@ -866,6 +877,7 @@ final class CourseDetailViewController: UIViewController {
             }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(aiDetectionSourcesChanged), name: .aiSourcesChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveRecordingChanged(_:)), name: .liveRecordingChanged, object: nil)
         restoreAIInput()
         if showsSyllabusActions {
             buildSyllabusActionButtons()
@@ -3194,9 +3206,42 @@ final class CourseDetailViewController: UIViewController {
         present(alert, animated: true)
     }
 
+    /// いま録音中・仕上げ中の録音があれば、チャットの一番下に、文字起こしのカードを出す(増えた文字を反映する)。
+    private func attachLiveCardIfNeeded() {
+        guard noteShowsChatDetail, let context = try? aiContext(day: noteChatCurrentSession),
+              let session = LiveRecordingService.shared.activeSession(courseKey: context.courseKey, dayID: context.dayID) else {
+            if let card = liveCard { noteChatMessageStack.removeArrangedSubview(card); card.removeFromSuperview(); liveCard = nil }
+            return
+        }
+        let nearBottom = scroll.contentOffset.y >= scroll.contentSize.height - scroll.bounds.height - 120
+        let card = liveCard ?? LiveTranscriptCardView()
+        if card.superview == nil { noteChatMessageStack.addArrangedSubview(card) }
+        liveCard = card
+        noteChatMessageStack.isHidden = false
+        card.update(session: session)
+        if nearBottom { DispatchQueue.main.async { [weak self] in self?.scrollNoteChatToBottomForLiveCard() } }
+    }
+    private func scrollNoteChatToBottomForLiveCard() {
+        guard noteShowsChatDetail else { return }
+        view.layoutIfNeeded()
+        let visibleHeight = scroll.bounds.height - scroll.contentInset.bottom
+        let target = scroll.contentSize.height - visibleHeight
+        guard target > -scroll.contentInset.top, scroll.contentSize.height > visibleHeight else { return }
+        scroll.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+    }
+    @objc private func liveRecordingChanged(_ notification: Notification) {
+        guard noteShowsChatDetail, let context = try? aiContext(day: noteChatCurrentSession) else { return }
+        let active = LiveRecordingService.shared.activeSession(courseKey: context.courseKey, dayID: context.dayID)
+        if active != nil { attachLiveCardIfNeeded() }
+        else if liveCard != nil { restoreAIInput() }   // 仕上がった: 録音とノートが、チャットに出る
+        else if let id = notification.object as? String, LiveRecordingService.shared.session(id)?.state == "done" { restoreAIInput() }
+    }
+
     private func noteRecordingStopped(_ result: NoteRecordingResult?, auto: Bool) {
         refreshNoteUsageUI()
-        if let result {
+        if let result, result.recordingID != nil {
+            // ライブ録音: 文字起こしの仕上げとノートの保存は、サービスが続けて行う(終わると、チャットに録音とノートが出る)。
+        } else if let result {
             do {
                 let context = try aiContext(day: noteRecordingSession)
                 _ = try SourceIngestionService.shared.store(uid: context.ownerUID).stage(context: context, kind: .audio, title: "授業の録音", mime: "audio/mp4", fileURL: result.url, duration: result.duration)

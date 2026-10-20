@@ -39,11 +39,13 @@ enum NoteRecordingUsage {
 struct NoteRecordingResult {
     let url: URL
     let duration: TimeInterval
+    /// ライブ録音(1分ごとの文字起こし)の録音ID。無いときは、従来どおり、録音ファイルを送って文字にする。
+    var recordingID: String? = nil
 }
 
 /// 授業の録音。週の上限(180分)に達したら自動で止まる。
 @MainActor
-final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
+final class NoteRecorder: NSObject {
     static let shared = NoteRecorder()
 
     enum StartError: Error {
@@ -52,7 +54,9 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
         case failed
     }
 
-    private var recorder: AVAudioRecorder?
+    private var capture: LiveCapture?
+    private var fullFileURL: URL?
+    private var liveRecordingID: String?
     private var timer: Timer?
     private var committedAtStart: TimeInterval = 0
     private var tickCount = 0
@@ -70,9 +74,11 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     /// 上限や中断で自動的に止まったとき。
     var onAutoStopped: ((NoteRecordingResult?) -> Void)?
 
-    var isRecording: Bool { recorder?.isRecording ?? false }
+    var isRecording: Bool { capture?.isRunning ?? false }
     /// 録音中なら、その録音の経過時間
-    var elapsed: TimeInterval { isRecording ? (recorder?.currentTime ?? 0) : 0 }
+    var elapsed: TimeInterval { isRecording ? (capture?.elapsedSeconds ?? 0) : 0 }
+    /// いま録音中の、ライブ録音のID。
+    var currentRecordingID: String? { isRecording ? liveRecordingID : nil }
     /// 確定済み + 録音中の分
     var usedSeconds: TimeInterval { min(NoteRecordingUsage.limitSeconds, committedAtStartOrStored + elapsed) }
     var remainingSeconds: TimeInterval { max(0, NoteRecordingUsage.limitSeconds - usedSeconds) }
@@ -113,23 +119,31 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true)
 
-            let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("NoteRecordings", isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let url = directory.appendingPathComponent("\(UUID().uuidString).m4a")
-
-            let settings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 22050,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue
-            ]
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
-            recorder.delegate = self
-            recorder.isMeteringEnabled = true
-            if let context = inputContext { try RecordingRecovery.begin(context: context, fileURL: url) }
-            guard recorder.record() else { return false }
-            self.recorder = recorder
+            // 録音は、授業の資料の置き場(アプリの中)に、1つの全体ファイルと、1分ごとの区間ファイルとして書く。
+            let id = UUID().uuidString.lowercased()
+            let directory: URL
+            if let context = inputContext { directory = try LiveRecordingPaths.directory(uid: context.ownerUID, recordingID: id) }
+            else {
+                directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("NoteRecordings", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            let url = directory.appendingPathComponent(inputContext == nil ? "\(UUID().uuidString).m4a" : "full.m4a")
+            let writer = try AudioSegmentWriter(directory: directory, fullURL: url, segmentSeconds: 60) { segment in
+                DispatchQueue.main.async { LiveRecordingService.shared.addSegment(recordingID: id, file: segment) }
+            }
+            let capture = LiveCapture(writer: writer)
+            capture.onFailure = { [weak self] in
+                // 取り込みを続けられなくなった(ディスクの空き・音声の取り合い)。そこまでの録音を保存して止める。
+                guard let self, self.isRecording else { return }
+                let result = self.stop()
+                self.onAutoStopped?(result)
+            }
+            if let context = inputContext { LiveRecordingService.shared.begin(recordingID: id, context: context, fullFileName: url.lastPathComponent) }
+            do { try capture.start() } catch {
+                if inputContext != nil { LiveRecordingService.shared.abandon(recordingID: id, uid: inputContext?.ownerUID ?? "") }
+                throw error
+            }
+            self.capture = capture; fullFileURL = url; liveRecordingID = inputContext == nil ? nil : id
             committedAtStart = NoteRecordingUsage.committedSeconds
             tickCount = 0
             startTimer()
@@ -150,19 +164,17 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     }
 
     private func timerFired() {
-        guard let recorder, recorder.isRecording else { return }
-        recorder.updateMeters()
-        let power = recorder.averagePower(forChannel: 0)   // -160...0 dB
-        onLevel?(max(0, min(1, (power + 50) / 50)))
+        guard let capture, capture.isRunning else { return }
+        onLevel?(capture.currentLevel)
 
         tickCount += 1
         if tickCount % 10 == 0 {
             onTick?()
             if tickCount % 100 == 0 {   // 5秒ごとに途中経過を保存(強制終了に備える)
-                NoteRecordingUsage.committedSeconds = committedAtStart + recorder.currentTime
+                NoteRecordingUsage.committedSeconds = committedAtStart + capture.elapsedSeconds
             }
         }
-        if remainingSeconds <= 0 || recorder.currentTime >= 5399 {
+        if remainingSeconds <= 0 || capture.elapsedSeconds >= 5399 {
             let result = stop()
             onAutoStopped?(result)
         }
@@ -171,21 +183,27 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     /// 録音を止めて保存し、今週の使用時間に加算する。
     @discardableResult
     func stop() -> NoteRecordingResult? {
-        guard let recorder else { return nil }
-        let duration = recorder.currentTime
-        let url = recorder.url
-        recorder.stop()
-        self.recorder = nil
+        guard let capture, let url = fullFileURL else { return nil }
+        let (duration, segmentCount) = capture.stop()
+        self.capture = nil
         timer?.invalidate()
         timer = nil
+        let recordingID = liveRecordingID
+        liveRecordingID = nil; fullFileURL = nil
         NoteRecordingUsage.committedSeconds = committedAtStart + duration
         NoteRecordingActivityController.shared.end()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         onTick?()
         guard duration >= 1 else {   // 1秒未満は誤タップとして捨てる(時間は加算しない)
             try? FileManager.default.removeItem(at: url)
+            if let recordingID, let uid = inputContext?.ownerUID { LiveRecordingService.shared.abandon(recordingID: recordingID, uid: uid) }
             NoteRecordingUsage.committedSeconds = committedAtStart
             return nil
+        }
+        if let recordingID {
+            // 1分ごとの文字起こしを仕上げる(ノート作成・保存)。画面を閉じても続く。
+            LiveRecordingService.shared.markStopped(recordingID: recordingID, expectedSegments: segmentCount, duration: duration)
+            return NoteRecordingResult(url: url, duration: duration, recordingID: recordingID)
         }
         let savedURL = inputContext.flatMap { try? RecordingRecovery.finish(uid: $0.ownerUID) }
         return NoteRecordingResult(url: savedURL ?? url, duration: duration)
@@ -202,13 +220,15 @@ final class NoteRecorder: NSObject, AVAudioRecorderDelegate {
     func discardForAccountDeletion(uid: String) {
         guard inputContext?.ownerUID == uid else { return }
         startGeneration += 1
-        let url = recorder?.url
-        recorder?.stop(); recorder = nil
+        _ = capture?.stop(); capture = nil
         timer?.invalidate(); timer = nil
         onLevel = nil; onTick = nil; onAutoStopped = nil; inputContext = nil
+        liveRecordingID = nil
         NoteRecordingActivityController.shared.end()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        if let url { try? FileManager.default.removeItem(at: url) }
+        if let url = fullFileURL { try? FileManager.default.removeItem(at: url) }
+        fullFileURL = nil
+        LiveRecordingService.shared.discard(uid: uid)
     }
 }
 

@@ -1,3 +1,4 @@
+import {validateSegment, transcribeSegment, validateBlock, validateNote, summarizeBlock, makeNote, RECORDING} from "./recording";
 import {LatencyMeter, devVisualOptions} from "./latency";
 import {previewAllowed, previewPublisher, previewResponse} from "./progressive";
 import * as admin from "firebase-admin";
@@ -469,8 +470,53 @@ export const aiRetrieveContext = callable(async (uid, data) => {
       sources: coverageSources.map(s => ({sourceId: s.sourceId, status: s.status, coverage: s.coverage || null}))}};
 });
 
+// ライブ録音: 1分ごとの文字起こし・10分ごとの要約・ノート作成。その場で結果を返し、資料(source)としては保存しない。
+// 回数・時間の上限は、会話とは別に数える(録音の文字起こしが、会話の1日の回数を使い切らないように)。
+async function reserveRecording(uid: string, kind: "segment" | "summary", seconds = 0, dedupeId?: string) {
+  await assertAccountActive(uid);
+  const day = new Date(now() + 9 * 3600000).toISOString().slice(0, 10);
+  const dayRef = db().doc(`${collections.usage}/${uid}/${collections.periods}/day-${day}`);
+  const weekRef = db().doc(`${collections.usage}/${uid}/${collections.periods}/week-${weekKey(new Date())}`);
+  const markRef = dedupeId ? db().doc(`${collections.usage}/${uid}/${collections.periods}/rec-${dedupeId}`) : null;
+  const field = kind === "segment" ? "recordingSegments" : "recordingSummaries";
+  const cap = kind === "segment" ? RECORDING.segmentsPerDay : RECORDING.summariesPerDay;
+  await db().runTransaction(async tx => {
+    const [dayDoc, weekDoc, mark, owner] = await Promise.all([tx.get(dayRef), tx.get(weekRef), markRef ? tx.get(markRef) : Promise.resolve(null), tx.get(owners().doc(uid))]);
+    if (["deleting", "deleted"].includes(owner.get("state"))) throw new InputError("ACCOUNT_DELETED");
+    if (mark?.exists) return;   // 同じ区間の再送は、二重に数えない
+    const used = dayDoc.get(field) || 0, weekSeconds = weekDoc.get("seconds") || 0;
+    if (used >= cap || weekSeconds + seconds > INPUT_QUOTAS.weeklyAudioSeconds) throw new InputError("QUOTA_EXCEEDED");
+    tx.set(dayRef, {[field]: used + 1}, {merge: true});
+    if (seconds) tx.set(weekRef, {seconds: weekSeconds + Math.ceil(seconds)}, {merge: true});
+    if (markRef) tx.set(markRef, {createdAt: now(), kind});
+  });
+}
+async function recordingTask(uid: string, data: any) {
+  const task = data?.task;
+  if (task === "recordingSegment") {
+    const input = validateSegment(data);
+    await reserveRecording(uid, "segment", input.durationSeconds, `${input.recordingId}-${input.index}`);
+    const result = await transcribeSegment(input.audio, await groqSecret());
+    return {schemaVersion: 1, task, recordingId: input.recordingId, index: input.index, durationSeconds: input.durationSeconds, ...result};
+  }
+  if (task === "recordingSummary") {
+    const input = validateBlock(data);
+    await reserveRecording(uid, "summary");
+    const result = await summarizeBlock(await geminiSecret(), input);
+    return {schemaVersion: 1, task, startMinute: input.startMinute, endMinute: input.endMinute, ...result};
+  }
+  if (task === "recordingNote") {
+    const input = validateNote(data);
+    await reserveRecording(uid, "summary");
+    const result = await makeNote(await geminiSecret(), input);
+    return {schemaVersion: 1, task, ...result};
+  }
+  throw new InputError("INVALID_CHAT_MODE");
+}
+
 // Conversational reply over the caller's own ready sources. Nothing from the conversation is stored server-side.
 export const aiChat = callable(async (uid, data, stream) => {
+  if (data?.task !== undefined) return recordingTask(uid, data);
   const input = validateChat(data);
   const lastQuestion = [...input.turns].reverse().find(t => t.role === "user")?.text || "";
   const candidates: any[] = [], titles = new Map<string, string>();

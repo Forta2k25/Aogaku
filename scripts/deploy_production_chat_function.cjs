@@ -13,7 +13,7 @@ const PARENT = `projects/${PROJECT}/locations/${REGION}`, API = "https://cloudfu
 const ROOT = path.resolve(__dirname, ".."), LIB = path.join(ROOT, "functions/lib");
 // 今回の変更で差し替えてよいモジュール。これ以外の差分があれば停止する(比べるのも、この2つだけ)。
 // chat.js: 根拠のルール・資料の渡し方。index.js: 資料があるはずなのに1つも無いときの停止(MATERIAL_UNAVAILABLE)。
-const EXPECTED = ["lib/ai/chat.js", "lib/ai/index.js"];
+const EXPECTED = ["lib/ai/chat.js", "lib/ai/index.js", "lib/ai/recording.js"];
 const STATE = path.join(ROOT, "build/production-chat-function");
 const sha = b => crypto.createHash("sha256").update(b).digest("hex");
 

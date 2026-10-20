@@ -275,3 +275,19 @@ test('prompt delimiters the model echoes (<授業の前提>, <資料>) never rea
  assert.equal(stripPromptTags('配列 a<b と a>c は普通の文字'),'配列 a<b と a>c は普通の文字');
  const r=parseReply('<授業の前提>の通り、答えは3です。\n[[次]]\n問2も');assert.equal(r.body,'の通り、答えは3です。'.replace(/^の/,'')||r.body);assert(!r.body.includes('授業の前提'));
 });
+
+const {chooseContext}=require('../lib/ai/chat');
+test('context choice: lecture notes always come first; the rest is chosen by the question within the remaining budget',()=>{
+ const titles=new Map([['n','録音ノート'],['t','録音の文字起こし'],['p','板書']]);
+ const note=[{sourceId:'n',chunkId:'000000',text:'【ノート】'+'あ'.repeat(1400)},{sourceId:'n',chunkId:'000001',text:'【10分ごとの要約】'+'い'.repeat(1400)}];
+ const transcript=Array.from({length:40},(_,i)=>({sourceId:'t',chunkId:String(i).padStart(6,'0'),text:(i===37?'ラグランジュ未定乗数法は来週':'雑談')+'う'.repeat(900)}));
+ const all=[...transcript,...note,{sourceId:'p',chunkId:'000000',text:'板書の文字'}];
+ const picked=chooseContext(all,titles,'ラグランジュ未定乗数法はいつ?');
+ assert.equal(picked[0].sourceId,'n');assert.equal(picked[1].sourceId,'n');assert(picked.some(c=>c.chunkId==='000037'&&c.sourceId==='t'),'質問に関係する原文の断片が入る');
+ assert(picked.reduce((n,c)=>n+c.text.length,0)<=CHAT.contextChars,'12000字の枠を超えない');
+ assert(!picked.some(c=>c.text.startsWith('雑談')),'関係のない断片で、枠を埋めない');
+ const noQuestion=chooseContext(all,titles,'');assert.equal(noQuestion[0].sourceId,'n');assert(noQuestion.length>2);
+ assert.deepEqual(chooseContext(transcript.slice(0,2),new Map([['t','x']]),'雑談').map(c=>c.chunkId),['000000','000001'],'録音ノートが無いときは、従来どおり');
+ const huge=[{sourceId:'n',chunkId:'000000',text:'あ'.repeat(5000)},{sourceId:'n',chunkId:'000001',text:'い'.repeat(5000)}];
+ assert.equal(chooseContext(huge,titles,'x').length,1,'録音ノートの枠(6000字)を超えて、他の資料を押し出さない');
+});

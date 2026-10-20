@@ -1,11 +1,11 @@
-import {InputError} from "./domain";
+import {InputError, selectContext} from "./domain";
 import {RECOGNITION_PRICING} from "./pricing";
 import {geminiFetch, geminiUsage, logGeminiFailure, sameGeminiModel} from "./gemini";
 
 // Conversational reply over the caller's own recognized sources. Same Gemini key/model/pricing snapshot as image recognition.
 export const CHAT = {
   version: "chat-v1", provider: RECOGNITION_PRICING.image.provider, model: RECOGNITION_PRICING.image.model,
-  maxTurns: 12, maxImages: 3, maxImageBytes: 3 * 1024 * 1024, maxTotalImageBytes: 6 * 1024 * 1024, maxTurnChars: 2000, maxSources: 8, contextChars: 12000, maxCourseMemoChars: 1500, maxSyllabusChars: 3500, maxOutputTokens: 1600, timeoutMs: 60000,
+  maxTurns: 12, maxImages: 3, maxImageBytes: 3 * 1024 * 1024, maxTotalImageBytes: 6 * 1024 * 1024, maxTurnChars: 2000, maxSources: 8, contextChars: 12000, recordingNoteChars: 6000, maxCourseMemoChars: 1500, maxSyllabusChars: 3500, maxOutputTokens: 1600, timeoutMs: 60000,
 } as const;
 export const CHAT_CAPABILITY = {version: CHAT.version, provider: CHAT.provider, model: CHAT.model} as const;
 
@@ -128,6 +128,19 @@ const SUGGEST = `返信の本文を書き終えたら、最後に改行して「
 const INTRO = `ユーザーは資料だけを送り、まだ何も頼んでいません。この返信には作業メモは付けません。次の順で返してください。
 1. 資料に何が書かれているかを、1〜2文で短く伝える(板書・スライド・プリント等、種類が分かれば添える)。見切れている・読めない部分があれば、どこかを1文で添える。
 2. 続けて、この資料でできそうなこと(要約、ノートにまとめる、小テストを作る、気になる点を質問する、など)を自然な言葉で2〜3個挙げ、どうしたいか聞く。`;
+
+/** 会話に渡す資料の断片を選ぶ。録音ノート(10分ごとの要約と全体のノート)は、いつも先に入れる(講義全体の見通しになる)。残りの枠に、質問に関係する断片を足す。 */
+export function chooseContext<T extends {text: string; chunkId?: unknown; sourceId: string}>(candidates: T[], titles: Map<string, string>, question: string): T[] {
+  const isNote = (c: T) => (titles.get(c.sourceId) || "").startsWith("録音ノート");
+  const notes = candidates.filter(isNote).sort((a, b) => String(a.chunkId).localeCompare(String(b.chunkId)));
+  const rest = candidates.filter(c => !isNote(c));
+  const priority = selectContext(notes, "lecture_summary", "", CHAT.recordingNoteChars).items;
+  const budget = CHAT.contextChars - priority.reduce((n, c) => n + c.text.length, 0);
+  // Prefer passages related to the question; fall back to an even spread when nothing matches lexically.
+  let selected = question ? selectContext(rest, "question", question, budget).items : [];
+  if (!selected.length) selected = selectContext(rest, "lecture_summary", "", budget).items;
+  return [...priority, ...selected];
+}
 
 export interface ContextItem { title: string; text: string }
 

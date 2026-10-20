@@ -18,7 +18,7 @@ import {PIPELINE, InputError, validateCreate, id, offeringId, syllabusYear, cour
 import {extractAudio, extractImage, extractPDF, audioDuration} from "./extractors";
 import {AI_COLLECTIONS as collections} from "./schema";
 import {admissionAllowed, INPUT_QUOTAS} from "./admission";
-import {CHAT, CHAT_CAPABILITY, validateChat, buildMessages, geminiChat, geminiChatStream, ContextItem} from "./chat";
+import {CHAT, CHAT_CAPABILITY, validateChat, buildMessages, geminiChat, geminiChatStream, chooseContext, ContextItem} from "./chat";
 import {RecognitionError} from "./recognition";
 import {IMAGE_PIPELINE} from "./pricing";
 import {AUTO_CAPABILITIES} from "./visualRouter";
@@ -527,9 +527,7 @@ export const aiChat = callable(async (uid, data, stream) => {
     const snap = await sources().doc(source.sourceId).collection(collections.runs).doc(source.activeRun).collection(collections.chunks).orderBy("chunkId").limit(60).get();
     for (const d of snap.docs) candidates.push({text: String(d.get("text") || ""), chunkId: d.get("chunkId"), sourceId: source.sourceId});
   }
-  // Prefer passages related to the question; fall back to an even spread when nothing matches lexically.
-  let selected = input.mode === "reply" && lastQuestion ? selectContext(candidates, "question", lastQuestion, CHAT.contextChars).items : [];
-  if (!selected.length) selected = selectContext(candidates, "lecture_summary", "", CHAT.contextChars).items;
+  const selected = chooseContext(candidates, titles, input.mode === "reply" ? lastQuestion : "");
   const context: ContextItem[] = [...new Set(selected.map(s => s.sourceId))].map(sourceId => ({
     title: titles.get(sourceId) || "資料",
     text: selected.filter(s => s.sourceId === sourceId).sort((a, b) => String(a.chunkId).localeCompare(String(b.chunkId))).map(s => s.text).join("\n")}));

@@ -247,6 +247,13 @@ final class CourseDetailViewController: UIViewController {
         noteChatTextChanged()
         updateNoteChatSendButton(animated: false)
         if !pending.text.isEmpty || !pending.photos.isEmpty { noteChatSendTapped() }
+        else {
+            // 時間割から授業を選んで開いたとき: そのまま打てるように、キーボードを上げる(画面が開く動きが落ち着いてから)。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                guard let self, self.noteShowsChatDetail else { return }
+                self.noteChatTextField.becomeFirstResponder()
+            }
+        }
     }
 
     private func prepareAIInputSession() {

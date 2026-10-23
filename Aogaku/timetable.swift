@@ -355,8 +355,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
 
 final class timetable: UIViewController,
                        CourseListViewControllerDelegate,
-                       CourseDetailViewControllerDelegate,
-                       BannerViewDelegate {
+                       CourseDetailViewControllerDelegate {
     func courseDetail(_ vc: CourseDetailViewController,
                       didUpdate counts: AttendanceCounts,
                       for course: Course,
@@ -403,11 +402,12 @@ final class timetable: UIViewController,
     private let contentView = UIView()
 
     // ===== AdMob =====
-    private let adContainer = UIView()
-    private var bannerView: BannerView?
-    private var lastBannerWidth: CGFloat = 0
-    private var didLoadBannerOnce = false
-    private var adContainerHeight: NSLayoutConstraint?
+    // 下の「AIに質問する」入力欄(以前は、広告の帯があった場所)
+    private let askBarContainer = UIView()
+    private let askBar = TimetableAskBar()
+    private var askBarHeight: NSLayoutConstraint?
+    private var askSelecting = false
+    private var askOverlays: [UIView] = []
     private var scrollBottomConstraint: NSLayoutConstraint?
     private var centerMinWidth: NSLayoutConstraint?
 
@@ -541,7 +541,7 @@ final class timetable: UIViewController,
         scrollView.backgroundColor = bg
         contentView.backgroundColor = bg
         gridContainerView.backgroundColor = bg
-        adContainer.backgroundColor = bg
+        askBarContainer.backgroundColor = bg
     }
 
     
@@ -891,6 +891,10 @@ final class timetable: UIViewController,
         let day       = sender.tag % 100
         let list      = onlineSlots[day] ?? []
 
+        if askSelecting {
+            if slotIndex < list.count { handleAskPick(QuickAskCourse(course: list[slotIndex], location: SlotLocation(day: day, period: 0))) } else { askBar.nudge() }
+            return
+        }
         if slotIndex < list.count {
             // ── 既存コース：通常コマと同じく詳細画面へ直接遷移 ──
             let course = list[slotIndex]
@@ -1005,6 +1009,7 @@ final class timetable: UIViewController,
     // MARK: - ViewOnly UI
     private func applyViewOnlyUI() {
         guard isViewLoaded else { return }
+        updateAskBarVisibility()
         if viewOnly {
             navigationItem.rightBarButtonItems = nil       // 右上ボタン群を非表示
             (view.viewWithTag(9001) as? UIView)?.isHidden = true // もしまとめビューがあれば隠す
@@ -1292,10 +1297,7 @@ final class timetable: UIViewController,
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.saveAssigned() }
 
-        setupAdBanner()
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(onAdMobReady),
-            name: .adMobReady, object: nil)
+        setupAskBar()
         applyViewOnlyUI() // ← 最後に反映
         mirrorForWidget()
     }
@@ -1373,8 +1375,6 @@ final class timetable: UIViewController,
         if centerMinWidth?.constant != need {
             centerMinWidth?.constant = need
         }*/
-        
-        loadBannerIfNeeded()
     }
 
     
@@ -1389,9 +1389,7 @@ final class timetable: UIViewController,
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         nowTimer?.invalidate()               // 追加
-    }
-    @objc private func onAdMobReady() {
-        loadBannerIfNeeded()
+        endAskSelection()
     }
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
@@ -1588,22 +1586,6 @@ final class timetable: UIViewController,
         let copyDays = min(oldDays, newDays), copyPeriods = min(oldPeriods, newPeriods)
         for p in 0..<copyPeriods { for d in 0..<copyDays { dst[p * newDays + d] = old[p * oldDays + d] } }
         return dst
-    }
-
-    private func loadBannerIfNeeded() {
-        guard let bv = bannerView else { return }
-        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
-        if safeWidth <= 0 { return }
-        let useWidth = max(320, floor(safeWidth))
-        if abs(useWidth - lastBannerWidth) < 0.5 { return }
-        lastBannerWidth = useWidth
-        let size = makeAdaptiveAdSize(width: useWidth)
-        adContainerHeight?.constant = size.size.height
-        updateInsetsForBanner(height: size.size.height)
-        view.layoutIfNeeded()
-        guard size.size.height > 0 else { return }
-        if !CGSizeEqualToSize(bv.adSize.size, size.size) { bv.adSize = size }
-        if !didLoadBannerOnce { didLoadBannerOnce = true; bv.load(Request()) }
     }
 
     private func normalizeAssigned() {
@@ -2106,11 +2088,7 @@ final class timetable: UIViewController,
     func quickAskEntries() -> (entries: [QuickAskCourse], term: TermKey) {
         _ = view   // まだ開かれていないタブでも、時間割を読み込ませる
         let cols = dayLabels.count
-        var entries: [QuickAskCourse] = []
-        for (index, course) in assigned.enumerated() {
-            guard let course, cols > 0 else { continue }
-            entries.append(QuickAskCourse(course: course, location: SlotLocation(day: index % cols, period: index / cols + 1)))
-        }
+        let entries = assigned.indices.compactMap { TimetableAskSelection.entry(at: $0, assigned: assigned, columns: cols) }
         return (entries, currentTerm)
     }
 
@@ -2215,6 +2193,11 @@ final class timetable: UIViewController,
         let col  = sender.tag % cols
         let loc = SlotLocation(day: col, period: row + 1)
 
+        // 「AIに質問する」で、コマを選んでいるとき: 授業のあるマスなら、その授業のチャットへ。空きなら、揺らして知らせる。
+        if askSelecting {
+            if let entry = TimetableAskSelection.entry(at: idx, assigned: assigned, columns: cols) { handleAskPick(entry) } else { askBar.nudge() }
+            return
+        }
         if viewOnly { return } // 読み取り専用時は編集不可
         guard assigned.indices.contains(idx) else { return }  // 設定変更などでグリッドサイズが変わった直後の古いタグ対策
         if let course = assigned[idx] { presentCourseDetail(course, at: loc); return }
@@ -2424,62 +2407,94 @@ final class timetable: UIViewController,
     
     
 
-    // MARK: - AdMob
-    private func setupAdBanner() {
-        adContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(adContainer)
-
-        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+    // MARK: - AIに質問する(時間割から、聞きたい授業のコマを選ぶ)
+    private func setupAskBar() {
+        askBarContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(askBarContainer)
+        askBar.translatesAutoresizingMaskIntoConstraints = false
+        askBarContainer.addSubview(askBar)
+        askBar.addTarget(self, action: #selector(askBarTapped), for: .touchUpInside)
+        let height = askBarContainer.heightAnchor.constraint(equalToConstant: 64)
+        askBarHeight = height
         NSLayoutConstraint.activate([
-            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            adContainerHeight!
+            askBarContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            askBarContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            askBarContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            height,
+            askBar.leadingAnchor.constraint(equalTo: askBarContainer.leadingAnchor, constant: 16),
+            askBar.trailingAnchor.constraint(equalTo: askBarContainer.trailingAnchor, constant: -16),
+            askBar.topAnchor.constraint(equalTo: askBarContainer.topAnchor, constant: 8),
+            askBar.bottomAnchor.constraint(equalTo: askBarContainer.bottomAnchor, constant: -8)
         ])
-
         scrollBottomConstraint?.isActive = false
-        scrollBottomConstraint = scrollView.bottomAnchor.constraint(equalTo: adContainer.topAnchor)
+        scrollBottomConstraint = scrollView.bottomAnchor.constraint(equalTo: askBarContainer.topAnchor)
         scrollBottomConstraint?.isActive = true
-        
-        // RCで広告を止めているときはUIも消す
-        guard AdsConfig.enabled else {
-            adContainer.isHidden = true
-            adContainerHeight?.constant = 0
-            return
-        }
+        updateAskBarVisibility()
+    }
 
-        let bv = BannerView()
-        bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
-        bv.rootViewController = self
-        bv.adSize = AdSizeBanner
-        bv.delegate = self
-        adContainer.addSubview(bv)
-        NSLayoutConstraint.activate([
-            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
-            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
-            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
-            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
-        ])
-        self.bannerView = bv
+    /// 友だちの時間割(閲覧のみ)では、出さない。
+    private func updateAskBarVisibility() {
+        askBarContainer.isHidden = viewOnly
+        askBarHeight?.constant = viewOnly ? 0 : 64
     }
-    private func updateInsetsForBanner(height: CGFloat) {
-        var inset = scrollView.contentInset
-        inset.bottom = height
-        scrollView.contentInset = inset
-        scrollView.verticalScrollIndicatorInsets.bottom = height
+
+    @objc private func askBarTapped() {
+        if askSelecting { endAskSelection(); return }
+        let hasCourse = assigned.contains { $0 != nil } || onlineSlots.values.contains { !$0.isEmpty }
+        guard hasCourse else {
+            let alert = UIAlertController(title: "授業が登録されていません", message: "時間割に授業を登録すると、その授業のことを聞けます。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default)); present(alert, animated: true); return
+        }
+        beginAskSelection()
     }
-    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
-        let h = bannerView.adSize.size.height
-        adContainerHeight?.constant = h
-        updateInsetsForBanner(height: h)
-        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
+
+    /// 聞きたい授業を、時間割から選ぶ状態にする。授業のあるマスは枠で囲み、空きは薄くする。いまの授業(の付近)のマスには、目印をつける。
+    private func beginAskSelection() {
+        askSelecting = true
+        askBar.setMode(.selecting)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let current = QuickAskRouting.timeMatch(quickAskEntries().entries, now: Date())
+        let cols = dayLabels.count
+        for (index, button) in slotButtons.enumerated() where assigned.indices.contains(index) {
+            let overlay = UIView(frame: button.bounds)
+            overlay.isUserInteractionEnabled = false
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlay.layer.cornerRadius = button.layer.cornerRadius
+            if assigned[index] == nil {
+                overlay.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.65)
+            } else {
+                overlay.layer.borderWidth = 2.5
+                overlay.layer.borderColor = UIColor(red: 0.04, green: 0.42, blue: 0.28, alpha: 1).cgColor
+                if let current, current.entry.location.day + (current.entry.location.period - 1) * cols == index {
+                    let badge = UILabel()
+                    badge.text = current.phase == .inSession ? "授業中" : (current.phase == .startingSoon ? "まもなく" : "終了直後")
+                    badge.font = .systemFont(ofSize: 11, weight: .bold)
+                    badge.textColor = .white
+                    badge.backgroundColor = UIColor(red: 0.04, green: 0.42, blue: 0.28, alpha: 1)
+                    badge.textAlignment = .center
+                    badge.layer.cornerRadius = 8; badge.clipsToBounds = true
+                    badge.frame = CGRect(x: 6, y: 6, width: 52, height: 18)
+                    overlay.addSubview(badge)
+                }
+            }
+            button.addSubview(overlay)
+            askOverlays.append(overlay)
+        }
     }
-    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
-        adContainerHeight?.constant = 0
-        updateInsetsForBanner(height: 0)
-        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
-        print("Ad failed:", error.localizedDescription)
+
+    private func endAskSelection() {
+        guard askSelecting else { return }
+        askSelecting = false
+        askBar.setMode(.idle)
+        askOverlays.forEach { $0.removeFromSuperview() }
+        askOverlays.removeAll()
+    }
+
+    /// 選ばれた授業の、最新の回(今日が授業日なら今日、そうでなければ直近の回)のチャットを開く。キーボードも上がる。
+    private func handleAskPick(_ entry: QuickAskCourse) {
+        endAskSelection()
+        let dayID = QuickAskRouting.sessionDayID(for: entry, term: currentTerm, now: Date())
+        presentCourseChat(entry, dayID: dayID, text: "", photos: [], from: self)
     }
 
     // MARK: - Header actions

@@ -71,21 +71,4 @@ final class QuickAskRoutingTests: XCTestCase {
         defaults.set([day], forKey: "note.cancelled.reading")
         XCTAssertNotEqual(QuickAskRouting.sessionDayID(for: tuesday, term: term, now: now, defaults: defaults), day)
     }
-    func testChoiceOrderPutsPredictionsFirstThenTheNearest() {
-        let now = date(20, 12, 50)   // 火曜 12:50
-        let order = QuickAskRouting.orderedForChoice(entries, predicted: [("media", 0.4), ("bible", 0.9)], now: now).map(\.course.id)
-        XCTAssertEqual(Array(order.prefix(2)), ["bible", "media"], "予想は、自信の高い順に先頭")
-        XCTAssertEqual(order.last, "writing", "残りは、いまに近い順(木曜の授業は、最後)")
-        XCTAssertEqual(order.count, 4)
-        XCTAssertEqual(QuickAskRouting.orderedForChoice(entries, predicted: [("nope", 1)], now: now).map(\.course.id).first, "bible", "一覧に無い予想は無視。次の授業が先")
-        let twoSlots = entries + [entry("reading", "Reading II", day: 3, period: 1)]
-        XCTAssertEqual(QuickAskRouting.orderedForChoice(twoSlots, predicted: [], now: now).filter { $0.course.id == "reading" }.count, 1, "同じ授業が2つのコマにあっても、1つにまとめる")
-    }
-    func testLocalGuessUsesCourseAndTeacherNames() {
-        let list = [entry("a", "経済数学", day: 0, period: 1, teacher: "山田"), entry("b", "Reading II", day: 1, period: 2, teacher: "Smith"), entry("c", "西洋美術史 II", day: 2, period: 3)]
-        XCTAssertEqual(QuickAskRouting.localGuess(question: "経済数学の課題いつ?", entries: list).map(\.course.id), ["a"])
-        XCTAssertEqual(QuickAskRouting.localGuess(question: "reading の宿題", entries: list).map(\.course.id), ["b"], "大文字・小文字は区別しない")
-        XCTAssertEqual(QuickAskRouting.localGuess(question: "Smith先生の連絡", entries: list).map(\.course.id), ["b"])
-        XCTAssertTrue(QuickAskRouting.localGuess(question: "お昼ごはん", entries: list).isEmpty)
-    }
 }

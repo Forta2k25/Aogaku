@@ -57,8 +57,7 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
 
         // 簡単レイアウト
         var rows: [UIView] = [
-            Self.sectionTitle("授業を探す・確認する"),
-            Self.toolRow(symbol: "magnifyingglass", title: "シラバスを探す", subtitle: "授業名・先生・曜日から、授業を探す", target: self, action: #selector(openSyllabus)),
+            Self.sectionTitle("確認する"),
             Self.toolRow(symbol: "graduationcap", title: "単位", subtitle: "取った単位と、卒業までの残り", target: self, action: #selector(openCredits)),
             Self.toolRow(symbol: "calendar", title: "学事暦", subtitle: "授業日・休講・試験の日程", target: self, action: #selector(openCalendar)),
             Self.sectionTitle("表示"),
@@ -144,9 +143,6 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
         let nav = UINavigationController(rootViewController: viewController)
         nav.modalPresentationStyle = .fullScreen
         present(nav, animated: true)
-    }
-    @objc private func openSyllabus() {
-        show(UIStoryboard(name: "Main", bundle: nil).instantiateViewController(withIdentifier: "syllabus"))
     }
     @objc private func openCredits() { show(CreditsFullViewController(currentTerm: TermStore.loadSelected()), fullScreen: true) }
     @objc private func openCalendar() { show(ClassDayCalendarViewController()) }

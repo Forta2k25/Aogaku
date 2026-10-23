@@ -32,7 +32,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
         let sb = UIStoryboard(name: "Main", bundle: nil)
         let root = sb.instantiateInitialViewController()
         if let tab = root as? UITabBarController {
-            Self.replaceSyllabusTabWithAI(in: tab)
             tab.delegate = self
             tab.selectedIndex = 0   // ← 初期は時間割タブ
             AppAnalytics.logTabView(tabName(for: tab, index: 0), index: 0)
@@ -105,21 +104,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate, UITabBarControllerDeleg
 
 }
 
-extension SceneDelegate {
-    /// 2番目のタブ(これまでは「シラバス」)を、「AI」に置き換える。シラバス・単位・学事暦は、時間割タブの設定から開く。
-    static func replaceSyllabusTabWithAI(in tab: UITabBarController, isSyllabusTab: (UIViewController) -> Bool = {
-        (($0 as? UINavigationController)?.viewControllers.first) is syllabus
-    }) {
-        guard var controllers = tab.viewControllers, controllers.indices.contains(1) else { return }
-        guard isSyllabusTab(controllers[1]) else { return }   // すでに置き換わっている・並びが違うときは、触らない
-        let nav = UINavigationController(rootViewController: AIHomeViewController())
-        nav.setNavigationBarHidden(true, animated: false)
-        nav.tabBarItem = UITabBarItem(title: "AI", image: UIImage(systemName: "sparkles"), selectedImage: UIImage(systemName: "sparkles"))
-        controllers[1] = nav
-        tab.viewControllers = controllers
-    }
-}
-
 private extension SceneDelegate {
     func tabName(for tabBarController: UITabBarController, viewController: UIViewController) -> AppAnalytics.Tab {
         guard let index = tabBarController.viewControllers?.firstIndex(of: viewController) else {
@@ -141,9 +125,6 @@ private extension SceneDelegate {
 
         if typeName.contains("timetable") || typeName.contains("Timetable") || title.contains("時間割") {
             return .timetable
-        }
-        if typeName.contains("AIHome") || title == "AI" {
-            return .ai
         }
         if typeName.contains("Syllabus") || title.contains("シラバス") {
             return .syllabus

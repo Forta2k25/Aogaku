@@ -496,7 +496,7 @@ async function recordingTask(uid: string, data: any) {
   if (task === "recordingSegment") {
     const input = validateSegment(data);
     await reserveRecording(uid, "segment", input.durationSeconds, `${input.recordingId}-${input.index}`);
-    const result = await transcribeSegment(input.audio, await groqSecret());
+    const result = await transcribeSegment(input.audio, await groqSecret(), fetch, input.language);
     return {schemaVersion: 1, task, recordingId: input.recordingId, index: input.index, durationSeconds: input.durationSeconds, ...result};
   }
   if (task === "recordingSummary") {

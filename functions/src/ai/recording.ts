@@ -13,7 +13,8 @@ export const RECORDING = {
   segmentsPerDay: 400, summariesPerDay: 60,
 } as const;
 
-export interface SegmentInput {recordingId: string; index: number; durationSeconds: number; audio: Buffer}
+export type RecordingLanguage = "auto" | "ja" | "en";
+export interface SegmentInput {recordingId: string; index: number; durationSeconds: number; audio: Buffer; language: RecordingLanguage}
 export interface TranscribedSegment {startMs: number; endMs: number; text: string; lowConfidence: boolean}
 
 const RECORDING_ID = /^[A-Za-z0-9-]{8,64}$/;
@@ -32,16 +33,21 @@ export function validateSegment(data: any): SegmentInput {
   const audio = Buffer.from(raw, "base64");
   // m4a(MP4)は、先頭から4バイト目に "ftyp" が来る。
   if (!audio.length || audio.length > RECORDING.maxSegmentBytes || audio.subarray(4, 8).toString("latin1") !== "ftyp") throw new InputError("INVALID_AUDIO");
-  return {recordingId, index, durationSeconds, audio};
+  // 言語: auto(自動判定)・ja・en。指定が無い古いアプリは、これまでどおり日本語。それ以外の値は、受け付けない。
+  const language = data?.language === undefined ? "ja" : data.language;
+  if (language !== "auto" && language !== "ja" && language !== "en") throw new InputError("INVALID_RECORDING");
+  return {recordingId, index, durationSeconds, audio, language};
 }
 
 /** Groq の Whisper で、1分ほどの音声を文字にする。無音・確信の低い区間も、フラグで区別して返す。 */
-export async function transcribeSegment(audio: Buffer, key: string, request: typeof fetch = fetch) {
+export async function transcribeSegment(audio: Buffer, key: string, request: typeof fetch = fetch, language: RecordingLanguage = "ja") {
   if (!key) throw new InputError("ASR_NOT_CONFIGURED");
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(audio)], {type: "audio/mp4"}), "audio.m4a");
   form.append("model", RECOGNITION_PRICING.audio.model); form.append("response_format", "verbose_json");
-  form.append("language", "ja"); form.append("temperature", "0");
+  // 自動のときは、言語を指定せず、Whisper に判定させる(英語の授業・日英まじりの授業向け)。指定したときは、その言語で書き起こす。
+  if (language !== "auto") form.append("language", language);
+  form.append("temperature", "0");
   let response: Response;
   try {
     response = await request("https://api.groq.com/openai/v1/audio/transcriptions", {method: "POST", headers: {Authorization: `Bearer ${key}`}, body: form, signal: AbortSignal.timeout(RECORDING.asrTimeoutMs)});

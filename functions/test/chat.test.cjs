@@ -129,11 +129,11 @@ test('geminiChat: images are sent to the provider with the request',async()=>{
 });
 
 const {splitSuggestions,SuggestionHider,SUGGEST_MARKER}=require('../lib/ai/chat');
-test('suggestions: body and up to 3 clean candidates are split; junk, duplicates and over-long lines are dropped',()=>{
+test('suggestions: body and up to 3 clean candidates are split; junk, duplicates and over-long lines are dropped (English fits too)',()=>{
  const r=splitSuggestions('答えは3です。\n\n[[次]]\n- 問2も解いて\n2. 「この式の意味は?」\n類題を出して\n四つ目\n');
  assert.equal(r.body,'答えは3です。');assert.deepEqual(r.suggestions,['問2も解いて','この式の意味は?','類題を出して']);
  assert.deepEqual(splitSuggestions('本文だけ').suggestions,[]);assert.equal(splitSuggestions('本文だけ').body,'本文だけ');
- assert.deepEqual(splitSuggestions('本文\n[[次]]\n'+'あ'.repeat(40)+'\nはい').suggestions,['はい']);
+ assert.deepEqual(splitSuggestions('本文\n[[次]]\n'+'あ'.repeat(60)+'\nはい').suggestions,['はい']);
  assert.deepEqual(splitSuggestions('本文\n[[次]]\n同じ\n同じ\nもう一つ\n三つ目\n四つ目').suggestions,['同じ','もう一つ','三つ目']);
 });
 test('suggestions: the marker never reaches the screen, even when split across chunks; text without marker streams in full',()=>{
@@ -290,4 +290,10 @@ test('context choice: lecture notes always come first; the rest is chosen by the
  assert.deepEqual(chooseContext(transcript.slice(0,2),new Map([['t','x']]),'雑談').map(c=>c.chunkId),['000000','000001'],'録音ノートが無いときは、従来どおり');
  const huge=[{sourceId:'n',chunkId:'000000',text:'あ'.repeat(5000)},{sourceId:'n',chunkId:'000001',text:'い'.repeat(5000)}];
  assert.equal(chooseContext(huge,titles,'x').length,1,'録音ノートの枠(6000字)を超えて、他の資料を押し出さない');
+});
+
+test('language: replies follow the language of the question; the prompt says so and keeps source text unaltered',()=>{
+ const sys=buildMessages({mode:'reply',turns:[{role:'user',text:'a'}],sourceIds:[],images:[]},[])[0].content;
+ for(const rule of ['返信の言語','英語で書かれた質問・依頼には、本文もすべて英語で答える','日本語で質問されたときは','勝手に言い換えて']) assert(sys.includes(rule),rule);
+ assert.deepEqual(splitSuggestions('Done.\n[[次]]\nShow the steps only\nSolve problem 2\nGive me a similar exercise').suggestions,['Show the steps only','Solve problem 2','Give me a similar exercise']);
 });

@@ -69,3 +69,16 @@ test('generateText: returns text + measured usage; truncated, empty, wrong-model
  await assert.rejects(generateText('','S','U',ok(gem('x'))),code('CHAT_NOT_CONFIGURED'));
  await assert.rejects(generateText('k','S','U',async()=>({ok:false,status:429,json:async()=>({}),clone(){return this}})),e=>e.code==='CHAT_RATE_LIMIT'&&e.retryable===true);
 });
+
+test('segment language: auto/ja/en are accepted (old clients default to ja); anything else is refused',()=>{
+ assert.equal(validateSegment(seg()).language,'ja');
+ for(const l of ['auto','ja','en']) assert.equal(validateSegment(seg({language:l})).language,l);
+ for(const bad of ['fr','','JA',null,5,'auto ']) assert.throws(()=>validateSegment(seg({language:bad})),code('INVALID_RECORDING'),String(bad));
+});
+test('transcribeSegment sends the language only when it is fixed; auto lets Whisper detect it (English lectures)',async()=>{
+ const langs=[];
+ const capture=async(u,init)=>{langs.push(init.body.get('language'));return groqResponse([{start:0,end:2,text:' Partial derivatives.',no_speech_prob:0.01,avg_logprob:-0.2,compression_ratio:1.2}])()};
+ for(const l of ['ja','en','auto']) await transcribeSegment(Buffer.from('x'),'k',capture,l);
+ assert.deepEqual(langs,['ja','en',null],'auto は language を送らない');
+ langs.length=0;await transcribeSegment(Buffer.from('x'),'k',capture);assert.deepEqual(langs,['ja'],'既定は日本語(これまでどおり)');
+});

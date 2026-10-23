@@ -26,9 +26,8 @@ final class AIReplyBubbleView: UIView {
     // 最初の文字が出るまでの「骨組み」(灰色の線が脈打つ)。待っている間も、何かが進んでいる感じを出す
     private let skeleton = UIStackView()
     // 追質問のボタン(返信の下に、横に並べる)
-    /// 次の候補の置き場。候補は3つだけなので、横スクロールではなく、縦に並べて、画面の幅に収める(端が見切れない)。
-    private let suggestionScroll = UIView()
-    private let suggestionStack = UIStackView()
+    /// 次の候補の置き場。横に並べて、入りきらないものは、次の行へ折り返す(横スクロールではないので、端が見切れない)。
+    private let suggestionScroll = AISuggestionFlowView()
     private var plainText = ""
     private var detailVisible = false
     // 打っているような表示(Groqは全文を1秒ほどで返すため、表示側でペースを作る)
@@ -129,17 +128,6 @@ final class AIReplyBubbleView: UIView {
         }
         suggestionScroll.isHidden = true
         suggestionScroll.translatesAutoresizingMaskIntoConstraints = false
-        suggestionStack.axis = .vertical
-        suggestionStack.alignment = .leading
-        suggestionStack.spacing = 8
-        suggestionStack.translatesAutoresizingMaskIntoConstraints = false
-        suggestionScroll.addSubview(suggestionStack)
-        NSLayoutConstraint.activate([
-            suggestionStack.topAnchor.constraint(equalTo: suggestionScroll.topAnchor),
-            suggestionStack.bottomAnchor.constraint(equalTo: suggestionScroll.bottomAnchor),
-            suggestionStack.leadingAnchor.constraint(equalTo: suggestionScroll.leadingAnchor),
-            suggestionStack.trailingAnchor.constraint(equalTo: suggestionScroll.trailingAnchor)
-        ])
         let column = UIStackView(arrangedSubviews: [header, stepsLabel, skeleton, bodyView, retryButton, actionRow, suggestionScroll, metaButton, detailLabel])
         column.axis = .vertical
         column.spacing = 6
@@ -168,7 +156,7 @@ final class AIReplyBubbleView: UIView {
         bodyView.isHidden = true; bodyView.attributedText = nil
         retryButton.isHidden = true; actionRow.isHidden = true; metaButton.isHidden = true; detailLabel.isHidden = true
         suggestionScroll.isHidden = true
-        suggestionStack.arrangedSubviews.forEach { suggestionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
+        suggestionScroll.setChips([])
         setSkeleton(false)
         detailVisible = false
     }
@@ -176,14 +164,9 @@ final class AIReplyBubbleView: UIView {
     // MARK: 追質問のボタン
     /// 返信の下に、ワンタップで送れる追質問を並べる。空なら隠す。
     func setSuggestions(_ titles: [String]) {
-        suggestionStack.arrangedSubviews.forEach { suggestionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
+        suggestionScroll.setChips([])
         guard !titles.isEmpty else { suggestionScroll.isHidden = true; return }
-        for title in titles {
-            let chip = AISuggestionChip(title: title) { [weak self] in self?.onSuggestion?(title) }
-            suggestionStack.addArrangedSubview(chip)
-            // 長い候補は、幅いっぱいで折り返す(端で切らない)。
-            chip.widthAnchor.constraint(lessThanOrEqualTo: suggestionStack.widthAnchor).isActive = true
-        }
+        suggestionScroll.setChips(titles.map { title in AISuggestionChip(title: title) { [weak self] in self?.onSuggestion?(title) } })
         suggestionScroll.isHidden = actionRow.isHidden   // 文章を打ち終えて、下の行が出るまでは隠しておく
     }
 
@@ -350,7 +333,7 @@ final class AIReplyBubbleView: UIView {
 
     private func showFooter(metrics: AIReplyMetrics?, usdJPY: Double?) {
         actionRow.isHidden = false
-        suggestionScroll.isHidden = suggestionStack.arrangedSubviews.isEmpty
+        suggestionScroll.isHidden = suggestionScroll.chips.isEmpty
         var items: [UIMenuElement] = [
             UIAction(title: "もう一度生成", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in self?.onRetry?() }
         ]
@@ -549,4 +532,52 @@ final class AISuggestionChip: UIControl {
 
     override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.6 : 1 } }
     @objc private func tapped() { onTap() }
+
+    /// 幅 maxWidth の中に置くときの、チップの大きさ。1行に収まれば、文字の幅ぶん。収まらなければ、幅いっぱいで折り返した高さ。
+    static func fittingSize(title: String, maxWidth: CGFloat) -> CGSize {
+        let font = UIFont.systemFont(ofSize: 13), padding: CGFloat = 28
+        let single = ceil((title as NSString).size(withAttributes: [.font: font]).width)
+        let width = max(padding + 1, min(single + padding, maxWidth))
+        let rect = (title as NSString).boundingRect(with: CGSize(width: width - padding, height: CGFloat.greatestFiniteMagnitude),
+                                                    options: [.usesLineFragmentOrigin], attributes: [.font: font], context: nil)
+        return CGSize(width: width, height: ceil(rect.height) + 16)
+    }
+}
+
+/// チップを、左から横に並べる。入りきらなくなったら、次の行へ(折り返し)。
+final class AISuggestionFlowView: UIView {
+    private(set) var chips: [AISuggestionChip] = []
+    private let spacing: CGFloat = 8
+    private var knownWidth: CGFloat = 0
+
+    func setChips(_ new: [AISuggestionChip]) {
+        chips.forEach { $0.removeFromSuperview() }
+        chips = new
+        chips.forEach { addSubview($0) }
+        setNeedsLayout(); invalidateIntrinsicContentSize()
+    }
+
+    private func arrange(width: CGFloat) -> (frames: [CGRect], height: CGFloat) {
+        var frames: [CGRect] = [], x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        for chip in chips {
+            let size = AISuggestionChip.fittingSize(title: chip.accessibilityLabel ?? "", maxWidth: width)
+            if x > 0, x + size.width > width + 0.5 { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
+            x += size.width + spacing; rowHeight = max(rowHeight, size.height)
+        }
+        return (frames, chips.isEmpty ? 0 : y + rowHeight)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let (frames, height) = arrange(width: bounds.width)
+        for (chip, frame) in zip(chips, frames) { chip.frame = frame }
+        // 幅が決まったあと(や、変わったとき)に、高さを伝え直す。
+        if abs(bounds.width - knownWidth) > 0.5 { knownWidth = bounds.width; invalidateIntrinsicContentSize() }
+        else if abs(height - intrinsicContentSize.height) > 0.5 { invalidateIntrinsicContentSize() }
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: arrange(width: knownWidth > 0 ? knownWidth : 300).height)
+    }
 }

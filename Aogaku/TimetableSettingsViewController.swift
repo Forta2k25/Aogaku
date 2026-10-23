@@ -27,9 +27,16 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
     private var bannerStyle: BannerStyle { AdsSwitchboard.shared.style }
 
     
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // シラバスの画面(大きな見出し)から戻ったときに、設定の見出しが大きくならないようにする。
+        navigationController?.navigationBar.prefersLargeTitles = false
+        navigationItem.largeTitleDisplayMode = .never
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "表示設定"
+        title = "時間割の設定"
         view.backgroundColor = .systemGroupedBackground
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             title: "閉じる", style: .plain, target: self, action: #selector(close)
@@ -50,6 +57,11 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
 
         // 簡単レイアウト
         var rows: [UIView] = [
+            Self.sectionTitle("授業を探す・確認する"),
+            Self.toolRow(symbol: "magnifyingglass", title: "シラバスを探す", subtitle: "授業名・先生・曜日から、授業を探す", target: self, action: #selector(openSyllabus)),
+            Self.toolRow(symbol: "graduationcap", title: "単位", subtitle: "取った単位と、卒業までの残り", target: self, action: #selector(openCredits)),
+            Self.toolRow(symbol: "calendar", title: "学事暦", subtitle: "授業日・休講・試験の日程", target: self, action: #selector(openCalendar)),
+            Self.sectionTitle("表示"),
             labeled("時限数", periodsSeg),
             labeled("曜日", daysSeg),
         ]
@@ -100,6 +112,45 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
             selector: #selector(onAdsConfigUpdated),
             name: AdsSwitchboard.didUpdate, object: nil)
     }
+    // MARK: 授業を探す・確認する(以前は、時間割の上のボタンと、シラバスのタブにあったもの)
+    static func sectionTitle(_ text: String) -> UIView {
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .secondaryLabel
+        return label
+    }
+
+    static func toolRow(symbol: String, title: String, subtitle: String, target: Any?, action: Selector) -> UIView {
+        var configuration = UIButton.Configuration.plain()
+        configuration.image = UIImage(systemName: symbol)
+        configuration.imagePadding = 14
+        configuration.title = title
+        configuration.subtitle = subtitle
+        configuration.baseForegroundColor = .label
+        configuration.titleAlignment = .leading
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
+        configuration.background.backgroundColor = .secondarySystemGroupedBackground
+        configuration.background.cornerRadius = 12
+        let button = UIButton(configuration: configuration)
+        button.contentHorizontalAlignment = .leading
+        button.accessibilityIdentifier = "timetable-settings-" + symbol
+        button.addTarget(target, action: action, for: .touchUpInside)
+        return button
+    }
+
+    private func show(_ viewController: UIViewController, fullScreen: Bool = false) {
+        if !fullScreen, let navigationController { navigationController.pushViewController(viewController, animated: true); return }
+        let nav = UINavigationController(rootViewController: viewController)
+        nav.modalPresentationStyle = .fullScreen
+        present(nav, animated: true)
+    }
+    @objc private func openSyllabus() {
+        show(UIStoryboard(name: "Main", bundle: nil).instantiateViewController(withIdentifier: "syllabus"))
+    }
+    @objc private func openCredits() { show(CreditsFullViewController(currentTerm: TermStore.loadSelected()), fullScreen: true) }
+    @objc private func openCalendar() { show(ClassDayCalendarViewController()) }
+
     @objc private func onAdsConfigUpdated() {
         // スタイル or ユニットIDが変わったら作り直し
         removeBannerIfNeeded()

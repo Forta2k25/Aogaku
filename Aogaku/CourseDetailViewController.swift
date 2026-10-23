@@ -217,6 +217,38 @@ final class CourseDetailViewController: UIViewController {
 
     deinit { if let handle = aiAuthHandle { Auth.auth().removeStateDidChangeListener(handle) } }
 
+    /// AIタブからの質問。開いたら、AIハックに切り替えて、指定の回のチャットで、質問を送る(準備ができていなければ、できてから)。
+    private struct PendingAIChat { let dayID: Int; let text: String; let photos: [CapturedPhoto] }
+    private var pendingAIChat: PendingAIChat?
+
+    func startAIChat(dayID: Int, text: String, photos: [CapturedPhoto]) {
+        pendingAIChat = PendingAIChat(dayID: dayID, text: text, photos: photos)
+        runPendingAIChatIfPossible()
+    }
+
+    private func runPendingAIChatIfPossible() {
+        guard let pending = pendingAIChat, isViewLoaded, showsLectureNotes, aiSessionUID != nil,
+              (try? aiContext(day: pending.dayID)) != nil else { return }
+        pendingAIChat = nil
+        // ポータル ⇄ AIハック: AIハックにする。
+        let aiIndex = max(0, syllabusViewToggle.numberOfSegments - 1)
+        syllabusDisplayMode = aiIndex
+        syllabusViewToggle.selectedSegmentIndex = aiIndex
+        applySyllabusDisplayMode()
+        loadNoteSessionCards()
+        let usable = noteSchedule.filter { !$0.isCancelled }
+        let day = usable.contains { $0.dayID == pending.dayID } ? pending.dayID : (usable.last?.dayID ?? pending.dayID)
+        openNoteChat(session: day)
+        if !pending.photos.isEmpty, let context = try? aiContext(day: day) {
+            try? stageAIPhotosForPrefetch(pending.photos, context: context)
+            restoreAIInput()
+        }
+        noteChatTextField.text = pending.text
+        noteChatTextChanged()
+        updateNoteChatSendButton(animated: false)
+        if !pending.text.isEmpty || !pending.photos.isEmpty { noteChatSendTapped() }
+    }
+
     private func prepareAIInputSession() {
         guard aiSessionTask == nil else { return }
         aiSessionTask = Task { [weak self] in
@@ -224,7 +256,7 @@ final class CourseDetailViewController: UIViewController {
                 let uid = try await AIInputSession.shared.ensure()
                 try Task.checkCancellation()
                 guard let self, AppBackend.currentUID == uid else { return }
-                self.aiSessionUID = uid; self.restoreAIInput(); self.resumePendingAIReply()
+                self.aiSessionUID = uid; self.restoreAIInput(); self.resumePendingAIReply(); self.runPendingAIChatIfPossible()
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 if self.noteShowsChatDetail { self.showNoteAlert(title: "AIに接続できませんでした", message: "通信を確認し、授業を開き直してください。") }

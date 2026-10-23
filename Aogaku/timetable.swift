@@ -418,8 +418,6 @@ final class timetable: UIViewController,
     private let centerBox = UIView()                  // ← 追加：学期ボタンを中央配置する箱
     private let titleLabel = UILabel()                // （使わない：追加しない）
     private let rightStack = UIStackView()
-    private let rightA = UIButton(type: .system)      // 単
-    private let tasksButton = UIButton(type: .system) // ← 追加：「課」
     private let rightB = UIButton(type: .system)      // 共有/保存
     private let rightC = UIButton(type: .system)      // 設定
     private var headerTopConstraint: NSLayoutConstraint!
@@ -1634,17 +1632,6 @@ final class timetable: UIViewController,
 
     // MARK: - Header
     
-    @objc private func tapTasks() {
-        let vc = ClassDayCalendarViewController()
-        if let nav = navigationController {
-            nav.pushViewController(vc, animated: true)
-        } else {
-            let nav = UINavigationController(rootViewController: vc)
-            nav.modalPresentationStyle = .fullScreen
-            present(nav, animated: true)
-        }
-    }
-    
     private func buildHeader() {
         // Header container
         headerBar.axis = .horizontal
@@ -1685,12 +1672,7 @@ final class timetable: UIViewController,
             b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
 
-        // --- 単 / 暦 ---
-        configureFlat(rightA, title: "単")
-        configureFlat(tasksButton, title: "暦")
-        rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
-        tasksButton.addTarget(self, action: #selector(tapTasks), for: .touchUpInside)
-
+        // 単位・学事暦・シラバス検索は、設定(歯車)の中に仕舞った。
         // --- 共有 / 設定 --- アイコン用（同じ contentInsets でテキスト系と均一に）
         func configureIcon(_ b: UIButton, systemName: String) {
             var cfg = UIButton.Configuration.plain()
@@ -1708,19 +1690,19 @@ final class timetable: UIViewController,
         rightB.addTarget(self, action: #selector(tapRightB), for: .touchUpInside)
         rightC.addTarget(self, action: #selector(tapRightC), for: .touchUpInside)
 
-        // --- 並び順：学期 → 単 → 暦 → 共有 → 設定（均一8pt間隔）---
+        // --- 並び順：学期 → (余白) → 共有 → 設定 ---
         headerBar.spacing = 8
         headerBar.addArrangedSubview(leftButton)
-        headerBar.setCustomSpacing(16, after: leftButton)
-        headerBar.addArrangedSubview(rightA)
-        headerBar.addArrangedSubview(tasksButton)
+        let headerSpacer = UIView()
+        headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        headerBar.addArrangedSubview(headerSpacer)
         headerBar.addArrangedSubview(rightB)
         headerBar.addArrangedSubview(rightC)
 
 
 
         // 左寄せを優先
-        [leftButton, rightA, tasksButton, rightB, rightC].forEach {
+        [leftButton, rightB, rightC].forEach {
             $0.setContentHuggingPriority(.required, for: .horizontal)
             $0.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
@@ -2119,6 +2101,28 @@ final class timetable: UIViewController,
     }
 
     // MARK: - Detail / List
+    // MARK: - AIタブとの連携
+    /// 今の学期の時間割(授業とコマ)。AIタブが、質問を、どの授業に振るかを決めるために使う。
+    func quickAskEntries() -> (entries: [QuickAskCourse], term: TermKey) {
+        _ = view   // まだ開かれていないタブでも、時間割を読み込ませる
+        let cols = dayLabels.count
+        var entries: [QuickAskCourse] = []
+        for (index, course) in assigned.enumerated() {
+            guard let course, cols > 0 else { continue }
+            entries.append(QuickAskCourse(course: course, location: SlotLocation(day: index % cols, period: index / cols + 1)))
+        }
+        return (entries, currentTerm)
+    }
+
+    /// AIタブから、授業の詳細画面(AIハックのチャット)を、指定の回で開く。text や photos があれば、そのまま送る。
+    func presentCourseChat(_ entry: QuickAskCourse, dayID: Int, text: String, photos: [CapturedPhoto], from presenter: UIViewController) {
+        let vc = CourseDetailViewController(course: entry.course, location: entry.location, term: currentTerm, showsReview: true, showsLectureNotes: true)
+        vc.delegate = self
+        vc.modalPresentationStyle = .pageSheet
+        if let sheet = vc.sheetPresentationController { sheet.detents = [.large()]; sheet.selectedDetentIdentifier = .large; sheet.prefersGrabberVisible = true }
+        presenter.present(vc, animated: true) { vc.startAIChat(dayID: dayID, text: text, photos: photos) }
+    }
+
     private func presentCourseDetail(_ course: Course, at loc: SlotLocation) {
         // 既存のシート（前の授業詳細など）が残っていたら先に閉じる
         if let existing = presentedViewController {
@@ -2527,13 +2531,6 @@ final class timetable: UIViewController,
     }
 
 
-    @objc private func tapRightA() {
-        let term = TermStore.loadSelected()
-        let vc = CreditsFullViewController(currentTerm: term)
-        let nav = UINavigationController(rootViewController: vc)
-        nav.modalPresentationStyle = .fullScreen
-        present(nav, animated: true)
-    }
     @objc private func tapRightB() {
         let action = UIAlertController(title: "時間割を保存 / 共有", message: nil, preferredStyle: .actionSheet)
         action.addAction(UIAlertAction(title: "写真に保存", style: .default) { [weak self] _ in

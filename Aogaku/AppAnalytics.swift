@@ -5,6 +5,7 @@ enum AppAnalytics {
     enum Tab: String {
         case timetable
         case syllabus
+        case ai
         case moodle
         case circles
         case career

@@ -1,3 +1,4 @@
+import {validateRoute, routeCourse} from "./routing";
 import {validateSegment, transcribeSegment, validateBlock, validateNote, summarizeBlock, makeNote, RECORDING} from "./recording";
 import {LatencyMeter, devVisualOptions} from "./latency";
 import {previewAllowed, previewPublisher, previewResponse} from "./progressive";
@@ -472,14 +473,14 @@ export const aiRetrieveContext = callable(async (uid, data) => {
 
 // ライブ録音: 1分ごとの文字起こし・10分ごとの要約・ノート作成。その場で結果を返し、資料(source)としては保存しない。
 // 回数・時間の上限は、会話とは別に数える(録音の文字起こしが、会話の1日の回数を使い切らないように)。
-async function reserveRecording(uid: string, kind: "segment" | "summary", seconds = 0, dedupeId?: string) {
+async function reserveRecording(uid: string, kind: "segment" | "summary" | "route", seconds = 0, dedupeId?: string) {
   await assertAccountActive(uid);
   const day = new Date(now() + 9 * 3600000).toISOString().slice(0, 10);
   const dayRef = db().doc(`${collections.usage}/${uid}/${collections.periods}/day-${day}`);
   const weekRef = db().doc(`${collections.usage}/${uid}/${collections.periods}/week-${weekKey(new Date())}`);
   const markRef = dedupeId ? db().doc(`${collections.usage}/${uid}/${collections.periods}/rec-${dedupeId}`) : null;
-  const field = kind === "segment" ? "recordingSegments" : "recordingSummaries";
-  const cap = kind === "segment" ? RECORDING.segmentsPerDay : RECORDING.summariesPerDay;
+  const field = kind === "segment" ? "recordingSegments" : kind === "route" ? "routeCalls" : "recordingSummaries";
+  const cap = kind === "segment" ? RECORDING.segmentsPerDay : kind === "route" ? 200 : RECORDING.summariesPerDay;
   await db().runTransaction(async tx => {
     const [dayDoc, weekDoc, mark, owner] = await Promise.all([tx.get(dayRef), tx.get(weekRef), markRef ? tx.get(markRef) : Promise.resolve(null), tx.get(owners().doc(uid))]);
     if (["deleting", "deleted"].includes(owner.get("state"))) throw new InputError("ACCOUNT_DELETED");
@@ -504,6 +505,13 @@ async function recordingTask(uid: string, data: any) {
     await reserveRecording(uid, "summary");
     const result = await summarizeBlock(await geminiSecret(), input);
     return {schemaVersion: 1, task, startMinute: input.startMinute, endMinute: input.endMinute, ...result};
+  }
+  if (task === "routeCourse") {
+    // 質問(と写真)が、どの授業のものかの予想。授業時間の付近は、アプリが時間割で決めるので、時間外のときだけ呼ばれる。
+    const input = validateRoute(data);
+    await reserveRecording(uid, "route");
+    const result = await routeCourse(await geminiSecret(), input);
+    return {schemaVersion: 1, task, ...result};
   }
   if (task === "recordingNote") {
     const input = validateNote(data);

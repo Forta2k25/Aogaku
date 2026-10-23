@@ -39,6 +39,8 @@ final class AIReplyBubbleView: UIView {
     private var pendingFinish: (metrics: AIReplyMetrics?, usdJPY: Double?)?
     /// 失敗後の「もう一度」と、「…」メニューの「もう一度生成」の両方で呼ばれる。
     var onRetry: (() -> Void)?
+    /// このやり取り(質問とこの返信)を消す。「…」のメニューに出す。
+    var onDelete: (() -> Void)?
     /// 追質問のボタンが押されたとき、そのボタンの文言で呼ばれる(そのまま質問として送る)。
     var onSuggestion: ((String) -> Void)?
     /// 文章が伸びたときに呼ばれる(一番下にいるときに、画面を追従させるため)。
@@ -349,9 +351,15 @@ final class AIReplyBubbleView: UIView {
     private func showFooter(metrics: AIReplyMetrics?, usdJPY: Double?) {
         actionRow.isHidden = false
         suggestionScroll.isHidden = suggestionStack.arrangedSubviews.isEmpty
-        moreButton.menu = UIMenu(children: [
+        var items: [UIMenuElement] = [
             UIAction(title: "もう一度生成", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in self?.onRetry?() }
-        ])
+        ]
+        if onDelete != nil {
+            items.append(UIMenu(options: .displayInline, children: [
+                UIAction(title: "このやり取りを削除", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.onDelete?() }
+            ]))
+        }
+        moreButton.menu = UIMenu(children: items)
         guard let metrics else { return }
         let line = Self.metaLine(metrics, usdJPY: usdJPY)
         metaButton.isHidden = line.isEmpty

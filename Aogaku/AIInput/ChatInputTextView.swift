@@ -87,3 +87,16 @@ final class ChatInputTextView: UITextView {
         if isScrollEnabled != scrolls { isScrollEnabled = scrolls }
     }
 }
+
+
+/// チャット画面の、下の余白の計算。メッセージ欄の一番下が、入力バーの下に隠れないようにする。
+enum NoteChatLayout {
+    /// メッセージ欄(広告の上端まで)の下に取る余白。入力バーの位置は、画面の下から、キーボード(または、ホームバーの安全領域)と、広告のうち高いほうの上、8pt。
+    /// そのぶんと、入力バーの高さ、さらに、最新のメッセージとの間の12ptを、余白にする。
+    static func bottomInset(adHeight: CGFloat, keyboardOverlap: CGFloat, safeAreaBottom: CGFloat, barHeight: CGFloat, barVisible: Bool) -> CGFloat {
+        guard barVisible else { return max(adHeight, keyboardOverlap) }
+        let barBottomFromScreenBottom = max(adHeight, max(keyboardOverlap, safeAreaBottom)) + 8
+        let gapBetweenAdAndBar = barBottomFromScreenBottom - adHeight   // メッセージ欄の下端(広告の上端)から、入力バーの下端まで
+        return gapBetweenAdAndBar + barHeight + 12
+    }
+}

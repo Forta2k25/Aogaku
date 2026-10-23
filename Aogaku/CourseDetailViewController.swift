@@ -289,11 +289,12 @@ final class CourseDetailViewController: UIViewController {
         let bubble = AIReplyBubbleView()
         bubble.onRetry = { [weak self] in self?.retryAIReply(afterMessageID: id) }
         bubble.onSuggestion = { [weak self] text in self?.sendAISuggestion(text) }
+        bubble.onDelete = { [weak self] in self?.deleteNoteChatMessages(ids: [id]) }
         return bubble
     }
     /// メッセージ列のうち、AIの返信を除いた「ユーザーのメッセージ」の行。
     private func noteChatMessageRows() -> [UIView] {
-        noteChatMessageStack.arrangedSubviews.filter { !($0 is AIReplyBubbleView) }
+        noteChatMessageStack.arrangedSubviews.filter { !($0 is AIReplyBubbleView) && !($0 is LiveTranscriptCardView) }
     }
     /// 返信の吹き出しを、対応するメッセージの直後に置く(すでに置いてあれば何もしない)。
     private func placeAIReplyBubble(_ bubble: AIReplyBubbleView, afterMessage id: String) {
@@ -3096,6 +3097,51 @@ final class CourseDetailViewController: UIViewController {
     }
 
     // MARK: メッセージの長押し(コピー/編集)
+    /// メッセージ1つ(とそのAIの返信)を消す。そのメッセージだけが使っていた写真・録音・メモは、サーバー側も消える。
+    private func deleteNoteChatMessage(at index: Int) {
+        guard let id = (aiMessageIDs[noteChatCurrentSession] ?? []).indices.contains(index) ? aiMessageIDs[noteChatCurrentSession]?[index] : nil else { return }
+        deleteNoteChatMessages(ids: [id])
+    }
+
+    private func deleteNoteChatMessages(ids: Set<String>) {
+        guard let uid = aiSessionUID, let store = try? SourceIngestionService.shared.store(uid: uid) else { return }
+        for id in ids { aiReplyTasks[id]?.cancel(); aiReplyTasks[id] = nil; aiReplyBubbles[id] = nil }
+        do { try store.deleteMessages(ids: ids) }
+        catch { showNoteAlert(title: "削除できませんでした", message: error.localizedDescription); return }
+        if noteChatEditingIndex != nil { setNoteChatEditing(nil) }
+        restoreAIInput()
+        resetNoteChatIfEmpty()
+        SourceIngestionService.shared.resume(uid: uid)   // サーバーに送ってあった資料を、サーバー側も消す
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    private func confirmDeleteAllNoteChat() {
+        let alert = UIAlertController(title: "この回のチャットをすべて削除しますか?", message: "この回で送った文章・写真・録音・メモと、AIの返信を消します。送った資料は、サーバーからも消えて、AIが使えなくなります。元に戻せません。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "削除", style: .destructive) { [weak self] _ in
+            guard let self, let uid = self.aiSessionUID, let context = try? self.aiContext(day: self.noteChatCurrentSession),
+                  let store = try? SourceIngestionService.shared.store(uid: uid) else { return }
+            let ids = Set(store.ledger.messages.filter { $0.context.courseKey == context.courseKey && $0.context.dayID == context.dayID }.map(\.id))
+            self.deleteNoteChatMessages(ids: ids)
+        })
+        alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    /// メッセージが1つも無くなったら、最初の画面(おすすめの操作)に戻す。
+    private func resetNoteChatIfEmpty() {
+        guard (noteChatMessagesBySession[noteChatCurrentSession] ?? []).isEmpty else { return }
+        noteChatMessageStack.isHidden = liveCard != nil ? false : true
+        noteChatActionRow.isHidden = false
+        noteChatActionRow.alpha = 1
+        noteChatActionRow.arrangedSubviews.forEach { $0.transform = .identity; $0.alpha = 1 }
+        noteChatGuideContainer.isHidden = false
+        noteChatGuideContainer.alpha = 1
+        noteChatCompactActions.arrangedSubviews.forEach { $0.transform = .identity; $0.alpha = 0 }
+        noteChatCompactActions.isHidden = true
+        noteChatActionsCompact = false
+        view.layoutIfNeeded()
+    }
+
     private func noteChatMessageIndex(for view: UIView) -> Int? {
         var current: UIView? = view
         while let candidate = current, candidate.superview !== noteChatMessageStack {
@@ -3667,11 +3713,20 @@ final class CourseDetailViewController: UIViewController {
     }
 
     private func makeNoteChatBubble(_ message: NoteChatMessage) -> UIView {
+        // どの種類のメッセージも、長押しで削除できる(文章の吹き出しは、コピー・編集もできる。メニューは、そちらで付ける)。
         if case .photos(let photos) = message {
-            return makeNotePhotoRow(photos)
+            let row = makeNotePhotoRow(photos)
+            row.addInteraction(UIContextMenuInteraction(delegate: self))
+            return row
         }
         if case .recording(let url, let duration) = message {
-            return makeNoteRecordingBubble(url: url, duration: duration)
+            let row = makeNoteRecordingBubble(url: url, duration: duration)
+            row.addInteraction(UIContextMenuInteraction(delegate: self))
+            return row
+        }
+        if case .document = message {
+            let row = makeNoteTextBubble(message.previewText)   // 文章の吹き出しには、すでにメニューが付いている
+            return row
         }
         return makeNoteTextBubble(message.previewText)
     }
@@ -4679,6 +4734,10 @@ final class CourseDetailViewController: UIViewController {
         noteChatMorphing = false
         showNoteChatDetail(true)
         resumePendingAIReply()
+        // 普通のチャットアプリのように、開いたときは、一番新しいメッセージ(一番下)から始める。
+        // 画面の切り替えと、文章の高さが決まるのを待って、2回合わせる。
+        DispatchQueue.main.async { [weak self] in self?.scrollNoteChatToBottom(animated: false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.scrollNoteChatToBottom(animated: false) }
     }
 
     /// チャット表示中は、緑の帯に「第N回授業 · 9/29 火」を小さく出す(どの回のチャットか分かるように)。
@@ -5617,7 +5676,8 @@ final class CourseDetailViewController: UIViewController {
         var inset = scroll.contentInset
         let barVisible = noteChatInputBar.map { !$0.isHidden } ?? false
         let barHeight = max(Self.noteInputBarMinHeight, noteChatInputBar?.bounds.height ?? 0)
-        inset.bottom = max(height, noteKeyboardOverlap) + (barVisible ? barHeight + 8 + 12 : 0)
+        inset.bottom = NoteChatLayout.bottomInset(adHeight: height, keyboardOverlap: noteKeyboardOverlap, safeAreaBottom: view.safeAreaInsets.bottom,
+                                                  barHeight: barHeight, barVisible: barVisible)
         scroll.contentInset = inset
         scroll.verticalScrollIndicatorInsets.bottom = inset.bottom
     }
@@ -6340,16 +6400,27 @@ extension CourseDetailViewController: UIContextMenuInteractionDelegate {
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                 configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
         guard let bubble = interaction.view, let index = noteChatMessageIndex(for: bubble),
-              let messages = noteChatMessagesBySession[noteChatCurrentSession], messages.indices.contains(index),
-              case .text(let text) = messages[index] else { return nil }
+              let messages = noteChatMessagesBySession[noteChatCurrentSession], messages.indices.contains(index) else { return nil }
+        let message = messages[index]
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-            let copy = UIAction(title: "コピー", image: UIImage(systemName: "doc.on.doc")) { _ in
-                UIPasteboard.general.string = text
+            var groups: [UIMenuElement] = []
+            if case .text(let text) = message {
+                let copy = UIAction(title: "コピー", image: UIImage(systemName: "doc.on.doc")) { _ in
+                    UIPasteboard.general.string = text
+                }
+                let edit = UIAction(title: "編集", image: UIImage(systemName: "pencil")) { _ in
+                    self?.beginEditingNoteMessage(at: index)
+                }
+                groups.append(UIMenu(options: .displayInline, children: [copy, edit]))
             }
-            let edit = UIAction(title: "編集", image: UIImage(systemName: "pencil")) { _ in
-                self?.beginEditingNoteMessage(at: index)
+            let deleteOne = UIAction(title: "このメッセージを削除", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                self?.deleteNoteChatMessage(at: index)
             }
-            return UIMenu(children: [copy, edit])
+            let deleteAll = UIAction(title: "この回のチャットをすべて削除", image: UIImage(systemName: "trash.fill"), attributes: .destructive) { _ in
+                self?.confirmDeleteAllNoteChat()
+            }
+            groups.append(UIMenu(options: .displayInline, children: [deleteOne, deleteAll]))
+            return UIMenu(children: groups)
         }
     }
 

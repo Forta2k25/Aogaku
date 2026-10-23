@@ -141,6 +141,31 @@ final class LocalSourceStore {
         replies.append(reply)
         value.replies = replies; try commit(value)
     }
+    /// メッセージと、そのAI返信を消す。そのメッセージだけが使っていた資料は、サーバーに送ってあるものは削除予約にし(送信の処理が、サーバー側も消す)、
+    /// 送っていないものは、その場で消す。ほかのメッセージも使っている資料は、残す。
+    func deleteMessages(ids: Set<String>) throws {
+        guard !ids.isEmpty else { return }
+        var value = ledger
+        let removed = value.messages.filter { ids.contains($0.id) }
+        guard !removed.isEmpty || (value.replies ?? []).contains(where: { ids.contains($0.afterMessageID) }) else { return }
+        let candidates = Set(removed.flatMap(\.sourceIDs))
+        value.messages.removeAll { ids.contains($0.id) }
+        value.replies = value.replies?.filter { !ids.contains($0.afterMessageID) }
+        let stillUsed = Set(value.messages.flatMap(\.sourceIDs))
+        var files: [URL] = []
+        for sourceID in candidates where !stillUsed.contains(sourceID) {
+            guard let i = value.sources.firstIndex(where: { $0.id == sourceID }) else { continue }
+            let source = value.sources[i]
+            if source.remote != nil || ["uploading", "uploaded", "queued"].contains(source.localState) { value.sources[i].wantsDeletion = true }
+            else { value.sources.remove(at: i); if let url = fileURL(source) { files.append(url) } }
+        }
+        try commit(value)
+        for url in files { try? FileManager.default.removeItem(at: url) }
+    }
+    /// この授業回のチャットを、すべて消す(編集で隠れていたものも含む)。
+    func deleteAllMessages(context: AIInputContext) throws {
+        try deleteMessages(ids: Set(ledger.messages.filter { sameSession($0.context, context) }.map(\.id)))
+    }
     /// 「もう一度生成」のために、保存済みの返信を消す。
     func removeReply(afterMessageID id: String) throws {
         var value = ledger

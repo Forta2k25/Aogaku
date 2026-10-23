@@ -84,6 +84,8 @@ final class CourseDetailViewController: UIViewController {
     private let noteBackdrop = NoteBackdropView()
     private var noteSchedule: [NoteSessionCard] = []
     private var noteRecordingSession = 0
+    /// AIへの質問の文字数の上限(サーバーの上限と同じ)。
+    private static let maxQuestionCharacters = 2000
     /// 録音中・仕上げ中の文字起こしのカード(チャットの一番下)。
     private var liveCard: LiveTranscriptCardView?
 
@@ -603,14 +605,10 @@ final class CourseDetailViewController: UIViewController {
                     if let source = selected.first, let url = store.fileURL(source) {
                         rendered = .recording(url: url, duration: Double(source.durationSeconds ?? 0))
                     } else { rendered = .document("削除した録音") }
-                case "recording":
-                    // ライブ録音: 再生できる録音ファイル(端末の中)。文字起こしとノートは、資料とAIの返信として別に保存してある。
-                    if let id = message.text, let url = LiveRecordingService.shared.playbackURL(uid: context.ownerUID, recordingID: id),
-                       let duration = LiveRecordingService.shared.loadSession(uid: context.ownerUID, id: id)?.durationSeconds {
-                        rendered = .recording(url: url, duration: duration)
-                    } else { rendered = .document("録音(再生できません)") }
                 case "pdf": rendered = .document("PDF · \(selected.first?.title ?? "削除した資料")")
-                case "note": rendered = .document("メモ · \(selected.first?.text ?? "削除したメモ")")
+                case "note":
+                    let memo = selected.first?.text ?? "削除したメモ"
+                    rendered = .document("メモ · " + (memo.count > 80 ? String(memo.prefix(80)) + "…(\(memo.count)文字)" : memo))
                 default: rendered = .text(message.text ?? "")
                 }
                 noteChatMessagesBySession[message.context.dayID, default: []].append(rendered)
@@ -633,6 +631,7 @@ final class CourseDetailViewController: UIViewController {
                 syncNoteChatActions()
                 reloadNoteChatAttachments(animated: false)
             }
+            deliverDictationIfReady()
         } catch { showNoteAlert(title: "保存した資料を読み込めませんでした", message: error.localizedDescription) }
     }
     @objc private func eraseDeletedAIAccount(_ notification: Notification) {
@@ -700,8 +699,15 @@ final class CourseDetailViewController: UIViewController {
         do {
             let context = try aiContext(day: noteChatCurrentSession)
             let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
-            let source = try store.stage(context: context, kind: .note, title: String(text.prefix(50)), mime: "text/plain", text: text)
-            try store.submit(context: context, snapshots: [AIChatSnapshot(id: UUID().uuidString, context: context, kind: "note", text: nil, sourceIDs: [source.id], createdAt: Date())])
+            // 1つの資料は2万字までなので、長い文章は、文の切れ目で分けて、順に保存する。
+            let parts = LiveTranscript.split(text)
+            var snapshots: [AIChatSnapshot] = []
+            for (index, part) in parts.enumerated() {
+                let title = parts.count > 1 ? "\(String(part.prefix(40)))…(\(index + 1)/\(parts.count))" : String(part.prefix(50))
+                let source = try store.stage(context: context, kind: .note, title: title, mime: "text/plain", text: part)
+                snapshots.append(AIChatSnapshot(id: UUID().uuidString, context: context, kind: "note", text: nil, sourceIDs: [source.id], createdAt: Date()))
+            }
+            try store.submit(context: context, snapshots: snapshots)
             noteChatTextField.text = ""; restoreAIInput(); updateNoteChatSendButton(animated: true)
             SourceIngestionService.shared.resume(uid: context.ownerUID)
         } catch { showNoteAlert(title: "メモを保存できませんでした", message: error.localizedDescription) }
@@ -3008,6 +3014,14 @@ final class CourseDetailViewController: UIViewController {
         let recordings = noteChatPendingRecordingsBySession[noteChatCurrentSession] ?? []
         guard !text.isEmpty || !pending.isEmpty || !recordings.isEmpty else { return }
         if noteChatEditingIndex != nil && text.isEmpty { return }
+        // 質問は2,000字まで。それより長い文章(長い録音の文字など)は、授業のメモとして保存して、AIが質問のときに使えるようにする。
+        if text.count > Self.maxQuestionCharacters, pending.isEmpty, recordings.isEmpty {
+            let alert = UIAlertController(title: "長い文章です", message: "質問は2,000字までです。この文章(\(text.count)文字)は、授業のメモとして保存します。AIに質問するとき、この内容を使います。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "メモとして保存", style: .default) { [weak self] _ in self?.saveAIMemo() })
+            alert.addAction(UIAlertAction(title: "キャンセル", style: .cancel))
+            present(alert, animated: true)
+            return
+        }
         do {
             let context = try aiContext(day: noteChatCurrentSession)
             let store = try SourceIngestionService.shared.store(uid: context.ownerUID)
@@ -3230,11 +3244,40 @@ final class CourseDetailViewController: UIViewController {
         scroll.setContentOffset(CGPoint(x: 0, y: target), animated: false)
     }
     @objc private func liveRecordingChanged(_ notification: Notification) {
+        deliverDictationIfReady()
+        guard noteShowsChatDetail else { return }
+        attachLiveCardIfNeeded()
+    }
+
+    /// 録音が文字になっていたら、入力欄に入れる(自動では送らない)。入力欄に書きかけがあれば、その後ろに足す。
+    private func deliverDictationIfReady() {
         guard noteShowsChatDetail, let context = try? aiContext(day: noteChatCurrentSession) else { return }
-        let active = LiveRecordingService.shared.activeSession(courseKey: context.courseKey, dayID: context.dayID)
-        if active != nil { attachLiveCardIfNeeded() }
-        else if liveCard != nil { restoreAIInput() }   // 仕上がった: 録音とノートが、チャットに出る
-        else if let id = notification.object as? String, LiveRecordingService.shared.session(id)?.state == "done" { restoreAIInput() }
+        let ready = LiveRecordingService.shared.readySessions(courseKey: context.courseKey, dayID: context.dayID)
+        guard !ready.isEmpty else { return }
+        var failedSegments = 0, audioKept = false, silent = false
+        for session in ready {
+            let text = session.text ?? ""
+            failedSegments += session.failedSegments; audioKept = audioKept || session.audioKept
+            if text.isEmpty { silent = session.failedSegments == 0 || silent }
+            else {
+                let existing = noteChatTextField.text ?? ""
+                let needsSpace = !existing.isEmpty && !(existing.last?.isWhitespace ?? true)
+                noteChatTextField.text = existing + (needsSpace ? " " : "") + text
+            }
+            LiveRecordingService.shared.complete(session.id)
+        }
+        noteChatTextChanged()
+        updateNoteChatSendButton(animated: true)
+        if audioKept { restoreAIInput() }   // 添付に残した録音を、メッセージ欄に出す
+        let hasText = !(noteChatTextField.text ?? "").isEmpty
+        if hasText { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+        if audioKept {
+            showNoteAlert(title: "文字にできませんでした", message: "通信の都合で、リアルタイムでは文字にできませんでした。録音は添付に残してあります。送ると、あとで文字にして、AIが使えるようになります。")
+        } else if silent && !hasText {
+            showNoteAlert(title: "音声が見つかりませんでした", message: "文字にできる音声が、録音に入っていませんでした。")
+        } else if failedSegments > 0 {
+            showNoteAlert(title: "一部は文字にできませんでした", message: "通信の都合で、\(failedSegments)分ぶんは文字にできませんでした。入力欄の文字は、その部分が抜けています。")
+        }
     }
 
     private func noteRecordingStopped(_ result: NoteRecordingResult?, auto: Bool) {

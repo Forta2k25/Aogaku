@@ -5,6 +5,21 @@ extension Notification.Name {
     static let liveRecordingChanged = Notification.Name("liveRecordingChanged")
 }
 
+// MARK: - 録音の言語
+
+/// 録音を文字にするときの言語。自動のときは、区間(1分)ごとに、言語を判定する(英語の授業・日英まじりの授業向け)。
+enum RecordingLanguage: String, CaseIterable {
+    case auto, ja, en
+    private static let key = "ai.recording.language"
+    static var current: RecordingLanguage {
+        get { UserDefaults.standard.string(forKey: key).flatMap(RecordingLanguage.init(rawValue:)) ?? .auto }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+    var title: String {
+        switch self { case .auto: return "自動(日本語・English)"; case .ja: return "日本語"; case .en: return "English" }
+    }
+}
+
 // MARK: - 保存する状態
 
 struct LiveSegment: Codable, Equatable {
@@ -36,6 +51,8 @@ struct LiveRecordingSession: Codable, Identifiable {
     var failedSegments: Int = 0
     /// 文字がまったく取れず、通信の失敗があったので、録音を従来どおり送れる形で添付に残した。
     var audioKept: Bool = false
+    /// 文字にする言語(auto / ja / en)。録音を始めたときの設定。古い保存データには無い。
+    var language: String? = nil
     var isResolved: Bool { !segments.contains { $0.status == "pending" } }
 }
 
@@ -146,8 +163,10 @@ final class LiveRecordingService {
 
     // MARK: 録音側からの入口
 
-    func begin(recordingID: String, context: AIInputContext, fullFileName: String) {
-        save(LiveRecordingSession(id: recordingID, context: context, startedAt: Date(), fullFileName: fullFileName))
+    func begin(recordingID: String, context: AIInputContext, fullFileName: String, language: RecordingLanguage = .current) {
+        var session = LiveRecordingSession(id: recordingID, context: context, startedAt: Date(), fullFileName: fullFileName)
+        session.language = language.rawValue
+        save(session)
     }
     func addSegment(recordingID: String, file: LiveSegmentFile) {
         guard var session = sessions[recordingID], !session.segments.contains(where: { $0.index == file.index }) else { return }
@@ -230,7 +249,7 @@ final class LiveRecordingService {
         do {
             let directory = try directory(session)
             let data = try Data(contentsOf: directory.appendingPathComponent(segment.fileName))
-            let payload: [String: Any] = ["recordingId": id, "index": segment.index, "durationSeconds": segment.duration, "audio": data.base64EncodedString()]
+            let payload: [String: Any] = ["recordingId": id, "index": segment.index, "durationSeconds": segment.duration, "audio": data.base64EncodedString(), "language": session.language ?? "ja"]
             let result = try await transport.call(task: "recordingSegment", payload: payload, uid: session.context.ownerUID)
             let text = (result["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             update { $0.status = "done"; $0.text = text; $0.error = nil }

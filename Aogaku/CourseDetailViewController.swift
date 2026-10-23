@@ -150,7 +150,7 @@ final class CourseDetailViewController: UIViewController {
     private var aiReplyTasks: [String: Task<Void, Never>] = [:]
     private var aiSessionTask: Task<Void, Never>?
 
-    private let noteChatTextField = UITextField()
+    private let noteChatTextField = ChatInputTextView()
     /// チャットの1メッセージ。写真は表示用の縮小版と、送信用の高画質JPEGを両方持つ。
     private enum NoteChatMessage {
         case text(String)
@@ -4187,16 +4187,30 @@ final class CourseDetailViewController: UIViewController {
             UIAction(title: "PDFを追加", image: UIImage(systemName: "doc")) { [weak self] _ in self?.pickAIPDF() },
             UIAction(title: "入力した文章をメモとして保存", image: UIImage(systemName: "note.text")) { [weak self] _ in self?.saveAIMemo() },
             UIAction(title: "授業メモ(AIが毎回読みます)", image: UIImage(systemName: "pencil.and.list.clipboard")) { [weak self] _ in self?.openCourseMemo() },
+            // 録音を文字にする言語。メニューを開くたびに、いまの選択を反映する。
+            UIDeferredMenuElement.uncached { completion in
+                completion([UIMenu(title: "録音の言語", image: UIImage(systemName: "globe"), children: RecordingLanguage.allCases.map { language in
+                    UIAction(title: language.title, state: RecordingLanguage.current == language ? .on : .off) { _ in RecordingLanguage.current = language }
+                })])
+            },
             UIAction(title: "資料と送信状況", image: UIImage(systemName: "tray")) { [weak self] _ in self?.openAISources(allDays: false) }
         ])
         plus.translatesAutoresizingMaskIntoConstraints = false
 
         noteChatTextField.placeholder = "リアクションペーパーを書いて"
         noteChatTextField.font = .systemFont(ofSize: 15)
-        noteChatTextField.returnKeyType = .send
         noteChatTextField.delegate = self
         noteChatTextField.addTarget(self, action: #selector(noteChatTextChanged), for: .editingChanged)
         noteChatTextField.translatesAutoresizingMaskIntoConstraints = false
+        // 改行して行が増えると、入力欄が上へ広がる。広がったぶん、メッセージ欄の下の余白も広げて、一番下のメッセージが隠れないようにする。
+        noteChatTextField.onHeightChange = { [weak self] in
+            guard let self else { return }
+            UIView.animate(withDuration: 0.15) {
+                self.noteChatInputBar?.superview?.layoutIfNeeded()
+                self.updateScrollInsetForBanner(height: self.adContainerHeight?.constant ?? 0)
+            }
+            if self.noteChatTextField.isFirstResponder { self.scrollNoteChatToBottom(animated: false) }
+        }
 
         let sendButton = noteChatSendButton
         sendButton.layer.cornerRadius = 18
@@ -4269,21 +4283,23 @@ final class CourseDetailViewController: UIViewController {
             fieldRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             fieldRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
             fieldRow.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
-            fieldRow.heightAnchor.constraint(equalToConstant: Self.noteInputBarMinHeight),
+            // 入力欄の高さに合わせて広がる(1行のときは、これまでと同じ高さ)。
+            fieldRow.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.noteInputBarMinHeight),
 
             plus.leadingAnchor.constraint(equalTo: fieldRow.leadingAnchor, constant: 8),
-            plus.centerYAnchor.constraint(equalTo: fieldRow.centerYAnchor),
+            plus.bottomAnchor.constraint(equalTo: fieldRow.bottomAnchor, constant: -3),
             plus.widthAnchor.constraint(equalToConstant: 40),
             plus.heightAnchor.constraint(equalToConstant: 40),
 
             sendButton.trailingAnchor.constraint(equalTo: fieldRow.trailingAnchor, constant: -6),
-            sendButton.centerYAnchor.constraint(equalTo: fieldRow.centerYAnchor),
+            sendButton.bottomAnchor.constraint(equalTo: fieldRow.bottomAnchor, constant: -5),
             sendButton.widthAnchor.constraint(equalToConstant: 36),
             sendButton.heightAnchor.constraint(equalToConstant: 36),
 
             noteChatTextField.leadingAnchor.constraint(equalTo: plus.trailingAnchor, constant: 4),
             noteChatTextField.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -10),
-            noteChatTextField.centerYAnchor.constraint(equalTo: fieldRow.centerYAnchor)
+            noteChatTextField.topAnchor.constraint(equalTo: fieldRow.topAnchor, constant: 6),
+            noteChatTextField.bottomAnchor.constraint(equalTo: fieldRow.bottomAnchor, constant: -6)
         ])
         return bar
     }
@@ -5624,7 +5640,7 @@ extension CourseDetailViewController: BannerViewDelegate {
     }
 }
 
-// MARK: - UITextFieldDelegate (ノートチャットの入力欄)
+// MARK: - UITextViewDelegate (ノートチャットの入力欄)
 extension CourseDetailViewController: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
@@ -5637,7 +5653,7 @@ extension CourseDetailViewController: UIGestureRecognizerDelegate {
                 if let scrollView = candidate as? UIScrollView, scrollView !== scroll,
                    !(scrollView.superview is WKWebView),   // ポータル(WKWebView)の上でも切り替えられるようにする
                    scrollView.contentSize.width > scrollView.bounds.width + 1 { return false }
-                if candidate is UITextField || candidate is PixelToggleControl { return false }
+                if candidate is UITextField || candidate is UITextView || candidate is PixelToggleControl { return false }
                 current = candidate.superview
             }
             return true
@@ -5647,22 +5663,17 @@ extension CourseDetailViewController: UIGestureRecognizerDelegate {
     }
 }
 
-extension CourseDetailViewController: UITextFieldDelegate {
+extension CourseDetailViewController: UITextViewDelegate {
     /// 入力を始めると、まだ何も送っていなくても大きなカードを省略ボタンに畳む。
     /// 何も送らずにキーボードを閉じたら、また大きなカードに戻す(どちらもアニメーション)。
-    func textFieldDidBeginEditing(_ textField: UITextField) {
-        guard textField === noteChatTextField else { return }
+    func textViewDidBeginEditing(_ textView: UITextView) {
+        guard textView === noteChatTextField else { return }
         syncNoteChatActions()
     }
 
-    func textFieldDidEndEditing(_ textField: UITextField) {
-        guard textField === noteChatTextField else { return }
+    func textViewDidEndEditing(_ textView: UITextView) {
+        guard textView === noteChatTextField else { return }
         syncNoteChatActions()
-    }
-
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        noteChatSendTapped()
-        return true
     }
 }
 

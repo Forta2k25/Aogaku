@@ -80,6 +80,32 @@ final class LiveRecordingServiceTests: XCTestCase {
         XCTAssertFalse(try recordingFolderExists(id), "渡し終えたら、保存していた録音は消す")
     }
 
+    func testTheChosenLanguageIsSentWithEverySegmentAndOldSessionsDefaultToJapanese() async throws {
+        let transport = textTransport(); service.transport = transport
+        let id = "rec-lang-00001"
+        service.begin(recordingID: id, context: context, fullFileName: "full.m4a", language: .en)
+        service.addSegment(recordingID: id, file: try segmentFile(id, 0, start: 0))
+        service.addSegment(recordingID: id, file: try segmentFile(id, 1, start: 60))
+        await waitUntil("文字になる") { self.service.session(id)?.segments.allSatisfy { $0.status == "done" } == true }
+        XCTAssertEqual(transport.calls.map { $0.payload["language"] as? String }, ["en", "en"], "録音を始めたときの言語を、全区間に使う(途中で設定を変えても、その録音は変わらない)")
+        // 言語の項目が無い、古い保存データ(language が nil)は、これまでどおり日本語
+        var old = LiveRecordingSession(id: "rec-old-000001", context: context, startedAt: Date(), fullFileName: "full.m4a")
+        old.segments = [LiveSegment(index: 0, startSeconds: 0, duration: 60, fileName: "seg-000.m4a")]
+        XCTAssertNil(old.language)
+        let data = try JSONEncoder().encode(old)
+        XCTAssertNil(try JSONDecoder().decode(LiveRecordingSession.self, from: data).language)
+    }
+
+    func testRecordingLanguageSettingIsRemembered() {
+        let saved = RecordingLanguage.current
+        defer { RecordingLanguage.current = saved }
+        RecordingLanguage.current = .en; XCTAssertEqual(RecordingLanguage.current, .en)
+        RecordingLanguage.current = .ja; XCTAssertEqual(RecordingLanguage.current, .ja)
+        UserDefaults.standard.removeObject(forKey: "ai.recording.language")
+        XCTAssertEqual(RecordingLanguage.current, .auto, "未設定のときは、自動")
+        XCTAssertEqual(RecordingLanguage.allCases.map(\.rawValue), ["auto", "ja", "en"])
+    }
+
     func testRetriesOverloadButGivesUpOnPermanentFailureAndStillDeliversTheRest() async throws {
         var failures = 0
         let transport = FakeTransport { _, payload in

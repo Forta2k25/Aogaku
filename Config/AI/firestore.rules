@@ -1,6 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // 会話の履歴(文章だけ): 本人だけが、自分の分を読める(別の端末の発言を、すぐ受け取るための購読に使う)。
+    // 書き込みは、サーバーの関数(aiSaveMessages / aiDeleteMessages)だけ。ここからは、書けない。
+    match /aiChats/{uid}/offerings/{offeringId}/messages/{messageId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+    // それ以外は、これまでどおり、すべて拒否(AIの資料・利用量・授業・設定は、関数だけが触れる)。
     match /{document=**} { allow read, write: if false; }
   }
 }

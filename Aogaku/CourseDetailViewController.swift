@@ -189,8 +189,11 @@ final class CourseDetailViewController: UIViewController {
         }
     }
     private var aiAuthHandle: AuthStateDidChangeListenerHandle?
-    /// チャットを開いている間、別の端末(Web)の会話が届いていないかを、3秒ごとに確かめる(確かめるのは、新しい分だけ)。
+    /// 購読が切れたときの保険。チャットを開いている間、30秒ごとに、別の端末(Web)の会話が届いていないかを確かめる(新しい分だけ)。
     private var conversationSyncTimer: Timer?
+    /// 別の端末(Web)が会話を保存したとき、すぐ知らせを受ける購読。
+    private var conversationListener: ListenerRegistration?
+    private var conversationListenerKey = ""
     private var aiSessionUID: String?
     private var aiMessageIDs: [Int: [String]] = [:]
     private var noteChatMessagesBySession: [Int: [NoteChatMessage]] = [:]
@@ -229,7 +232,7 @@ final class CourseDetailViewController: UIViewController {
         return try SourceIngestionService.shared.store(uid: uid).contextForInput(context)
     }
 
-    deinit { conversationSyncTimer?.invalidate(); if let handle = aiAuthHandle { Auth.auth().removeStateDidChangeListener(handle) } }
+    deinit { conversationSyncTimer?.invalidate(); conversationListener?.remove(); if let handle = aiAuthHandle { Auth.auth().removeStateDidChangeListener(handle) } }
 
     /// AIタブからの質問。開いたら、AIハックに切り替えて、指定の回のチャットで、質問を送る(準備ができていなければ、できてから)。
     private struct PendingAIChat { let dayID: Int; let text: String; let photos: [CapturedPhoto] }
@@ -331,11 +334,26 @@ final class CourseDetailViewController: UIViewController {
 
     /// 返信待ちのまま止まっている最後の送信があれば、返信を作り直す。
     /// 会話の履歴(文章)を、Webなど別の端末と合わせる。別の端末の発言を取り込んだら、画面を読み直す。
+    /// 授業が変わったとき、または、まだ購読していないときだけ、購読を始める。
+    private func ensureConversationListener(context: AIInputContext) {
+        let key = context.ownerUID + "|" + context.courseKey
+        guard conversationListener == nil || conversationListenerKey != key else { return }
+        conversationListener?.remove(); conversationListener = nil
+        conversationListener = ConversationSyncService.shared.observe(context: context, onChange: { [weak self] in
+            self?.syncConversationHistory(force: true)
+        }, onFailure: { [weak self] in
+            // 購読が切れた(まだ権限がない、通信が切れた、など)。次の確認のときに、もう一度つなぎ直す。
+            self?.conversationListener?.remove(); self?.conversationListener = nil
+        })
+        if conversationListener != nil { conversationListenerKey = key }
+    }
     private func syncConversationHistory(force: Bool = false) {
         guard showsLectureNotes, let context = try? aiContext(day: noteChatCurrentSession) else { return }
         Task { [weak self] in
             let changed = await ConversationSyncService.shared.sync(context: context, force: force)
-            guard changed, let self else { return }
+            guard let self else { return }
+            self.ensureConversationListener(context: context)
+            guard changed else { return }
             self.restoreAIInput()
         }
     }
@@ -1024,6 +1042,7 @@ final class CourseDetailViewController: UIViewController {
         super.viewWillDisappear(animated)
         view.endEditing(true)
         conversationSyncTimer?.invalidate(); conversationSyncTimer = nil
+        conversationListener?.remove(); conversationListener = nil
         if isBeingDismissed || isMovingFromParent {
             aiReplyTasks.values.forEach { $0.cancel() }; aiReplyTasks.removeAll(); aiSessionTask?.cancel()
             // 授業詳細を閉じたら、録音と再生も止める(使用時間は加算される)
@@ -1038,7 +1057,7 @@ final class CourseDetailViewController: UIViewController {
         syncConversationHistory()
         if showsLectureNotes {
             conversationSyncTimer?.invalidate()
-            conversationSyncTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            conversationSyncTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
                 guard let self, self.noteShowsChatDetail, self.aiReplyTasks.isEmpty else { return }   // 返信を作っている最中は、触らない
                 self.syncConversationHistory()
             }

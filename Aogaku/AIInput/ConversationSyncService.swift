@@ -1,4 +1,5 @@
 import Foundation
+import FirebaseFirestore
 
 /// 会話の履歴(文章だけ)を、サーバーを通して、Webなど別の端末と合わせる。
 /// 写真・録音・PDFは、「送った」印(種類と枚数)だけを送る。失敗しても、会話は止めない(次の機会に、もう一度試す)。
@@ -9,6 +10,8 @@ final class ConversationSyncService {
     private var lastRun: [String: Date] = [:]
     /// 授業ごとに、取り込みずみの、いちばん新しい発言の時刻(ms)。2回目からは、そこから少し戻った所以降だけを取る(通信と読み取りを減らす)。
     private var cursors: [String: Int] = [:]
+    /// 授業ごとの、会話の保存先の授業ID(aiListMessages が返す)。リアルタイムの購読に使う。
+    private var offerings: [String: String] = [:]
     /// 別の端末の、少し遅れて届いた発言(時計のずれ)も取りこぼさないための、戻す幅。
     private static let overlapMs = 120_000
 
@@ -38,6 +41,7 @@ final class ConversationSyncService {
                     remote.append(RemoteConversationRow(id: id, role: role, kind: item["kind"] as? String ?? "text", text: item["text"] as? String ?? "",
                                                         imageCount: (item["imageCount"] as? NSNumber)?.intValue ?? 0, dayID: day, createdAt: created))
                 }
+                if let offering = page["courseOfferingId"] as? String { offerings[key] = offering }
                 cursor = (page["nextCursor"] as? NSNumber)?.intValue
                 guardPages += 1
             } while cursor != nil && guardPages < 50
@@ -70,6 +74,21 @@ final class ConversationSyncService {
             return added > 0
         } catch {
             return false   // 通信などに失敗しても、会話は続けられる
+        }
+    }
+
+    /// 会話の「いちばん新しい保存」の変化だけを、リアルタイムで知る(読み取り専用。ルールで、本人だけが、自分の分を読める)。
+    /// 知らせが来たら、onChange で、新しい分を取る。内容は、ここでは読まない。保存先が分かる前(最初の同期の前)は nil。
+    func observe(context: AIInputContext, onChange: @escaping @MainActor () -> Void, onFailure: @escaping @MainActor () -> Void = {}) -> ListenerRegistration? {
+        let key = context.ownerUID + "|" + context.courseKey
+        guard !AppBackend.isOffline, AppBackend.currentUID == context.ownerUID, let offering = offerings[key] else { return nil }
+        let latest = Firestore.firestore(database: "aogaku-ai").collection("aiChats").document(context.ownerUID)
+            .collection("offerings").document(offering).collection("messages")
+            .order(by: "updatedAt", descending: true).limit(to: 1)
+        return latest.addSnapshotListener { snapshot, error in
+            if error != nil { Task { @MainActor in onFailure() }; return }   // 権限などで購読できない間は、定期の確認が代わりをする
+            guard let snapshot, !snapshot.metadata.hasPendingWrites else { return }
+            Task { @MainActor in onChange() }
         }
     }
 }

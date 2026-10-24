@@ -1,0 +1,29 @@
+{
+  "id": "legacy-01",
+  "version": 1,
+  "split": "dev",
+  "familyId": "worksheet-grammar",
+  "tags": [
+    "grounding",
+    "worksheet",
+    "language"
+  ],
+  "images": [
+    "t1_worksheet.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "解答作成して"
+  ],
+  "legacyCase": 1,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "問1は文Aと文Bの自然さをそれぞれ理由付きで判断する。問2は日本語の名詞句と英語の文の成立条件を区別し、英語でも名詞句としては可能なことを踏まえる。唯一の模範解答を仮定しない。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "問1",
+    "問2"
+  ]
+}

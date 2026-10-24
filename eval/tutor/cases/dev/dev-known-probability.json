@@ -1,0 +1,41 @@
+{
+  "id": "dev-known-probability",
+  "version": 1,
+  "split": "dev",
+  "familyId": "probability-union",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：P(A)=0.4、P(B)=0.5、P(A∩B)=0.3。P(A∪B)=0.4+0.5=0.9。"
+    }
+  ],
+  "questions": [
+    "確率の計算を確認して。"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と自分の計算を区別する。",
+    "correctness": "和事象は重なりを一回引き0.4+0.5-0.3=0.6。独立や排反を勝手に仮定しない。",
+    "task_completion": "正誤を判断し、正しい結果と短い理由を示す。",
+    "uncertainty": "与えられていない前提を作らず、確かめられる計算は具体的に答える。"
+  },
+  "suggestionAnchors": [
+    "重なり",
+    "和事象"
+  ],
+  "checks": [
+    {
+      "gate": "correctness",
+      "kind": "any",
+      "values": [
+        "0.6",
+        "3/5"
+      ]
+    }
+  ]
+}

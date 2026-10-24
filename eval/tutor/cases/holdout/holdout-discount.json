@@ -1,0 +1,31 @@
+{
+  "id": "holdout-discount",
+  "version": 1,
+  "split": "holdout",
+  "familyId": "sequential-percentage",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：定価から50%引きにして、その価格からさらに50%引きにする。合計100%引きなので無料になる。"
+    }
+  ],
+  "questions": [
+    "この計算を確認して。"
+  ],
+  "rubric": {
+    "grounding": "資料の前提と結論をそのまま区別し、追加の例は仮定として示す。",
+    "correctness": "元の価格の0.5×0.5=0.25が残るので75%引き。例えば100円なら25円で無料ではない。",
+    "task_completion": "質問の結論を明示し、根拠となる短い理由を示す。",
+    "uncertainty": "前提が不足する場合は具体的に指摘し、十分な情報がある計算は曖昧にしない。"
+  },
+  "suggestionAnchors": [
+    "割引率",
+    "元の価格"
+  ]
+}

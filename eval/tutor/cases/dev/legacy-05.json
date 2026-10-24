@@ -1,0 +1,35 @@
+{
+  "id": "legacy-05",
+  "version": 1,
+  "split": "dev",
+  "familyId": "function-reflection",
+  "tags": [
+    "math",
+    "overcorrection"
+  ],
+  "images": [
+    "t5_correct_math.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "この板書を説明して"
+  ],
+  "legacyCase": 5,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "正しい結果2f(-3x-1)を説明し、資料に誤りがあると主張しない。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "反射",
+    "y軸"
+  ],
+  "checks": [
+    {
+      "gate": "correctness",
+      "kind": "includes",
+      "value": "2f(-3x-1)"
+    }
+  ]
+}

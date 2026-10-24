@@ -1,0 +1,9 @@
+{
+  "firestore": [
+    {
+      "database": "aogaku-ai",
+      "rules": "Config/AI/firestore.rules",
+      "predeploy": ["node \"$PROJECT_DIR/scripts/deploy_production_ai_rules.cjs\" guard"]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "id": "dev-derivative",
+  "version": 1,
+  "split": "dev",
+  "familyId": "derivative-product",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "板書：d/dx(x e^x) = e^x。"
+    }
+  ],
+  "questions": [
+    "この微分の説明をして。"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と補足・訂正を区別する。",
+    "correctness": "積の微分からe^x+xe^x。資料のe^xは第2項が欠ける。",
+    "task_completion": "正誤を判断し、必要なら正しい内容と短い理由を示す。",
+    "uncertainty": "不要に曖昧にせず、与えられた内容から判断する。"
+  },
+  "suggestionAnchors": [
+    "積の微分",
+    "指数関数"
+  ],
+  "checks": [
+    {
+      "gate": "correctness",
+      "kind": "any",
+      "values": [
+        "e^x+xe^x",
+        "e^x(1+x)",
+        "(1+x)e^x",
+        "e^x(x+1)",
+        "(x+1)e^x",
+        "xe^x+e^x"
+      ]
+    }
+  ]
+}

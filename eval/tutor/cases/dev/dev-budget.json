@@ -1,0 +1,41 @@
+{
+  "id": "dev-budget",
+  "version": 1,
+  "split": "dev",
+  "familyId": "constraint-sign",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：予算は300円以下。品物の単価は60円、購入個数はx。制約：60x ≥ 300、x ≥ 0。"
+    }
+  ],
+  "questions": [
+    "制約式は正しい？"
+  ],
+  "rubric": {
+    "grounding": "資料の記述と補足・訂正を区別する。",
+    "correctness": "以下という条件は60x≤300。非負条件は正しい。整数性は個数という文脈と区別して説明。",
+    "task_completion": "正誤を判断し、必要なら正しい内容と短い理由を示す。",
+    "uncertainty": "不要に曖昧にせず、与えられた内容から判断する。"
+  },
+  "suggestionAnchors": [
+    "不等号",
+    "整数"
+  ],
+  "checks": [
+    {
+      "gate": "correctness",
+      "kind": "any",
+      "values": [
+        "60x<=300",
+        "x<=5"
+      ]
+    }
+  ]
+}

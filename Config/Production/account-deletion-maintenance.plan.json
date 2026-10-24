@@ -1,0 +1,57 @@
+{
+  "projectId": "forta-aogaku",
+  "projectNumber": "505828754933",
+  "separateFromAI12Wrapper": true,
+  "requiresSeparateAuthorization": true,
+  "cloudMutationExecuted": false,
+  "sourceProvenance": "functions/recovered/deployed/provenance.json",
+  "deletionFunctions": [
+    {
+      "name": "preDeleteCleanup",
+      "environment": "GEN_2",
+      "region": "asia-northeast1",
+      "candidateRuntime": "nodejs22",
+      "candidateServiceAccount": "aogaku-ai-account-deletion@forta-aogaku.iam.gserviceaccount.com"
+    },
+    {
+      "name": "deleteAccountServerSide",
+      "environment": "GEN_2",
+      "region": "asia-northeast1",
+      "candidateRuntime": "nodejs22",
+      "candidateServiceAccount": "aogaku-ai-account-deletion@forta-aogaku.iam.gserviceaccount.com"
+    },
+    {
+      "name": "onAuthUserDelete",
+      "environment": "GEN_1",
+      "region": "asia-northeast1",
+      "candidateRuntime": "nodejs22",
+      "candidateServiceAccount": "aogaku-ai-account-deletion@forta-aogaku.iam.gserviceaccount.com"
+    }
+  ],
+  "oldAISafetyCandidates": [
+    "askCourseAI",
+    "transcribeLectureAudio",
+    "generateReactionPaper"
+  ],
+  "oldAISource": "functions/src/legacy-ai/index.ts",
+  "preserveExistingSecretVersions": [
+    "OPENAI_API_KEY",
+    "GROQ_API_KEY"
+  ],
+  "forbidden": [
+    "all-functions deploy",
+    "legacy function deletion",
+    "generation migration",
+    "import/reindex/wipe deploy",
+    "friend notification replacement",
+    "secret rotation"
+  ],
+  "rolloutDependency": "Authorize/review legacy deletion and old quota safety patches separately before approving accountDeletionHookIntegrated. Re-read exact versions, labels/codebases/runtime IAM and preserve unrelated deployed exports.",
+  "finalRolloutPlan": "Config/Production/rollout.phases.json",
+  "wrapper": "scripts/firebase_legacy_production.py",
+  "postDeploySourceVerifier": "scripts/verify_legacy_install.cjs",
+  "rollbackModes": [
+    "rollback-before-pilot",
+    "safety-recovery"
+  ]
+}

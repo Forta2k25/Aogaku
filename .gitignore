@@ -1,4 +1,9 @@
 .DS_Store
+functions/node_modules/
+functions/lib/
+functions/.secret.local
+functions/.env.local
+*-debug.log
 DerivedData/
 build/
 **/xcuserdata/
@@ -9,3 +14,26 @@ status*/xcshareddata/
 # シラバススクレイピング用ログインセッション・出力（機密/生成物のためコミットしない）
 scripts/.aguinfo_state.json
 scripts/output/
+
+# Environment configuration is supplied locally, never copied from production for Debug.
+Config/Firebase/Development/*.plist
+Config/Firebase/Production/*.plist
+Config/firebase-development.json
+functions/.env.forta-aogaku-dev
+scripts/output-dev/
+AogakuTests/DevFixtures/
+
+# Production operator approval/cohort data and runtime parameters stay private.
+Config/firebase-production.local.json
+Config/production-deploy-approval*.json
+functions/.env.forta-aogaku
+
+# Recovered historical Functions are compiled for regression only.
+functions/lib-recovered/
+
+# Recognition Lab: isolated Dev runtime and private operator configuration.
+recognition-lab/functions/node_modules/
+recognition-lab/functions/lib/
+recognition-lab/functions/.env*
+recognition-lab/functions/.secret.local
+Config/recognition-lab.local.json

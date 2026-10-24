@@ -13,13 +13,14 @@ final class SettingsHostViewController: UIViewController {
         view.backgroundColor = .systemBackground
 
         // 初期表示
-        swapContent(isLoggedIn: Auth.auth().currentUser != nil)
+        swapContent(isLoggedIn: Auth.auth().currentUser != nil && Auth.auth().currentUser?.isAnonymous != true)
 
         // ログイン/ログアウトの変化を監視して自動切替
         authListener = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             guard let self else { return }
-            self.swapContent(isLoggedIn: user != nil)
-            self.tabBarController?.selectedIndex = self.settingsTabIndex
+            self.swapContent(isLoggedIn: user != nil && user?.isAnonymous != true)
+            // Silent AI authentication must not navigate away from the course.
+            if user?.isAnonymous != true { self.tabBarController?.selectedIndex = self.settingsTabIndex }
         }
 
         // 新規Googleユーザーのセットアップ通知を監視

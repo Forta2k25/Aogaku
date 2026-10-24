@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 会話の履歴(文章だけ): 本人だけが、自分の分を読める(別の端末の発言を、すぐ受け取るための購読に使う)。
+    // 書き込みは、サーバーの関数(aiSaveMessages / aiDeleteMessages)だけ。ここからは、書けない。
+    match /aiChats/{uid}/offerings/{offeringId}/messages/{messageId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+    // 時間割の共有URL(Webの「共有」): 長いIDを知っている人は、誰でも1件だけ読める(一覧は不可)。作る・直す・消すのは、持ち主だけ。
+    match /sharedTimetables/{shareId} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if request.auth != null
+                    && shareId.size() >= 20
+                    && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if request.auth != null
+                    && resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.ownerUid == request.auth.uid;
+    }
+    // 課題(Moodleの予定・提出済み・自分で足した課題): アプリとWebで、同じものを見るための、本人だけの置き場。
+    match /userAssignments/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+    // それ以外は、これまでどおり、すべて拒否(AIの資料・利用量・授業・設定は、関数だけが触れる)。
+    match /{document=**} { allow read, write: if false; }
+  }
+}

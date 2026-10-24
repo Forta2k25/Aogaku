@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE00010000000000000003 /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00010000000000000002 /* SwiftMath */; };
+		A10000010000000000000001 /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = A10000010000000000000002 /* FirebaseAppCheck */; };
 		A40AACB92E7556BC009104D2 /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = A40AACB82E7556BC009104D2 /* GoogleMobileAds */; };
 		A49491AE2E7E7EB60027AA8F /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = A49491AD2E7E7EB60027AA8F /* FirebaseMessaging */; };
 		A49A40622E7BDFCC0036636C /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A49A40612E7BDFCC0036636C /* WidgetKit.framework */; };
@@ -109,6 +111,7 @@
 		B3A17B472E40A19A00ACCA3A /* Exceptions for "Aogaku" folder in "Aogaku" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"GoogleService-Info.plist",
 				Info.plist,
 			);
 			target = B3A17B1E2E40A19700ACCA3A /* Aogaku */;
@@ -180,9 +183,11 @@
 				A4EA88F12E62D45500947976 /* FirebaseCore in Frameworks */,
 				A4EA88F32E62D45500947976 /* FirebaseFirestore in Frameworks */,
 				B3618AB02FC1C1BE0060C703 /* GoogleSignIn in Frameworks */,
+				C0DE00010000000000000003 /* SwiftMath in Frameworks */,
 				B37651392E7E8D3400E77AF2 /* FirebaseFunctions in Frameworks */,
 				B3F9F09C2E79952E00BFB330 /* FirebaseStorage in Frameworks */,
 				B3F9F0962E79546D00BFB330 /* FirebaseAuth in Frameworks */,
+				A10000010000000000000001 /* FirebaseAppCheck in Frameworks */,
 				A4EFF9A12E84E99000135008 /* FirebaseRemoteConfig in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -305,6 +310,7 @@
 				B3A17B1B2E40A19700ACCA3A /* Sources */,
 				B3A17B1C2E40A19700ACCA3A /* Frameworks */,
 				B3A17B1D2E40A19700ACCA3A /* Resources */,
+				C0DE00000000000000000001 /* Prepare Firebase Environment */,
 				A49A40742E7BDFCE0036636C /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -323,7 +329,9 @@
 				A4FAAA002F00000100A0A0A0 /* FirebaseAnalytics */,
 				A40AACB82E7556BC009104D2 /* GoogleMobileAds */,
 				B3F9F0952E79546D00BFB330 /* FirebaseAuth */,
+				A10000010000000000000002 /* FirebaseAppCheck */,
 				B3F9F09B2E79952E00BFB330 /* FirebaseStorage */,
+				C0DE00010000000000000002 /* SwiftMath */,
 				B37651382E7E8D3400E77AF2 /* FirebaseFunctions */,
 				A4EFF9A02E84E99000135008 /* FirebaseRemoteConfig */,
 				B3618AAF2FC1C1BE0060C703 /* GoogleSignIn */,
@@ -420,6 +428,7 @@
 				A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
 				B3618AAE2FC1C1BE0060C703 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				C0DE00010000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B3A17B202E40A19700ACCA3A /* Products */;
@@ -472,6 +481,31 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		C0DE00000000000000000001 /* Prepare Firebase Environment */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/prepare_firebase_config.py",
+				"$(SRCROOT)/Aogaku/GoogleService-Info.plist",
+				"$(SRCROOT)/Config",
+			);
+			name = "Prepare Firebase Environment";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info-development.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info-production.plist",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/FirebaseEnvironment.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/scripts/prepare_firebase_config.py\"";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A49A405C2E7BDFCC0036636C /* Sources */ = {
@@ -545,9 +579,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
-				CODE_SIGN_ENTITLEMENTS = AogakuWidgetsExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "Config/Extensions-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AogakuWidgets/Info.plist;
@@ -559,7 +593,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 2.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.AogakuWidgets;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.dev.AogakuWidgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -575,7 +609,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = AogakuWidgetsExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AogakuWidgets/Info.plist;
@@ -601,9 +635,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
-				CODE_SIGN_ENTITLEMENTS = AogakuAction/AogakuAction.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "Config/Extensions-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AogakuAction/Info.plist;
@@ -616,7 +650,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 2.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.AogakuAction;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.dev.AogakuAction;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -635,7 +669,7 @@
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = AogakuAction/AogakuAction.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AogakuAction/Info.plist;
@@ -665,13 +699,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Aogaku/Aogaku.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "Config/Aogaku-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Aogaku/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "青山ハック";
+				INFOPLIST_FILE = "Config/Info-Debug.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "青山ハック Dev";
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "授業や学事予定をiOSカレンダーに追加・表示するためにカレンダーへのアクセスが必要です。";
 				INFOPLIST_KEY_NSCameraUsageDescription = "QRコードの読み取りと、授業資料の撮影のためにカメラを使用します。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "授業の音声を録音するためにマイクを使用します。";
@@ -679,7 +714,6 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
-				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
@@ -688,7 +722,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 2.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku;
+				PRODUCT_BUNDLE_IDENTIFIER = com.forta2k25.Aogaku.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -703,7 +737,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Aogaku/Aogaku.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2T5WKPN92Z;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Aogaku/Info.plist;
@@ -715,7 +749,6 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "QRコード画像を読み取るために写真を使用します。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
-				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
@@ -1007,9 +1040,22 @@
 				minimumVersion = 9.1.0;
 			};
 		};
+		C0DE00010000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath";
+			requirement = {
+				kind = exactVersion;
+				version = 1.7.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A10000010000000000000002 /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
+		};
 		A40AACB82E7556BC009104D2 /* GoogleMobileAds */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A40AACB72E755170009104D2 /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */;
@@ -1059,6 +1105,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A4EA88EE2E62D42C00947976 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		C0DE00010000000000000002 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DE00010000000000000001 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

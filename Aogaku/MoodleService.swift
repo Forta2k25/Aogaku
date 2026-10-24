@@ -117,6 +117,7 @@ final class MoodleService {
         let nowSubmitted = !uids.contains(uid)
         if nowSubmitted { uids.insert(uid) } else { uids.remove(uid) }
         submittedUIDs = uids
+        Task { @MainActor in AssignmentSyncService.shared.pushSubmitted(uid: uid, submitted: nowSubmitted) }
         return nowSubmitted
     }
 

@@ -1,0 +1,28 @@
+{
+  "id": "legacy-06",
+  "version": 1,
+  "split": "dev",
+  "familyId": "unreadable-economics",
+  "tags": [
+    "uncertainty",
+    "worksheet"
+  ],
+  "images": [
+    "t6_theme_only.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "解答作成して"
+  ],
+  "legacyCase": 6,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "判読不能な設問の数値や解答を作らない。見える課題テーマだけを根拠にする。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "設問",
+    "写真"
+  ]
+}

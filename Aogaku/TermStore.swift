@@ -111,13 +111,23 @@ enum TermStore {
 
         // 1) 通常: [Course]
         if let a = try? JSONDecoder().decode([Course].self, from: data) {
-            return a
+            return migrateLocalIdentities(a.map { Optional($0) }, key: term.storageKey).compactMap { $0 }
         }
         // 2) 時間割側の保存形式: [Course?]
         if let b = try? JSONDecoder().decode([Course?].self, from: data) {
-            return b.compactMap { $0 }
+            return migrateLocalIdentities(b, key: term.storageKey).compactMap { $0 }
         }
         return []
+    }
+
+    private static func migrateLocalIdentities(_ values: [Course?], key: String) -> [Course?] {
+        var courses = values
+        var changed = false
+        for i in courses.indices where courses[i] != nil && courses[i]?.localCourseUUID == nil {
+            courses[i]?.localCourseUUID = UUID().uuidString.lowercased(); changed = true
+        }
+        if changed, let data = try? JSONEncoder().encode(courses) { UserDefaults.standard.set(data, forKey: key) }
+        return courses
     }
 
 

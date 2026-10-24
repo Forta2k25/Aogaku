@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "contextRevision": "example-revision",
+  "retrievalMethod": "lexical-ja-v1",
+  "truncated": false,
+  "nextCursor": null,
+  "items": [
+    {
+      "sourceId": "example-pdf-source",
+      "sourceVersion": 1,
+      "activeVersion": "example-run",
+      "lectureId": "example-lecture",
+      "sourceType": "pdf",
+      "chunkId": "000000",
+      "text": "これは接続確認用の架空の資料本文です。社会契約を授業で扱ったことを想定しています。",
+      "locator": {"pageNumber": 3},
+      "method": "pdf_text",
+      "flags": ["figures_not_interpreted"]
+    },
+    {
+      "sourceId": "example-audio-source",
+      "sourceVersion": 1,
+      "activeVersion": "example-run-audio",
+      "lectureId": "example-lecture",
+      "sourceType": "audio",
+      "chunkId": "000000",
+      "text": "接続確認用の架空の文字起こしです。ここでは社会契約について説明します。",
+      "locator": {"startMs": 903000, "endMs": 915000},
+      "method": "groq_asr",
+      "flags": []
+    }
+  ],
+  "coverage": {
+    "readySources": 1,
+    "processingSources": 0,
+    "partialSources": 1,
+    "sources": [
+      {"sourceId": "example-pdf-source", "status": "ready", "coverage": {"totalUnits": 5, "processedUnits": 5, "failedUnits": []}},
+      {"sourceId": "example-audio-source", "status": "partial_ready", "coverage": {"totalUnits": 6, "processedUnits": 5, "failedUnits": [6]}}
+    ]
+  }
+}

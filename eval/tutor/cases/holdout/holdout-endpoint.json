@@ -1,0 +1,31 @@
+{
+  "id": "holdout-endpoint",
+  "version": 1,
+  "split": "holdout",
+  "familyId": "endpoint-minimum",
+  "tags": [
+    "math",
+    "correction",
+    "text-context"
+  ],
+  "images": [],
+  "context": [
+    {
+      "title": "教材抜粋",
+      "text": "資料：f(x)=x、定義域は0≤x≤2。f′(x)=1なので微分が0の点はない。したがって最小値は存在しない。"
+    }
+  ],
+  "questions": [
+    "この結論は正しい？"
+  ],
+  "rubric": {
+    "grounding": "資料の前提と結論をそのまま区別し、追加の例は仮定として示す。",
+    "correctness": "最小値は0でx=0で達成する。閉区間の端点を確認し、内部の停留条件だけで最小値がないとはいえない。",
+    "task_completion": "質問の結論を明示し、根拠となる短い理由を示す。",
+    "uncertainty": "前提が不足する場合は具体的に指摘し、十分な情報がある計算は曖昧にしない。"
+  },
+  "suggestionAnchors": [
+    "端点",
+    "停留点"
+  ]
+}

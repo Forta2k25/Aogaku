@@ -232,6 +232,8 @@ final class AssignmentListViewController: UITableViewController, BannerViewDeleg
         }
         courseTitleById = byId
         pickerTitles    = allTitles.sorted()
+        // Webでつけた提出済みを取り込む(onSubmittedStateChanged が、画面を読み直す)
+        Task { await AssignmentSyncService.shared.pullSubmitted() }
     }
 
     override func viewDidLayoutSubviews() {
@@ -362,6 +364,9 @@ final class AssignmentListViewController: UITableViewController, BannerViewDeleg
         let events = (moodleEvents + customEvents).sorted {
             ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture)
         }
+
+        // Webと合わせる(失敗しても、ここは止めない)
+        AssignmentSyncService.shared.push(events: events) { [weak self] in self?.resolvedTitle(for: $0) }
 
         let now = Date()
         let cal = Calendar.current

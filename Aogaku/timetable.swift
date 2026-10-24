@@ -7,7 +7,7 @@ import FirebaseAuth
 import FirebaseFirestore
 import WidgetKit   // ← 追加
 
-private let APP_GROUP_ID = "group.jp.forta.Aogaku"
+private let APP_GROUP_ID = WidgetBridge.appGroupID
 
 @inline(__always) private func makeAdaptiveAdSize(width: CGFloat) -> AdSize {
     return currentOrientationAnchoredAdaptiveBanner(width: width)
@@ -31,7 +31,7 @@ private func slotHash(_ c: Course, colorKey: String?) -> String {
         c.id, c.title, c.room, c.teacher,
         c.credits.map(String.init) ?? "",
         c.campus ?? "", c.category ?? "", c.syllabusURL ?? "",
-        colorKey ?? ""
+        colorKey ?? "", c.localCourseUUID ?? "", c.firestoreDocID ?? ""
     ].joined(separator: "|")
 }
 // Encode / Decode
@@ -44,10 +44,11 @@ private func encodeCourseMap(_ c: Course, colorKey: String?) -> [String: Any] {
     if let v = c.category       { m["category"] = v }
     if let v = c.syllabusURL    { m["syllabusURL"] = v }
     if let v = c.firestoreDocID { m["firestoreDocID"] = v }
+    if let v = c.localCourseUUID { m["localCourseUUID"] = v }
     if let v = colorKey         { m["colorKey"] = v }
     return m
 }
-private func decodeCourseMap(_ m: [String: Any]) -> Course {
+private func decodeCourseMap(_ m: [String: Any], record: String) -> Course {
     var id      = (m["id"] as? String) ?? ""
     let title   = (m["title"] as? String) ?? "（無題）"
     let room    = (m["room"] as? String) ?? ""
@@ -67,6 +68,8 @@ private func decodeCourseMap(_ m: [String: Any]) -> Course {
     var c = Course(id: id, title: title, room: room, teacher: teacher,
                    credits: credits, campus: campus, category: category, syllabusURL: url, term: nil)
     c.firestoreDocID = docID
+    c.localCourseUUID = (m["localCourseUUID"] as? String).flatMap(UUID.init(uuidString:))?.uuidString.lowercased()
+        ?? PersistentCourseIdentity.uuid(record: record + "|" + (m["__aiRevision"] as? String ?? "legacy"))
     return c
 }
 
@@ -80,6 +83,12 @@ private struct TimetableRemoteStore {
     let uid: String
     let termID: String
     let term: TermKey
+    private static func identityMap(_ map: [String: Any], revision: Any?) -> [String: Any] {
+        var value = map
+        if let stamp = revision as? Timestamp { value["__aiRevision"] = "\(stamp.seconds):\(stamp.nanoseconds)" }
+        return value
+    }
+
     private let db = Firestore.firestore()
     private var doc: DocumentReference {
         db.collection("users").document(uid).collection("timetable").document(termID)
@@ -111,7 +120,7 @@ private struct TimetableRemoteStore {
             for (k, v) in data {
                 guard k.hasPrefix("cells.d"),
                       let m = v as? [String: Any] else { continue }
-                out[k] = m
+                out[k] = Self.identityMap(m, revision: data[k + ".u"])
             }
             return out
         } catch {
@@ -133,7 +142,7 @@ private struct TimetableRemoteStore {
             var out: [String:[String:Any]] = [:]
             for (k, v) in data {
                 guard k.hasPrefix("cells.d"), let m = v as? [String: Any] else { continue }
-                out[k] = m
+                out[k] = Self.identityMap(m, revision: data[k + ".u"])
             }
             return out
         } catch {
@@ -148,7 +157,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
             var dict: [String:[String:Any]] = [:]
             for (k, v) in data {
                 guard k.hasPrefix("cells.d"), let m = v as? [String: Any] else { continue }
-                dict[k] = m
+                dict[k] = Self.identityMap(m, revision: data[k + ".u"])
             }
             onChange(dict)
         }
@@ -324,7 +333,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
 
                 let idx = (period - 1) * columns + day
                 if assigned.indices.contains(idx) {
-                    assigned[idx] = decodeCourseMap(m)
+                    assigned[idx] = decodeCourseMap(Self.identityMap(m, revision: data[key + ".u"]), record: "\(uid)|\(term.storageKey)|\(key)")
                 }
                 if let color = m["colorKey"] as? String {
                     let loc = SlotLocation(day: day, period: period)
@@ -346,8 +355,7 @@ func startListener(onChange: @escaping ([String: [String:Any]]) -> Void) -> List
 
 final class timetable: UIViewController,
                        CourseListViewControllerDelegate,
-                       CourseDetailViewControllerDelegate,
-                       BannerViewDelegate {
+                       CourseDetailViewControllerDelegate {
     func courseDetail(_ vc: CourseDetailViewController,
                       didUpdate counts: AttendanceCounts,
                       for course: Course,
@@ -394,11 +402,13 @@ final class timetable: UIViewController,
     private let contentView = UIView()
 
     // ===== AdMob =====
-    private let adContainer = UIView()
-    private var bannerView: BannerView?
-    private var lastBannerWidth: CGFloat = 0
-    private var didLoadBannerOnce = false
-    private var adContainerHeight: NSLayoutConstraint?
+    // 下の「AIに質問する」入力欄(以前は、広告の帯があった場所)
+    private var settingsDrawer: (UINavigationController, UIControl)?
+    private let askBarContainer = AskBarPassThroughView()
+    private let askBar = TimetableAskBar()
+    private var askBarHeight: NSLayoutConstraint?
+    private var askSelecting = false
+    private var askOverlays: [UIView] = []
     private var scrollBottomConstraint: NSLayoutConstraint?
     private var centerMinWidth: NSLayoutConstraint?
 
@@ -409,8 +419,6 @@ final class timetable: UIViewController,
     private let centerBox = UIView()                  // ← 追加：学期ボタンを中央配置する箱
     private let titleLabel = UILabel()                // （使わない：追加しない）
     private let rightStack = UIStackView()
-    private let rightA = UIButton(type: .system)      // 単
-    private let tasksButton = UIButton(type: .system) // ← 追加：「課」
     private let rightB = UIButton(type: .system)      // 共有/保存
     private let rightC = UIButton(type: .system)      // 設定
     private var headerTopConstraint: NSLayoutConstraint!
@@ -446,7 +454,7 @@ final class timetable: UIViewController,
     private var lastDaysCount = 5
     private var lastPeriodsCount = 5
 
-    private var assigned: [Course?] = Array(repeating: nil, count: 25)
+    private var assigned: [Course?] = Array(repeating: nil, count: 25) { didSet { invalidateWarmDetails() } }
 
     // Layout constants
     private let spacing: CGFloat = 1
@@ -534,7 +542,7 @@ final class timetable: UIViewController,
         scrollView.backgroundColor = bg
         contentView.backgroundColor = bg
         gridContainerView.backgroundColor = bg
-        adContainer.backgroundColor = bg
+        askBarContainer.backgroundColor = .clear
     }
 
     
@@ -584,7 +592,14 @@ final class timetable: UIViewController,
             let k = "\(onlineKeyPrefix).d\(day)"
             if let data = UserDefaults.standard.data(forKey: k),
                let arr = try? JSONDecoder().decode([Course].self, from: data) {
-                onlineSlots[day] = arr
+                onlineSlots[day] = arr.enumerated().map { index, value in
+                    var course = value
+                    if course.localCourseUUID == nil {
+                        course.localCourseUUID = PersistentCourseIdentity.uuid(record: "\(AppBackend.currentUID ?? "local")|\(k)|item:\(index)")
+                    }
+                    return course
+                }
+                saveOnline(for: day)
             } else {
                 onlineSlots[day] = []
             }
@@ -624,7 +639,7 @@ final class timetable: UIViewController,
                   let parsed = parseCellKey(absKey),
                   parsed.period == 0 else { continue }
 
-            let course = decodeCourseMap(m)
+            let course = decodeCourseMap(m, record: "\(remoteStore?.uid ?? AppBackend.currentUID ?? "local")|\(currentTerm.storageKey)|\(absKey)")
             var arr = onlineSlots[parsed.day] ?? []
             let k = onlineCourseKey(course)
             if let i = arr.firstIndex(where: { onlineCourseKey($0) == k }) {
@@ -877,6 +892,10 @@ final class timetable: UIViewController,
         let day       = sender.tag % 100
         let list      = onlineSlots[day] ?? []
 
+        if askSelecting {
+            if slotIndex < list.count { handleAskPick(QuickAskCourse(course: list[slotIndex], location: SlotLocation(day: day, period: 0))) } else { askBar.nudge() }
+            return
+        }
         if slotIndex < list.count {
             // ── 既存コース：通常コマと同じく詳細画面へ直接遷移 ──
             let course = list[slotIndex]
@@ -931,6 +950,8 @@ final class timetable: UIViewController,
         if let uid = overrideUID, !uid.isEmpty {
             return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey, term: currentTerm)
         }
+        // Anonymous AI sessions do not opt into legacy timetable cloud sync.
+        guard Auth.auth().currentUser?.isAnonymous != true else { return nil }
         let uid = AuthManager.shared.currentUID ?? UserDefaults.standard.string(forKey: "auth.uid")
         guard let uid, !uid.isEmpty else { return nil }
         return TimetableRemoteStore(uid: uid, termID: currentTerm.storageKey, term: currentTerm)
@@ -945,7 +966,7 @@ final class timetable: UIViewController,
         } catch { print("Save error:", error) }
         
         // === 共有（App Group）へミラー ===
-        if let g = UserDefaults(suiteName: "group.jp.forta.Aogaku"),
+        if let g = UserDefaults(suiteName: APP_GROUP_ID),
            let data = try? JSONEncoder().encode(assigned) {
             g.set(data, forKey: "tt.assigned.\(currentTerm.storageKey)")
             g.set(dayLabels.count,     forKey: "tt.days")
@@ -972,7 +993,14 @@ final class timetable: UIViewController,
         let key = term.storageKey
         if let data = UserDefaults.standard.data(forKey: key),
            let loaded = try? JSONDecoder().decode([Course?].self, from: data) {
-            assigned = loaded
+            assigned = loaded.enumerated().map { index, value in
+                guard var course = value else { return nil }
+                if course.localCourseUUID == nil {
+                    course.localCourseUUID = PersistentCourseIdentity.uuid(record: "\(AppBackend.currentUID ?? "local")|\(key)|slot:\(index)")
+                }
+                return course
+            }
+            if let encoded = try? JSONEncoder().encode(assigned) { UserDefaults.standard.set(encoded, forKey: key) }
         } else {
             assigned = Array(repeating: nil, count: dayLabels.count * periodLabels.count)
         }
@@ -982,6 +1010,7 @@ final class timetable: UIViewController,
     // MARK: - ViewOnly UI
     private func applyViewOnlyUI() {
         guard isViewLoaded else { return }
+        updateAskBarVisibility()
         if viewOnly {
             navigationItem.rightBarButtonItems = nil       // 右上ボタン群を非表示
             (view.viewWithTag(9001) as? UIView)?.isHidden = true // もしまとめビューがあれば隠す
@@ -1124,7 +1153,7 @@ final class timetable: UIViewController,
                     if self.remoteHashes[absKey] == remoteH { continue } // 変化なしはスキップ
                     self.remoteHashes[absKey] = remoteH
 
-                    let course = decodeCourseMap(m)
+                    let course = decodeCourseMap(m, record: "\(store.uid)|\(store.term.storageKey)|\(absKey)")
                     let color  = m["colorKey"] as? String
 
                     if parsed.period == 0 {
@@ -1269,10 +1298,7 @@ final class timetable: UIViewController,
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.saveAssigned() }
 
-        setupAdBanner()
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(onAdMobReady),
-            name: .adMobReady, object: nil)
+        setupAskBar()
         applyViewOnlyUI() // ← 最後に反映
         mirrorForWidget()
     }
@@ -1350,14 +1376,13 @@ final class timetable: UIViewController,
         if centerMinWidth?.constant != need {
             centerMinWidth?.constant = need
         }*/
-        
-        loadBannerIfNeeded()
     }
 
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
+        scheduleDetailWarmup()
         startNowTicker()                     // 追加
         updateNowHighlight()                 // 追加（すぐ反映）
         //debugPrintAllFontNames()
@@ -1366,9 +1391,7 @@ final class timetable: UIViewController,
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         nowTimer?.invalidate()               // 追加
-    }
-    @objc private func onAdMobReady() {
-        loadBannerIfNeeded()
+        endAskSelection()
     }
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
@@ -1567,22 +1590,6 @@ final class timetable: UIViewController,
         return dst
     }
 
-    private func loadBannerIfNeeded() {
-        guard let bv = bannerView else { return }
-        let safeWidth = view.safeAreaLayoutGuide.layoutFrame.width
-        if safeWidth <= 0 { return }
-        let useWidth = max(320, floor(safeWidth))
-        if abs(useWidth - lastBannerWidth) < 0.5 { return }
-        lastBannerWidth = useWidth
-        let size = makeAdaptiveAdSize(width: useWidth)
-        adContainerHeight?.constant = size.size.height
-        updateInsetsForBanner(height: size.size.height)
-        view.layoutIfNeeded()
-        guard size.size.height > 0 else { return }
-        if !CGSizeEqualToSize(bv.adSize.size, size.size) { bv.adSize = size }
-        if !didLoadBannerOnce { didLoadBannerOnce = true; bv.load(Request()) }
-    }
-
     private func normalizeAssigned() {
         let need = periodLabels.count * dayLabels.count
         if assigned.count < need {
@@ -1608,17 +1615,6 @@ final class timetable: UIViewController,
     }
 
     // MARK: - Header
-    
-    @objc private func tapTasks() {
-        let vc = ClassDayCalendarViewController()
-        if let nav = navigationController {
-            nav.pushViewController(vc, animated: true)
-        } else {
-            let nav = UINavigationController(rootViewController: vc)
-            nav.modalPresentationStyle = .fullScreen
-            present(nav, animated: true)
-        }
-    }
     
     private func buildHeader() {
         // Header container
@@ -1660,12 +1656,7 @@ final class timetable: UIViewController,
             b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
 
-        // --- 単 / 暦 ---
-        configureFlat(rightA, title: "単")
-        configureFlat(tasksButton, title: "暦")
-        rightA.addTarget(self, action: #selector(tapRightA), for: .touchUpInside)
-        tasksButton.addTarget(self, action: #selector(tapTasks), for: .touchUpInside)
-
+        // 単位・学事暦・シラバス検索は、設定(歯車)の中に仕舞った。
         // --- 共有 / 設定 --- アイコン用（同じ contentInsets でテキスト系と均一に）
         func configureIcon(_ b: UIButton, systemName: String) {
             var cfg = UIButton.Configuration.plain()
@@ -1679,23 +1670,23 @@ final class timetable: UIViewController,
             b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
         configureIcon(rightB, systemName: "square.and.arrow.up") // 共有
-        configureIcon(rightC, systemName: "gearshape")           // 設定
+        configureIcon(rightC, systemName: "line.3.horizontal")   // 設定(右から出る)
         rightB.addTarget(self, action: #selector(tapRightB), for: .touchUpInside)
         rightC.addTarget(self, action: #selector(tapRightC), for: .touchUpInside)
 
-        // --- 並び順：学期 → 単 → 暦 → 共有 → 設定（均一8pt間隔）---
+        // --- 並び順：学期 → (余白) → 共有 → 設定 ---
         headerBar.spacing = 8
         headerBar.addArrangedSubview(leftButton)
-        headerBar.setCustomSpacing(16, after: leftButton)
-        headerBar.addArrangedSubview(rightA)
-        headerBar.addArrangedSubview(tasksButton)
+        let headerSpacer = UIView()
+        headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        headerBar.addArrangedSubview(headerSpacer)
         headerBar.addArrangedSubview(rightB)
         headerBar.addArrangedSubview(rightC)
 
 
 
         // 左寄せを優先
-        [leftButton, rightA, tasksButton, rightB, rightC].forEach {
+        [leftButton, rightB, rightC].forEach {
             $0.setContentHuggingPriority(.required, for: .horizontal)
             $0.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
@@ -2094,6 +2085,37 @@ final class timetable: UIViewController,
     }
 
     // MARK: - Detail / List
+    // MARK: - AIタブとの連携
+    /// 今の学期の時間割(授業とコマ)。AIタブが、質問を、どの授業に振るかを決めるために使う。
+    func quickAskEntries() -> (entries: [QuickAskCourse], term: TermKey) {
+        _ = view   // まだ開かれていないタブでも、時間割を読み込ませる
+        let cols = dayLabels.count
+        let entries = assigned.indices.compactMap { TimetableAskSelection.entry(at: $0, assigned: assigned, columns: cols) }
+        return (entries, currentTerm)
+    }
+
+    /// AIタブから、授業の詳細画面(AIハックのチャット)を、指定の回で開く。text や photos があれば、そのまま送る。
+    func presentCourseChat(_ entry: QuickAskCourse, dayID: Int, text: String, photos: [CapturedPhoto], from presenter: UIViewController) {
+        // チャットだけを使うので、友だち・課題・レビュー・色の変更など、裏で読み込むものは省く(開くのを軽くする)。
+        let vc = CourseDetailViewController(course: entry.course, location: entry.location, term: currentTerm,
+                                            showsAttendanceControls: false, allowsCourseManagement: false,
+                                            showsEnrolledFriends: false, showsMoodleAssignments: false,
+                                            showsReview: false, showsLectureNotes: true)
+        vc.delegate = self
+        vc.modalPresentationStyle = .pageSheet
+        if let sheet = vc.sheetPresentationController { sheet.detents = [.large()]; sheet.selectedDetentIdentifier = .large; sheet.prefersGrabberVisible = true }
+        // 授業の一覧を経由せず、すぐチャットを開く: 先に画面を読み込み、動きなしで出す。
+        // 画面を出す前に、出る大きさに合わせて、チャットまで組み立てておく(出たあとに、位置が動いたり、一覧が見えたりしない)。
+        vc.view.frame = (presenter.view.window ?? presenter.view).bounds
+        vc.loadViewIfNeeded()
+        vc.startAIChat(dayID: dayID, text: text, photos: photos)
+        vc.view.layoutIfNeeded()
+        // 下からせり上がる標準の動き(奥行きが出る)。キーボードも、同時に上げ始める。
+        presenter.present(vc, animated: true) { vc.showChatKeyboardIfNeeded() }
+        vc.showChatKeyboardIfNeeded()
+        if vc.view.window == nil { DispatchQueue.main.async { vc.showChatKeyboardIfNeeded() } }
+    }
+
     private func presentCourseDetail(_ course: Course, at loc: SlotLocation) {
         // 既存のシート（前の授業詳細など）が残っていたら先に閉じる
         if let existing = presentedViewController {
@@ -2102,7 +2124,7 @@ final class timetable: UIViewController,
             }
             return
         }
-        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm, showsReview: true, showsLectureNotes: true)
+        let vc = takeWarmDetail(course, at: loc)
         vc.delegate = self
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController {
@@ -2114,7 +2136,53 @@ final class timetable: UIViewController,
             }
             sheet.prefersGrabberVisible = true
         }
-        present(vc, animated: true)
+        present(vc, animated: true) { [weak self] in self?.scheduleDetailWarmup() }
+    }
+
+    // MARK: - 授業の詳細画面の先読み
+    // アプリを開いたあと、時間割の授業の詳細画面を、裏で1つずつ作っておく(ポータルも先に読み込まれる)。
+    // コマを押したときは、できている画面をそのまま出すので、待たない。
+    private var warmDetails: [String: (vc: CourseDetailViewController, at: Date)] = [:]
+    private var warmupScheduled = false
+
+    private func warmKey(_ course: Course, _ loc: SlotLocation) -> String {
+        "\(course.id)|\(course.title)|\(loc.day)|\(loc.period)|\(currentTerm.year)\(currentTerm.semester.rawValue)"
+    }
+
+    private func makeDetail(_ course: Course, at loc: SlotLocation) -> CourseDetailViewController {
+        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm, showsReview: true, showsLectureNotes: true)
+        vc.view.frame = (view.window ?? view).bounds
+        vc.loadViewIfNeeded()
+        return vc
+    }
+
+    private func takeWarmDetail(_ course: Course, at loc: SlotLocation) -> CourseDetailViewController {
+        if let warm = warmDetails.removeValue(forKey: warmKey(course, loc)), Date().timeIntervalSince(warm.at) < 600 { return warm.vc }
+        return makeDetail(course, at: loc)
+    }
+
+    private func invalidateWarmDetails() {
+        guard !warmDetails.isEmpty else { return }
+        warmDetails.removeAll()
+        scheduleDetailWarmup()
+    }
+
+    /// 画面が落ち着いてから、まだ作っていない授業を、1つずつ作る(同時に作らず、操作の邪魔をしない)。
+    func scheduleDetailWarmup(after delay: TimeInterval = 1.5) {
+        guard !warmupScheduled, !viewOnly else { return }
+        warmupScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.warmupScheduled = false
+            self?.warmNextDetail()
+        }
+    }
+
+    private func warmNextDetail() {
+        guard isViewLoaded, view.window != nil, presentedViewController == nil, !askSelecting else { return }
+        let entries = quickAskEntries().entries
+        guard let next = entries.first(where: { warmDetails[warmKey($0.course, $0.location)] == nil }) else { return }
+        warmDetails[warmKey(next.course, next.location)] = (makeDetail(next.course, at: next.location), Date())
+        scheduleDetailWarmup(after: 0.4)
     }
     
     // MARK: - Online (OD) helpers
@@ -2186,6 +2254,11 @@ final class timetable: UIViewController,
         let col  = sender.tag % cols
         let loc = SlotLocation(day: col, period: row + 1)
 
+        // 「AIに質問する」で、コマを選んでいるとき: 授業のあるマスなら、その授業のチャットへ。空きなら、揺らして知らせる。
+        if askSelecting {
+            if let entry = TimetableAskSelection.entry(at: idx, assigned: assigned, columns: cols) { handleAskPick(entry) } else { askBar.nudge() }
+            return
+        }
         if viewOnly { return } // 読み取り専用時は編集不可
         guard assigned.indices.contains(idx) else { return }  // 設定変更などでグリッドサイズが変わった直後の古いタグ対策
         if let course = assigned[idx] { presentCourseDetail(course, at: loc); return }
@@ -2395,62 +2468,98 @@ final class timetable: UIViewController,
     
     
 
-    // MARK: - AdMob
-    private func setupAdBanner() {
-        adContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(adContainer)
-
-        adContainerHeight = adContainer.heightAnchor.constraint(equalToConstant: 0)
+    // MARK: - AIに質問する(時間割から、聞きたい授業のコマを選ぶ)
+    private func setupAskBar() {
+        askBarContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(askBarContainer)
+        askBar.translatesAutoresizingMaskIntoConstraints = false
+        askBarContainer.addSubview(askBar)
+        askBar.addTarget(self, action: #selector(askBarTapped), for: .touchUpInside)
+        let height = askBarContainer.heightAnchor.constraint(equalToConstant: 64)
+        askBarHeight = height
         NSLayoutConstraint.activate([
-            adContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            adContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            adContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            adContainerHeight!
+            askBarContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            askBarContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            askBarContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            height,
+            askBar.leadingAnchor.constraint(equalTo: askBarContainer.leadingAnchor, constant: 16),
+            askBar.trailingAnchor.constraint(equalTo: askBarContainer.trailingAnchor, constant: -16),
+            askBar.topAnchor.constraint(equalTo: askBarContainer.topAnchor, constant: 8),
+            askBar.bottomAnchor.constraint(equalTo: askBarContainer.bottomAnchor, constant: -8)
         ])
+        // 時間割は、バーの裏まで広げる(バーの周りは透明で、時間割が見える)。最下部までスクロールすると、バーに隠れない。
+        view.bringSubviewToFront(askBarContainer)
+        updateAskBarVisibility()
+    }
 
-        scrollBottomConstraint?.isActive = false
-        scrollBottomConstraint = scrollView.bottomAnchor.constraint(equalTo: adContainer.topAnchor)
-        scrollBottomConstraint?.isActive = true
-        
-        // RCで広告を止めているときはUIも消す
-        guard AdsConfig.enabled else {
-            adContainer.isHidden = true
-            adContainerHeight?.constant = 0
-            return
+    /// 友だちの時間割(閲覧のみ)では、出さない。
+    private func updateAskBarVisibility() {
+        askBarContainer.isHidden = viewOnly
+        askBarHeight?.constant = viewOnly ? 0 : 64
+        scrollView.contentInset.bottom = viewOnly ? 0 : 64
+        scrollView.verticalScrollIndicatorInsets.bottom = viewOnly ? 0 : 64
+    }
+
+    @objc private func askBarTapped() {
+        if askSelecting { endAskSelection(); return }
+        let hasCourse = assigned.contains { $0 != nil } || onlineSlots.values.contains { !$0.isEmpty }
+        guard hasCourse else {
+            let alert = UIAlertController(title: "授業が登録されていません", message: "時間割に授業を登録すると、その授業のことを聞けます。", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default)); present(alert, animated: true); return
         }
+        beginAskSelection()
+    }
 
-        let bv = BannerView()
-        bv.translatesAutoresizingMaskIntoConstraints = false
-        bv.adUnitID = AdsConfig.bannerUnitID     // ← RCの本番/テストIDを自動選択
-        bv.rootViewController = self
-        bv.adSize = AdSizeBanner
-        bv.delegate = self
-        adContainer.addSubview(bv)
-        NSLayoutConstraint.activate([
-            bv.leadingAnchor.constraint(equalTo: adContainer.leadingAnchor),
-            bv.trailingAnchor.constraint(equalTo: adContainer.trailingAnchor),
-            bv.topAnchor.constraint(equalTo: adContainer.topAnchor),
-            bv.bottomAnchor.constraint(equalTo: adContainer.bottomAnchor)
-        ])
-        self.bannerView = bv
+    /// 聞きたい授業を、時間割から選ぶ状態にする。授業のあるマスは枠で囲み、空きは薄くする。いまの授業(の付近)のマスには、目印をつける。
+    private func beginAskSelection() {
+        askSelecting = true
+        askBar.setMode(.selecting)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let current = QuickAskRouting.timeMatch(quickAskEntries().entries, now: Date())
+        let cols = dayLabels.count
+        for (index, button) in slotButtons.enumerated() where assigned.indices.contains(index) {
+            let overlay = UIView(frame: button.bounds)
+            overlay.isUserInteractionEnabled = false
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlay.layer.cornerRadius = button.layer.cornerRadius
+            if assigned[index] == nil {
+                // 空きコマを薄く見せる。ダークモードでは、背景(黒)をかぶせると真っ黒になるので、灰色をかぶせる。
+                overlay.backgroundColor = UIColor { trait in
+                    trait.userInterfaceStyle == .dark ? UIColor(white: 0.2, alpha: 0.55) : UIColor.systemBackground.withAlphaComponent(0.65)
+                }
+            } else {
+                overlay.layer.borderWidth = 2.5
+                overlay.layer.borderColor = UIColor(red: 0.04, green: 0.42, blue: 0.28, alpha: 1).cgColor
+                if let current, current.entry.location.day + (current.entry.location.period - 1) * cols == index {
+                    let badge = UILabel()
+                    badge.text = current.phase == .inSession ? "授業中" : (current.phase == .startingSoon ? "まもなく" : "終了直後")
+                    badge.font = .systemFont(ofSize: 11, weight: .bold)
+                    badge.textColor = .white
+                    badge.backgroundColor = UIColor(red: 0.04, green: 0.42, blue: 0.28, alpha: 1)
+                    badge.textAlignment = .center
+                    badge.layer.cornerRadius = 8; badge.clipsToBounds = true
+                    badge.frame = CGRect(x: 6, y: 6, width: 52, height: 18)
+                    overlay.addSubview(badge)
+                }
+            }
+            button.addSubview(overlay)
+            askOverlays.append(overlay)
+        }
     }
-    private func updateInsetsForBanner(height: CGFloat) {
-        var inset = scrollView.contentInset
-        inset.bottom = height
-        scrollView.contentInset = inset
-        scrollView.verticalScrollIndicatorInsets.bottom = height
+
+    private func endAskSelection() {
+        guard askSelecting else { return }
+        askSelecting = false
+        askBar.setMode(.idle)
+        askOverlays.forEach { $0.removeFromSuperview() }
+        askOverlays.removeAll()
     }
-    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
-        let h = bannerView.adSize.size.height
-        adContainerHeight?.constant = h
-        updateInsetsForBanner(height: h)
-        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
-    }
-    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
-        adContainerHeight?.constant = 0
-        updateInsetsForBanner(height: 0)
-        UIView.animate(withDuration: 0.25) { self.view.layoutIfNeeded() }
-        print("Ad failed:", error.localizedDescription)
+
+    /// 選ばれた授業の、最新の回(今日が授業日なら今日、そうでなければ直近の回)のチャットを開く。キーボードも上がる。
+    private func handleAskPick(_ entry: QuickAskCourse) {
+        endAskSelection()
+        let dayID = QuickAskRouting.sessionDayID(for: entry, term: currentTerm, now: Date())
+        presentCourseChat(entry, dayID: dayID, text: "", photos: [], from: self)
     }
 
     // MARK: - Header actions
@@ -2502,13 +2611,6 @@ final class timetable: UIViewController,
     }
 
 
-    @objc private func tapRightA() {
-        let term = TermStore.loadSelected()
-        let vc = CreditsFullViewController(currentTerm: term)
-        let nav = UINavigationController(rootViewController: vc)
-        nav.modalPresentationStyle = .fullScreen
-        present(nav, animated: true)
-    }
     @objc private func tapRightB() {
         let action = UIAlertController(title: "時間割を保存 / 共有", message: nil, preferredStyle: .actionSheet)
         action.addAction(UIAlertAction(title: "写真に保存", style: .default) { [weak self] _ in
@@ -2522,9 +2624,73 @@ final class timetable: UIViewController,
         present(action, animated: true)
     }
     @objc private func tapRightC() {
-        let vc = TimetableSettingsViewController()
-        if let nav = navigationController { nav.pushViewController(vc, animated: true) }
-        else { let nav = UINavigationController(rootViewController: vc); present(nav, animated: true) }
+        guard settingsDrawer == nil else { return }
+        NotificationCenter.default.addObserver(self, selector: #selector(closeSettingsDrawer), name: .closeTimetableSettingsDrawer, object: nil)
+        let nav = UINavigationController(rootViewController: TimetableSettingsViewController())
+        let host: UIViewController = tabBarController ?? self
+        let dim = UIControl(frame: host.view.bounds)
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0)
+        dim.addTarget(self, action: #selector(closeSettingsDrawer), for: .touchUpInside)
+        host.view.addSubview(dim)
+        dim.frame = host.view.bounds
+        let width = min(dim.bounds.width * 0.86, 420)
+        // 画面の上(時計・バッテリー)を避けるため、入れ物の中で、ステータスバーの分だけ下げて置く。
+        let top = view.window?.safeAreaInsets.top ?? view.safeAreaInsets.top
+        // 入れ物の画面(ViewController)の中に載せる。こうしないと、ナビゲーションバーの高さが、中の画面に伝わらない。
+        let container = UIViewController()
+        let panel = container.view!
+        panel.frame = CGRect(x: dim.bounds.width, y: 0, width: width, height: dim.bounds.height)
+        panel.backgroundColor = .systemGroupedBackground
+        panel.layer.shadowOpacity = 0.25; panel.layer.shadowRadius = 12
+        host.addChild(container)
+        host.view.addSubview(panel)
+        container.didMove(toParent: host)
+        container.addChild(nav)
+        nav.view.frame = CGRect(x: 0, y: top, width: width, height: panel.bounds.height - top)
+        nav.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        panel.addSubview(nav.view)
+        nav.didMove(toParent: container)
+        settingsDrawer = (nav, dim)
+        panel.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(drawerPanned(_:))))
+        UIView.animate(withDuration: 0.28, delay: 0, options: .curveEaseOut) {
+            panel.frame.origin.x = dim.bounds.width - width
+            dim.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        }
+    }
+
+    /// 右へスワイプして閉じる(指に追従し、離したときに、十分動いていたか速ければ閉じる)。
+    @objc private func drawerPanned(_ g: UIPanGestureRecognizer) {
+        guard let (nav, dim) = settingsDrawer, let panel = nav.view.superview else { return }
+        let width = panel.bounds.width
+        let openX = dim.bounds.width - width
+        let dx = max(0, g.translation(in: dim).x)
+        switch g.state {
+        case .changed:
+            panel.frame.origin.x = openX + dx
+            dim.backgroundColor = UIColor.black.withAlphaComponent(0.3 * (1 - min(dx / width, 1)))
+        case .ended, .cancelled:
+            if dx > width * 0.35 || g.velocity(in: dim).x > 600 { closeSettingsDrawer() }
+            else {
+                UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: []) {
+                    panel.frame.origin.x = openX
+                    dim.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+                }
+            }
+        default: break
+        }
+    }
+
+    @objc private func closeSettingsDrawer() {
+        guard let (nav, dim) = settingsDrawer, let panel = nav.view.superview else { return }
+        settingsDrawer = nil
+        UIView.animate(withDuration: 0.22, delay: 0, options: .curveEaseIn, animations: {
+            panel.frame.origin.x = dim.bounds.width
+            dim.backgroundColor = .clear
+        }, completion: { _ in
+            let container = nav.parent
+            nav.willMove(toParent: nil); nav.view.removeFromSuperview(); nav.removeFromParent()
+            container?.willMove(toParent: nil); panel.removeFromSuperview(); container?.removeFromParent(); dim.removeFromSuperview()
+        })
     }
 
     // MARK: - Share / Save
@@ -2965,4 +3131,13 @@ extension timetable {
     
     
     
+}
+
+
+/// 自分以外の場所は、タッチを下の時間割に通す(丸いバーだけが押せる)。
+final class AskBarPassThroughView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
 }

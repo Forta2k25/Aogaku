@@ -1,0 +1,212 @@
+{
+  "projectId": "forta-aogaku",
+  "projectNumber": "505828754933",
+  "readAt": "2026-10-06T10:18:30.958Z",
+  "records": [
+    {
+      "name": "preDeleteCleanup",
+      "environment": "GEN_2",
+      "updateTime": "2025-10-15T02:48:31.676722626Z",
+      "runtime": "nodejs18",
+      "entryPoint": "preDeleteCleanup",
+      "codebase": "default",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-hash": "8e359aa8567b27e9d897c8ddded2962459072235"
+      },
+      "serviceAccount": "505828754933-compute@developer.gserviceaccount.com",
+      "availableMemory": "1024Mi",
+      "availableCpu": "1",
+      "timeoutSeconds": 540,
+      "maxInstanceCount": 20,
+      "ingressSettings": "ALLOW_ALL",
+      "secretBindings": [
+        {
+          "key": "IMPORT_API_KEY",
+          "projectId": "forta-aogaku",
+          "secret": "IMPORT_API_KEY",
+          "version": "2"
+        }
+      ],
+      "environmentVariableKeys": [
+        "EVENTARC_CLOUD_EVENT_SOURCE",
+        "FIREBASE_CONFIG",
+        "FUNCTION_SIGNATURE_TYPE",
+        "FUNCTION_TARGET",
+        "GCLOUD_PROJECT",
+        "LOG_EXECUTION_ID"
+      ],
+      "eventTrigger": null
+    },
+    {
+      "name": "deleteAccountServerSide",
+      "environment": "GEN_2",
+      "updateTime": "2025-10-15T02:48:31.736325128Z",
+      "runtime": "nodejs18",
+      "entryPoint": "deleteAccountServerSide",
+      "codebase": "default",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-hash": "8e359aa8567b27e9d897c8ddded2962459072235"
+      },
+      "serviceAccount": "505828754933-compute@developer.gserviceaccount.com",
+      "availableMemory": "1024Mi",
+      "availableCpu": "1",
+      "timeoutSeconds": 540,
+      "maxInstanceCount": 20,
+      "ingressSettings": "ALLOW_ALL",
+      "secretBindings": [
+        {
+          "key": "IMPORT_API_KEY",
+          "projectId": "forta-aogaku",
+          "secret": "IMPORT_API_KEY",
+          "version": "2"
+        }
+      ],
+      "environmentVariableKeys": [
+        "EVENTARC_CLOUD_EVENT_SOURCE",
+        "FIREBASE_CONFIG",
+        "FUNCTION_SIGNATURE_TYPE",
+        "FUNCTION_TARGET",
+        "GCLOUD_PROJECT",
+        "LOG_EXECUTION_ID"
+      ],
+      "eventTrigger": null
+    },
+    {
+      "name": "onAuthUserDelete",
+      "environment": "GEN_1",
+      "updateTime": "2025-10-15T02:48:18.951Z",
+      "runtime": "nodejs18",
+      "entryPoint": "onAuthUserDelete",
+      "codebase": "default",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-hash": "10f25f5c7f0dfefb6c865e0786a25c437f8bb6a3"
+      },
+      "serviceAccount": "forta-aogaku@appspot.gserviceaccount.com",
+      "availableMemory": "256M",
+      "timeoutSeconds": 60,
+      "maxInstanceCount": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "secretBindings": [],
+      "environmentVariableKeys": [
+        "EVENTARC_CLOUD_EVENT_SOURCE",
+        "FIREBASE_CONFIG",
+        "GCLOUD_PROJECT"
+      ],
+      "eventTrigger": {
+        "eventType": "providers/firebase.auth/eventTypes/user.delete",
+        "eventFilters": [
+          {
+            "attribute": "resource",
+            "value": "projects/forta-aogaku"
+          }
+        ],
+        "retryPolicy": "RETRY_POLICY_DO_NOT_RETRY",
+        "service": "firebaseauth.googleapis.com"
+      }
+    },
+    {
+      "name": "askCourseAI",
+      "environment": "GEN_1",
+      "updateTime": "2026-09-17T08:29:26.098Z",
+      "runtime": "nodejs22",
+      "entryPoint": "askCourseAI",
+      "codebase": "default",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-hash": "5b2cc8d82a614c16d55eaae79ff0d6ad2f0991d8"
+      },
+      "serviceAccount": "forta-aogaku@appspot.gserviceaccount.com",
+      "availableMemory": "256M",
+      "timeoutSeconds": 120,
+      "ingressSettings": "ALLOW_ALL",
+      "secretBindings": [
+        {
+          "key": "OPENAI_API_KEY",
+          "projectId": "505828754933",
+          "secret": "OPENAI_API_KEY",
+          "version": "1"
+        }
+      ],
+      "environmentVariableKeys": [
+        "EVENTARC_CLOUD_EVENT_SOURCE",
+        "FIREBASE_CONFIG",
+        "GCLOUD_PROJECT"
+      ],
+      "eventTrigger": null
+    },
+    {
+      "name": "transcribeLectureAudio",
+      "environment": "GEN_1",
+      "updateTime": "2026-09-17T08:29:10.934Z",
+      "runtime": "nodejs22",
+      "entryPoint": "transcribeLectureAudio",
+      "codebase": "default",
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-hash": "eb0bb67ce2ff72d0dc3a908ad5b1f0fd6b71af6e",
+        "deployment-tool": "cli-firebase"
+      },
+      "serviceAccount": "forta-aogaku@appspot.gserviceaccount.com",
+      "availableMemory": "512M",
+      "timeoutSeconds": 540,
+      "ingressSettings": "ALLOW_ALL",
+      "secretBindings": [
+        {
+          "key": "GROQ_API_KEY",
+          "projectId": "505828754933",
+          "secret": "GROQ_API_KEY",
+          "version": "1"
+        },
+        {
+          "key": "OPENAI_API_KEY",
+          "projectId": "505828754933",
+          "secret": "OPENAI_API_KEY",
+          "version": "1"
+        }
+      ],
+      "environmentVariableKeys": [
+        "EVENTARC_CLOUD_EVENT_SOURCE",
+        "FIREBASE_CONFIG",
+        "GCLOUD_PROJECT"
+      ],
+      "eventTrigger": null
+    },
+    {
+      "name": "generateReactionPaper",
+      "environment": "GEN_1",
+      "updateTime": "2026-09-17T08:29:05.684Z",
+      "runtime": "nodejs22",
+      "entryPoint": "generateReactionPaper",
+      "codebase": "default",
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-hash": "5b2cc8d82a614c16d55eaae79ff0d6ad2f0991d8",
+        "deployment-tool": "cli-firebase"
+      },
+      "serviceAccount": "forta-aogaku@appspot.gserviceaccount.com",
+      "availableMemory": "256M",
+      "timeoutSeconds": 120,
+      "ingressSettings": "ALLOW_ALL",
+      "secretBindings": [
+        {
+          "key": "OPENAI_API_KEY",
+          "projectId": "505828754933",
+          "secret": "OPENAI_API_KEY",
+          "version": "1"
+        }
+      ],
+      "environmentVariableKeys": [
+        "EVENTARC_CLOUD_EVENT_SOURCE",
+        "FIREBASE_CONFIG",
+        "GCLOUD_PROJECT"
+      ],
+      "eventTrigger": null
+    }
+  ]
+}

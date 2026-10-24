@@ -1,0 +1,36 @@
+{
+  "id": "legacy-07",
+  "version": 1,
+  "split": "dev",
+  "familyId": "function-transformations",
+  "tags": [
+    "blackboard",
+    "vision"
+  ],
+  "images": [
+    "t7_far_board.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "この板書を説明して"
+  ],
+  "legacyCase": 7,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "g(x)=af(bx-c)+dを使う。横の変換はb≠0で倍率1/|b|、横移動c/b。cだけが移動量と断言しない。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "伸縮",
+    "平行移動",
+    "圧縮"
+  ],
+  "checks": [
+    {
+      "gate": "task_completion",
+      "kind": "includes",
+      "value": "af(bx-c)+d"
+    }
+  ]
+}

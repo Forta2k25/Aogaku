@@ -1,0 +1,30 @@
+{
+  "id": "legacy-03",
+  "version": 1,
+  "split": "dev",
+  "familyId": "worksheet-grammar",
+  "tags": [
+    "multiturn",
+    "worksheet"
+  ],
+  "images": [
+    "t1_worksheet.jpg"
+  ],
+  "context": [],
+  "questions": [
+    "解答作成して",
+    "問2だけもっと簡単に",
+    "問2もう一回説明して"
+  ],
+  "legacyCase": 3,
+  "rubric": {
+    "grounding": "画像にない設問・具体的事実を資料由来として作らない。",
+    "correctness": "実際の前応答を履歴へ渡しても、問2の元資料に根拠を置く。各ターンを個別に採点する。",
+    "task_completion": "読める対象について、今回の質問に具体的に答える。",
+    "uncertainty": "不確実さは必要箇所だけ明示し、読めない箇所を創作しない。"
+  },
+  "suggestionAnchors": [
+    "街並み",
+    "友達"
+  ]
+}

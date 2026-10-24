@@ -378,6 +378,13 @@ final class syllabus: UIViewController,
     }
 
     private func modelMatchesCurrentCriteria(_ item: SyllabusData) -> Bool {
+        // 端末の一覧に残っている、前の年度のシラバス(URLの YR= が古いもの)は出さない。
+        if let range = item.url.range(of: "YR="),
+           let year = Int(item.url[range.upperBound...].prefix(4)) {
+            let now = Calendar.current.dateComponents([.year, .month], from: Date())
+            let academicYear = (now.month ?? 4) >= 4 ? (now.year ?? year) : (now.year ?? year) - 1
+            if year < academicYear { return false }
+        }
         if let wanted = filterRegistrationType, !wanted.isEmpty {
             if registrationType(for: item.regNumber) != wanted { return false }
         }
@@ -671,6 +678,12 @@ final class syllabus: UIViewController,
         clearStatusMessageIfNeeded()
 
         if kw.isEmpty {
+            // 端末に授業の一覧(ローカル)があれば、そこから条件に合うものを一気に出す。
+            // 通信で1ページずつ取って絞ると、条件が厳しいほど、何ページも待つことになる。
+            if LocalSyllabusIndex.shared.isReady {
+                loadLocalFirstPage()
+                return
+            }
             data.removeAll()
             filteredData.removeAll()
             localOffset = 0

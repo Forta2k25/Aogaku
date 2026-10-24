@@ -16,6 +16,21 @@ service cloud.firestore {
   }
 }
 `;
+// 会話の購読だけを開けた、ひとつ前のルール(これが公開されていても、差分を見て更新できる)。
+const PREVIOUS = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 会話の履歴(文章だけ): 本人だけが、自分の分を読める(別の端末の発言を、すぐ受け取るための購読に使う)。
+    // 書き込みは、サーバーの関数(aiSaveMessages / aiDeleteMessages)だけ。ここからは、書けない。
+    match /aiChats/{uid}/offerings/{offeringId}/messages/{messageId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+    // それ以外は、これまでどおり、すべて拒否(AIの資料・利用量・授業・設定は、関数だけが触れる)。
+    match /{document=**} { allow read, write: if false; }
+  }
+}
+`;
 const stop = message => { console.error('STOP: ' + message); process.exit(1); };
 const token = () => execFileSync('gcloud', ['auth', 'print-access-token'], {encoding: 'utf8'}).trim();
 async function api(url) {
@@ -37,15 +52,27 @@ function diff(a, b) {
 function checkNewRules(text) {
   // 新しいルールが、意図した範囲だけを開けていることを確かめる(会話のメッセージを、本人が読むだけ)。
   const allows = lines(text).filter(l => /allow\s+(read|write|get|list|create|update|delete)/.test(l)).map(l => l.trim());
-  const expected = ['allow read: if request.auth != null && request.auth.uid == uid;', 'allow write: if false;', 'allow read, write: if false; }'];
-  if (allows.length !== 3 || !allows.every((l, i) => l.includes(expected[i].replace(/ }$/, '')))) stop('新しいルールの許可の行が、想定と違います');
+  // 会話(本人だけが読む)に加えて、時間割の共有(誰でも1件だけ取得・本人だけが書く)と課題の同期(本人だけ)を開けている。
+  const expected = [
+    'allow read: if request.auth != null && request.auth.uid == uid;',
+    'allow write: if false;',
+    'allow get: if true;',
+    'allow list: if false;',
+    'allow create: if request.auth != null',
+    'allow update: if request.auth != null',
+    'allow delete: if request.auth != null && resource.data.ownerUid == request.auth.uid;',
+    'allow read, write: if request.auth != null && request.auth.uid == uid;',
+    'match /{document=**} { allow read, write: if false; }',
+  ];
+  if (allows.length !== expected.length || !allows.every((l, k) => l === expected[k])) stop('新しいルールの許可の行が、想定と違います');
+  if (!text.includes('match /sharedTimetables/{shareId}') || !text.includes('match /userAssignments/{uid}')) stop('共有・課題のルールが見つかりません');
   if (!text.includes('match /aiChats/{uid}/offerings/{offeringId}/messages/{messageId}')) stop('会話のルールが見つかりません');
 }
 async function plan() {
   const rules = fs.readFileSync(RULES, 'utf8');
   checkNewRules(rules);
   const live = await liveRules();
-  const state = live.trim() === BEFORE.trim() ? 'before' : live.trim() === rules.trim() ? 'after' : 'other';
+  const state = [BEFORE, PREVIOUS].some(x => live.trim() === x.trim()) ? 'before' : live.trim() === rules.trim() ? 'after' : 'other';
   console.log(`対象: ${PROJECT} / データベース ${DATABASE} / ルールだけ(インデックス・関数・ストレージ・既定のデータベースには触れません)`);
   if (state === 'other') stop('本番のルールが、想定の「全拒否」でも、新しいルールでもありません。誰かが変更した可能性があるため、止めます');
   if (state === 'after') console.log('すでに、新しいルールが公開されています(変更なし)');

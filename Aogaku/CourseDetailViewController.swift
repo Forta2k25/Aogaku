@@ -189,7 +189,7 @@ final class CourseDetailViewController: UIViewController {
         }
     }
     private var aiAuthHandle: AuthStateDidChangeListenerHandle?
-    /// チャットを開いている間、別の端末(Web)の会話が届いていないかを、ときどき確かめる。
+    /// チャットを開いている間、別の端末(Web)の会話が届いていないかを、3秒ごとに確かめる(確かめるのは、新しい分だけ)。
     private var conversationSyncTimer: Timer?
     private var aiSessionUID: String?
     private var aiMessageIDs: [Int: [String]] = [:]
@@ -1038,7 +1038,7 @@ final class CourseDetailViewController: UIViewController {
         syncConversationHistory()
         if showsLectureNotes {
             conversationSyncTimer?.invalidate()
-            conversationSyncTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            conversationSyncTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
                 guard let self, self.noteShowsChatDetail, self.aiReplyTasks.isEmpty else { return }   // 返信を作っている最中は、触らない
                 self.syncConversationHistory()
             }
@@ -3159,6 +3159,7 @@ final class CourseDetailViewController: UIViewController {
             noteChatPendingRecordingsBySession[noteChatCurrentSession] = []
             reloadNoteChatAttachments(animated: true)
             appendNoteChatMessages(messages)
+            syncConversationHistory(force: true)   // 送った発言を、すぐ、Webなど別の端末にも届ける(返信は、できたあとに届く)
             refreshAISuggestions()
             updateNoteChatSendButton(animated: true)
             SourceIngestionService.shared.resume(uid: context.ownerUID)

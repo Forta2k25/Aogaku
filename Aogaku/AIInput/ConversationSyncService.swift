@@ -7,13 +7,17 @@ final class ConversationSyncService {
     static let shared = ConversationSyncService()
     private var running: Set<String> = []
     private var lastRun: [String: Date] = [:]
+    /// 授業ごとに、取り込みずみの、いちばん新しい発言の時刻(ms)。2回目からは、そこから少し戻った所以降だけを取る(通信と読み取りを減らす)。
+    private var cursors: [String: Int] = [:]
+    /// 別の端末の、少し遅れて届いた発言(時計のずれ)も取りこぼさないための、戻す幅。
+    private static let overlapMs = 120_000
 
     /// 戻り値: 別の端末の発言を、新しく取り込んだか(true なら、画面を読み直す)。
     @discardableResult
     func sync(context: AIInputContext, force: Bool = false) async -> Bool {
         let key = context.ownerUID + "|" + context.courseKey
         guard !running.contains(key), !AppBackend.isOffline, AppBackend.currentUID == context.ownerUID else { return false }
-        if !force, let last = lastRun[key], Date().timeIntervalSince(last) < 4 { return false }
+        if !force, let last = lastRun[key], Date().timeIntervalSince(last) < 2 { return false }
         running.insert(key); lastRun[key] = Date()
         defer { running.remove(key) }
         let service = SourceIngestionService.shared
@@ -22,7 +26,7 @@ final class ConversationSyncService {
         do {
             // 1) サーバーの会話を取る(失敗したら、ここで終わり。何も変えない)
             var remote: [RemoteConversationRow] = []
-            var cursor: Int? = nil
+            var cursor: Int? = cursors[key].map { max($0 - Self.overlapMs, 0) }
             var guardPages = 0
             repeat {
                 var data: [String: Any] = ["context": context.request]
@@ -61,6 +65,8 @@ final class ConversationSyncService {
                 }
             }
             try store.markConversationSynced(uploaded: uploadedIDs, deleted: deletedIDs)
+            let newest = max(remote.map(\.createdAt).max() ?? 0, plan.upload.compactMap { $0.row["createdAt"] as? Int }.max() ?? 0)
+            if newest > 0 { cursors[key] = max(cursors[key] ?? 0, newest) }
             return added > 0
         } catch {
             return false   // 通信などに失敗しても、会話は続けられる

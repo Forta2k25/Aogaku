@@ -1,0 +1,11 @@
+{
+  "functions": [
+    {
+      "source": "build/production-conversations",
+      "codebase": "aogaku-ai-conversations",
+      "runtime": "nodejs22",
+      "ignore": ["node_modules", ".git", "*-debug.log", ".env.*", ".secret.*"],
+      "predeploy": ["node \"$PROJECT_DIR/scripts/deploy_production_conversations.cjs\" guard"]
+    }
+  ]
+}

@@ -38,9 +38,6 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
         super.viewDidLoad()
         title = "時間割の設定"
         view.backgroundColor = .systemGroupedBackground
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "閉じる", style: .plain, target: self, action: #selector(close)
-        )
 
         // 初期値
         periodsSeg.selectedSegmentIndex = [5,6,7].firstIndex(of: settings.periods) ?? 0
@@ -57,7 +54,6 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
 
         // 簡単レイアウト
         var rows: [UIView] = [
-            Self.sectionTitle("確認する"),
             Self.toolRow(symbol: "graduationcap", title: "単位", subtitle: "取った単位と、卒業までの残り", target: self, action: #selector(openCredits)),
             Self.toolRow(symbol: "calendar", title: "学事暦", subtitle: "授業日・休講・試験の日程", target: self, action: #selector(openCalendar)),
             Self.sectionTitle("表示"),
@@ -145,7 +141,7 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
         present(nav, animated: true)
     }
     @objc private func openCredits() { show(CreditsFullViewController(currentTerm: TermStore.loadSelected()), fullScreen: true) }
-    @objc private func openCalendar() { show(ClassDayCalendarViewController()) }
+    @objc private func openCalendar() { show(ClassDayCalendarViewController(), fullScreen: true) }
 
     @objc private func onAdsConfigUpdated() {
         // スタイル or ユニットIDが変わったら作り直し
@@ -372,7 +368,10 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
         NotificationCenter.default.post(name: .timetableSettingsChanged, object: nil)
     }
 
-    @objc private func close() { dismiss(animated: true) }
+    @objc private func close() {
+        if navigationController?.parent != nil { NotificationCenter.default.post(name: .closeTimetableSettingsDrawer, object: nil) }
+        else { dismiss(animated: true) }
+    }
 
     // MARK: - Debug
 
@@ -447,3 +446,6 @@ final class TimetableSettingsViewController: UIViewController, BannerViewDelegat
     #endif
 
 }
+
+
+extension Notification.Name { static let closeTimetableSettingsDrawer = Notification.Name("closeTimetableSettingsDrawer") }

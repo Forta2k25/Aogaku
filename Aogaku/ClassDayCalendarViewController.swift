@@ -3,9 +3,10 @@
 import UIKit
 import GoogleMobileAds
 
+/// 学事暦。Appleのカレンダーのように、月が縦に並んで、上下にスクロールする。
 final class ClassDayCalendarViewController: UIViewController,
                                             UICollectionViewDataSource,
-                                            UICollectionViewDelegate,
+                                            UICollectionViewDelegateFlowLayout,
                                             BannerViewDelegate {
 
     // MARK: - Model
@@ -18,11 +19,14 @@ final class ClassDayCalendarViewController: UIViewController,
     private let allowedEndMonth   = Calendar(identifier: .gregorian)
         .date(from: DateComponents(year: 2027, month: 3, day: 1))!
 
+    private var months: [Date] = []          // 各月の1日(日本時間)
+    private var didScrollToToday = false
 
-    private var currentMonth: Date = Date()
-    private var grid: [Date] = []
-
-    private let cal = Calendar(identifier: .gregorian)
+    private let cal: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        return c
+    }()
     private let tz = TimeZone(identifier: "Asia/Tokyo")!
 
     // UserDefaults
@@ -30,19 +34,13 @@ final class ClassDayCalendarViewController: UIViewController,
 
     // MARK: - UI
     private var collectionView: UICollectionView!
-
-    // 上部（年月・キャンパス・曜日）
-    private let monthLabel = UILabel()
     private let campusControl = UISegmentedControl(items: ["青山", "相模原"])
     private let weekdayStack = UIStackView()
-
-    // カレンダー直下ヒント
-    private let hintLabel = UILabel()
-
-    // 下部（凡例＆注意書き）
     private let legendColumn = UIStackView()
+    private let legendBackground = UIView()
+    private let yearOverview = YearOverviewView()
+    private var isShowingYearOverview = false
     private let disclaimerLabel = UILabel()
-    private let notAvailableLabel = UILabel()
 
     // MARK: - AdMob (Banner)
     private let adContainer = UIView()
@@ -56,40 +54,38 @@ final class ClassDayCalendarViewController: UIViewController,
         return currentOrientationAnchoredAdaptiveBanner(width: width)
     }
 
-    // MARK: - LifeCycle
+    // MARK: - Lifecycle
     override func viewDidLoad() {
         super.viewDidLoad()
-        
         title = "学事暦"
+        view.backgroundColor = .systemBackground
 
         // 左上の × ボタン（push/present どちらでも正しく閉じる）
-        navigationItem.leftBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .close,
-            target: self,
-            action: #selector(closeTapped)
-        )
+        navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(closeTapped))
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "今日", style: .plain, target: self, action: #selector(todayTapped))
 
-        setupTopArea()
-        setupCollection()
-        setupBottomArea()
-        setupAdBanner()
-        applyCalendarBackground()
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(onAdMobReady),
-            name: .adMobReady, object: nil)
-        addSwipeGestures()
+        // 月の一覧
+        var month = allowedStartMonth
+        while month <= allowedEndMonth {
+            months.append(month)
+            month = cal.date(byAdding: .month, value: 1, to: month)!
+        }
 
         // 前回のキャンパス選択を復元
         let defaults = UserDefaults.standard
         if defaults.object(forKey: lastCampusKey) != nil {
-            let saved = min(max(defaults.integer(forKey: lastCampusKey), 0), 1)
-            campusControl.selectedSegmentIndex = saved
+            campusControl.selectedSegmentIndex = min(max(defaults.integer(forKey: lastCampusKey), 0), 1)
         }
         campus = (campusControl.selectedSegmentIndex == 0) ? .aoyama : .sagamihara
 
-        setMonth(clampedToAllowed(firstDay(of: Date())))
-        reload()
+        setupTopArea()
+        setupCollection()
+        setupBottomArea()
+        setupYearOverview()
+        setupAdBanner()
+        NotificationCenter.default.addObserver(self, selector: #selector(onAdMobReady), name: .adMobReady, object: nil)
     }
+
     @objc private func closeTapped() {
         if let nav = navigationController, nav.viewControllers.first !== self {
             nav.popViewController(animated: true)
@@ -98,92 +94,71 @@ final class ClassDayCalendarViewController: UIViewController,
         }
     }
 
-    @objc private func onAdMobReady() {
-        loadBannerIfNeeded()
-    }
-
+    @objc private func onAdMobReady() { loadBannerIfNeeded() }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if let layout = collectionView.collectionViewLayout as? UICollectionViewFlowLayout {
-            // 7列×6行の真四角セル
-            let cols: CGFloat = 7, rows: CGFloat = 6
-            let cellW = collectionView.bounds.width / cols
-            let cellH = collectionView.bounds.height / rows
-            let side = floor(min(cellW, cellH))
-            layout.itemSize = CGSize(width: side, height: side)
+        collectionView.collectionViewLayout.invalidateLayout()
+        if !didScrollToToday, collectionView.bounds.width > 0 {
+            didScrollToToday = true
+            scrollToToday(animated: false)
         }
         loadBannerIfNeeded()
     }
-    
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle {
-            applyCalendarBackground()
-        }
-    }
-    
-    // ClassDayCalendarViewController.swift （クラス内どこか上の方）
-    private func calendarBGColor(for trait: UITraitCollection) -> UIColor {
-        // ダーク時のみ薄いグレーに。ライトは従来のシステム背景を維持
-        return (trait.userInterfaceStyle == .dark) ? .systemGray5 : .systemBackground
+
+    @objc private func todayTapped() {
+        if isShowingYearOverview { yearOverview.scrollToYear(of: Date(), animated: true) } else { scrollToToday(animated: true) }
     }
 
-    private func applyCalendarBackground() {
-        let bg = calendarBGColor(for: traitCollection)
-        view.backgroundColor = bg
-        collectionView?.backgroundColor = bg
-        adContainer.backgroundColor = bg
+    private func scrollToToday(animated: Bool) {
+        let today = cal.startOfDay(for: Date())
+        let thisMonth = cal.date(from: cal.dateComponents([.year, .month], from: today))!
+        let index = months.firstIndex(of: thisMonth) ?? (thisMonth < allowedStartMonth ? 0 : months.count - 1)
+        collectionView.layoutIfNeeded()
+        guard let attrs = collectionView.layoutAttributesForSupplementaryElement(ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: index)) else { return }
+        collectionView.setContentOffset(CGPoint(x: 0, y: max(0, attrs.frame.minY - 4)), animated: animated)
     }
-
 
     // MARK: - Top
     private func setupTopArea() {
-        // 年月ラベル（中央）
-        monthLabel.font = .boldSystemFont(ofSize: 20)
-        monthLabel.textAlignment = .center
-        view.addSubview(monthLabel)
-        monthLabel.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            monthLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            monthLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor)
-        ])
-
-        // キャンパス切替（中央・ワイド）
-        campusControl.selectedSegmentIndex = 0
+        // キャンパス切替
         campusControl.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
         campusControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
         campusControl.addTarget(self, action: #selector(campusChanged), for: .valueChanged)
         view.addSubview(campusControl)
         campusControl.translatesAutoresizingMaskIntoConstraints = false
-        let campusWidth = campusControl.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.7)
-        campusWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            campusControl.topAnchor.constraint(equalTo: monthLabel.bottomAnchor, constant: 12),
-            campusControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            campusWidth
+            campusControl.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            campusControl.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            campusControl.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
         ])
 
-        // 曜日ヘッダー（月〜日）
+        // 曜日ヘッダー（月〜日）。スクロールしても動かない。
         weekdayStack.axis = .horizontal
         weekdayStack.distribution = .fillEqually
-        weekdayStack.alignment = .center
-        weekdayStack.spacing = 0
-        ["月","火","水","木","金","土","日"].forEach { w in
+        ["月","火","水","木","金","土","日"].enumerated().forEach { i, w in
             let l = UILabel()
             l.text = w
-            l.font = .systemFont(ofSize: 13, weight: .semibold)
+            l.font = .systemFont(ofSize: 12, weight: .medium)
             l.textAlignment = .center
-            l.textColor = .secondaryLabel
+            l.textColor = i == 6 ? .tertiaryLabel : .secondaryLabel
             weekdayStack.addArrangedSubview(l)
         }
         view.addSubview(weekdayStack)
         weekdayStack.translatesAutoresizingMaskIntoConstraints = false
+        let separator = UIView()
+        separator.backgroundColor = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(separator)
         NSLayoutConstraint.activate([
             weekdayStack.topAnchor.constraint(equalTo: campusControl.bottomAnchor, constant: 12),
             weekdayStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             weekdayStack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            weekdayStack.heightAnchor.constraint(equalToConstant: 22)
+            weekdayStack.heightAnchor.constraint(equalToConstant: 20),
+            separator.topAnchor.constraint(equalTo: weekdayStack.bottomAnchor, constant: 4),
+            separator.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale)
         ])
     }
 
@@ -192,49 +167,26 @@ final class ClassDayCalendarViewController: UIViewController,
         let layout = UICollectionViewFlowLayout()
         layout.minimumLineSpacing = 0
         layout.minimumInteritemSpacing = 0
-        layout.sectionInset = .zero
+        layout.sectionInset = UIEdgeInsets(top: 0, left: 0, bottom: 16, right: 0)
 
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
-        collectionView.backgroundColor = calendarBGColor(for: traitCollection)
-        collectionView.contentInset = .zero
+        collectionView.backgroundColor = .systemBackground
         collectionView.dataSource = self
         collectionView.delegate = self
+        collectionView.alwaysBounceVertical = true
+        collectionView.showsVerticalScrollIndicator = false
         collectionView.register(DayCell.self, forCellWithReuseIdentifier: "DayCell")
+        collectionView.register(MonthHeaderView.self, forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader, withReuseIdentifier: "MonthHeader")
 
         view.addSubview(collectionView)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            collectionView.topAnchor.constraint(equalTo: weekdayStack.bottomAnchor),
+            collectionView.topAnchor.constraint(equalTo: weekdayStack.bottomAnchor, constant: 5),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
-        // 高さ＝幅×(6/7) でカレンダー直下の余白を詰める
-        collectionView.heightAnchor.constraint(equalTo: collectionView.widthAnchor, multiplier: 6.0/7.0).isActive = true
-
-        // 範囲外案内
-        notAvailableLabel.text = "この期間のカレンダーは表示できません（2025年4月〜2026年3月）"
-        notAvailableLabel.font = .systemFont(ofSize: 15)
-        notAvailableLabel.textAlignment = .center
-        notAvailableLabel.textColor = .secondaryLabel
-        notAvailableLabel.numberOfLines = 0
-        notAvailableLabel.isHidden = true
-        view.addSubview(notAvailableLabel)
-        notAvailableLabel.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            notAvailableLabel.topAnchor.constraint(equalTo: weekdayStack.bottomAnchor, constant: 32),
-            notAvailableLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            notAvailableLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
-        ])
-
-        // カレンダー直下ヒント（より近く）
-        hintLabel.text = "タップすると授業の有無と第何週目かが表示されます"
-        hintLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        hintLabel.textColor = .secondaryLabel
-        hintLabel.textAlignment = .center
-        view.addSubview(hintLabel)
-        hintLabel.translatesAutoresizingMaskIntoConstraints = false
     }
-    
+
     private func springWeekSuffix(for date: Date) -> String {
         if let n = springWeekNumber(for: date, campus: campus) {
             return "【第\(n)週目】"
@@ -302,121 +254,77 @@ final class ClassDayCalendarViewController: UIViewController,
     // MARK: - Bottom (Legend, Disclaimer, Ad)
     private func setupBottomArea() {
         legendColumn.axis = .vertical
-        legendColumn.alignment = .fill
-        legendColumn.spacing = 16 // 段間余裕
+        legendColumn.alignment = .center
+        legendColumn.spacing = 8
 
-        // 1段目
-        let row1 = UIStackView()
-        row1.axis = .horizontal
-        row1.alignment = .center
-        row1.spacing = 24
-        row1.distribution = .fillProportionally
-        row1.addArrangedSubview(legendSwatch(color: UIColor.systemBlue.withAlphaComponent(0.28), text: "授業日"))
-        row1.addArrangedSubview(legendSwatch(color: UIColor.systemYellow.withAlphaComponent(0.28), text: "休講日"))
-        row1.addArrangedSubview(legendUnderline(color: UIColor.systemGreen, text: "補講日"))
-
-        // 2段目（長期休業は統一色）
-        let row2 = UIStackView()
-        row2.axis = .horizontal
-        row2.alignment = .center
-        row2.spacing = 24
-        row2.distribution = .fillProportionally
-        row2.addArrangedSubview(legendSwatch(color: UIColor.systemPurple.withAlphaComponent(0.22), text: "試験期間"))
-        row2.addArrangedSubview(legendSwatch(color: UIColor.systemTeal.withAlphaComponent(0.22), text: "長期休業"))
-        row2.addArrangedSubview(legendDot(color: .systemRed, text: "今日"))
-
-        legendColumn.addArrangedSubview(row1)
-        legendColumn.addArrangedSubview(row2)
-        legendColumn.setCustomSpacing(8, after: row1) // 2段目を1段目から8ptだけ離す
+        let row1 = UIStackView(arrangedSubviews: [
+            legendCircle(fill: nil, ring: nil, dot: .systemBlue, text: "授業日"),
+            legendCircle(fill: UIColor.systemYellow.withAlphaComponent(0.4), ring: nil, dot: nil, text: "休講日"),
+            legendCircle(fill: nil, ring: .systemGreen, dot: nil, text: "補講日")
+        ])
+        let row2 = UIStackView(arrangedSubviews: [
+            legendCircle(fill: UIColor.systemPurple.withAlphaComponent(0.28), ring: nil, dot: nil, text: "試験期間"),
+            legendCircle(fill: UIColor.systemTeal.withAlphaComponent(0.28), ring: nil, dot: nil, text: "長期休業"),
+            legendCircle(fill: .systemRed, ring: nil, dot: nil, text: "今日")
+        ])
+        [row1, row2].forEach { $0.axis = .horizontal; $0.spacing = 20; $0.alignment = .center; legendColumn.addArrangedSubview($0) }
 
         view.addSubview(legendColumn)
         legendColumn.translatesAutoresizingMaskIntoConstraints = false
 
-        // 注意書き（バナーの“上”に移動）
-        disclaimerLabel.text = "※こちらのカレンダーは学事暦および指定の分類に基づいていますが、必ずしも授業実施日を保証するものではありません。"
+        disclaimerLabel.text = "※こちらのカレンダーは学事暦および指定の分類に基づいていますが、必ずしも授業実施日を保証するものではありません。日付をタップすると、授業の有無と第何週目かが表示されます。"
         disclaimerLabel.font = .systemFont(ofSize: 10)
-        disclaimerLabel.textColor = .secondaryLabel
+        disclaimerLabel.textColor = .tertiaryLabel
         disclaimerLabel.numberOfLines = 0
         view.addSubview(disclaimerLabel)
         disclaimerLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        // 先にヒント・凡例までを配置
-        NSLayoutConstraint.activate([
-            hintLabel.topAnchor.constraint(equalTo: collectionView.bottomAnchor, constant: 12),
-            hintLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            hintLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+        let barBackground = legendBackground
+        barBackground.backgroundColor = .secondarySystemBackground
+        barBackground.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(barBackground, belowSubview: legendColumn)
 
-            legendColumn.topAnchor.constraint(equalTo: hintLabel.bottomAnchor, constant: 12),
-            legendColumn.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            legendColumn.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
-        ])
-
-        // adContainer は最下部（setupAdBanner() で制約を完了）
-        // 注意書きはバナーの直上
         NSLayoutConstraint.activate([
+            collectionView.bottomAnchor.constraint(equalTo: barBackground.topAnchor),
+            barBackground.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            barBackground.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            barBackground.bottomAnchor.constraint(equalTo: view.bottomAnchor),   // 画面の一番下(ホームバーの所)まで、背景を広げる
+
+            legendColumn.topAnchor.constraint(equalTo: barBackground.topAnchor, constant: 12),
+            legendColumn.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            disclaimerLabel.topAnchor.constraint(equalTo: legendColumn.bottomAnchor, constant: 10),
             disclaimerLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            disclaimerLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            disclaimerLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
         ])
     }
 
-    private func legendSwatch(color: UIColor, text: String) -> UIStackView {
-        let swatch = UIView()
-        swatch.backgroundColor = color
-        swatch.layer.cornerRadius = 6
-        swatch.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            swatch.widthAnchor.constraint(equalToConstant: 24),
-            swatch.heightAnchor.constraint(equalToConstant: 16),
-        ])
+    /// 凡例の1つ(日付の見た目と同じ印と、名前)。
+    private func legendCircle(fill: UIColor?, ring: UIColor?, dot: UIColor?, text: String) -> UIStackView {
+        let mark = UIView()
+        mark.translatesAutoresizingMaskIntoConstraints = false
+        mark.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        mark.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        mark.layer.cornerRadius = 9
+        mark.backgroundColor = fill
+        if let ring { mark.layer.borderColor = ring.cgColor; mark.layer.borderWidth = 2 }
+        if let dot {
+            let d = UIView()
+            d.backgroundColor = dot
+            d.layer.cornerRadius = 3
+            d.translatesAutoresizingMaskIntoConstraints = false
+            mark.addSubview(d)
+            NSLayoutConstraint.activate([
+                d.widthAnchor.constraint(equalToConstant: 6), d.heightAnchor.constraint(equalToConstant: 6),
+                d.centerXAnchor.constraint(equalTo: mark.centerXAnchor), d.centerYAnchor.constraint(equalTo: mark.centerYAnchor)
+            ])
+        }
         let label = UILabel()
         label.text = text
-        label.font = .systemFont(ofSize: 14)
-        let stack = UIStackView(arrangedSubviews: [swatch, label])
-        stack.axis = .horizontal
-        stack.spacing = 8
-        stack.alignment = .center
-        return stack
-    }
-
-    private func legendUnderline(color: UIColor, text: String) -> UIStackView {
-        let container = UIView()
-        let underline = UIView()
-        underline.backgroundColor = color
-        underline.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(underline)
-        NSLayoutConstraint.activate([
-            underline.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            underline.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            underline.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            underline.heightAnchor.constraint(equalToConstant: 2),
-            container.widthAnchor.constraint(equalToConstant: 24),
-            container.heightAnchor.constraint(equalToConstant: 16)
-        ])
-        let label = UILabel()
-        label.text = text
-        label.font = .systemFont(ofSize: 14)
-        let stack = UIStackView(arrangedSubviews: [container, label])
-        stack.axis = .horizontal
-        stack.spacing = 8
-        stack.alignment = .center
-        return stack
-    }
-
-    private func legendDot(color: UIColor, text: String) -> UIStackView {
-        let dot = UIView()
-        dot.backgroundColor = color
-        dot.layer.cornerRadius = 7
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: 14),
-            dot.heightAnchor.constraint(equalToConstant: 14),
-        ])
-        let label = UILabel()
-        label.text = text
-        label.font = .systemFont(ofSize: 14)
-        let stack = UIStackView(arrangedSubviews: [dot, label])
-        stack.axis = .horizontal
-        stack.spacing = 8
+        label.font = .systemFont(ofSize: 13)
+        label.textColor = .secondaryLabel
+        let stack = UIStackView(arrangedSubviews: [mark, label])
+        stack.spacing = 6
         stack.alignment = .center
         return stack
     }
@@ -493,104 +401,132 @@ final class ClassDayCalendarViewController: UIViewController,
         print("Ad failed:", error.localizedDescription)
     }
 
-    // MARK: - Swipe & animation
-    private func addSwipeGestures() {
-        let left = UISwipeGestureRecognizer(target: self, action: #selector(didSwipeLeft))
-        left.direction = .left
-        let right = UISwipeGestureRecognizer(target: self, action: #selector(didSwipeRight))
-        right.direction = .right
-        collectionView.addGestureRecognizer(left)
-        collectionView.addGestureRecognizer(right)
-    }
-    @objc private func didSwipeLeft()  { changeMonth(by: +1, animatedFrom: .fromRight) }
-    @objc private func didSwipeRight() { changeMonth(by: -1, animatedFrom: .fromLeft) }
+    // MARK: - 年の一覧(2本指でつまむと出る)
+    private func setupYearOverview() {
+        yearOverview.backgroundColor = .systemBackground
+        yearOverview.alpha = 0
+        yearOverview.isHidden = true
+        view.addSubview(yearOverview)
+        yearOverview.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            yearOverview.topAnchor.constraint(equalTo: campusControl.bottomAnchor, constant: 8),
+            yearOverview.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            yearOverview.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            yearOverview.bottomAnchor.constraint(equalTo: legendBackground.topAnchor)
+        ])
+        yearOverview.configure(months: months, calendar: cal, categoryOf: { [weak self] date in
+            guard let self else { return .classDay }
+            return self.model.category(of: date, campus: self.campus)
+        })
+        yearOverview.onSelect = { [weak self] monthFirst in self?.hideYearOverview(to: monthFirst) }
 
-    private func changeMonth(by delta: Int, animatedFrom subtype: CATransitionSubtype) {
-        guard let next = cal.date(byAdding: .month, value: delta, to: currentMonth) else { return }
-        let target = firstDay(of: next)
-        if !isAllowedMonth(target) {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            return
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+        view.addGestureRecognizer(pinch)
+    }
+
+    @objc private func pinched(_ g: UIPinchGestureRecognizer) {
+        guard g.state == .ended else { return }
+        if !isShowingYearOverview, g.scale < 0.8 { showYearOverview() }
+        else if isShowingYearOverview, g.scale > 1.25 { hideYearOverview(to: yearOverview.monthNearCenter()) }
+    }
+
+    private func showYearOverview() {
+        guard !isShowingYearOverview else { return }
+        isShowingYearOverview = true
+        let visibleSection = collectionView.indexPathForItem(at: CGPoint(x: collectionView.bounds.midX, y: collectionView.contentOffset.y + collectionView.bounds.height / 3))?.section ?? 0
+        yearOverview.refresh()
+        yearOverview.isHidden = false
+        yearOverview.layoutIfNeeded()
+        yearOverview.scrollToYear(of: months[min(visibleSection, months.count - 1)], animated: false)
+        yearOverview.transform = CGAffineTransform(scaleX: 1.12, y: 1.12)
+        UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut, animations: {
+            self.yearOverview.alpha = 1
+            self.yearOverview.transform = .identity
+            self.collectionView.alpha = 0
+            self.collectionView.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+        })
+    }
+
+    private func hideYearOverview(to monthFirst: Date?) {
+        guard isShowingYearOverview else { return }
+        isShowingYearOverview = false
+        if let monthFirst, let index = months.firstIndex(of: monthFirst),
+           let attrs = collectionView.layoutAttributesForSupplementaryElement(ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: index)) {
+            collectionView.setContentOffset(CGPoint(x: 0, y: max(0, attrs.frame.minY - 4)), animated: false)
         }
-        let t = CATransition()
-        t.type = .push
-        t.subtype = subtype
-        t.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        t.duration = 0.25
-        collectionView.layer.add(t, forKey: "monthSlide")
-        monthLabel.layer.add(t, forKey: "monthSlideLabel")
-        setMonth(target)
-        reload()
+        UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut, animations: {
+            self.yearOverview.alpha = 0
+            self.yearOverview.transform = CGAffineTransform(scaleX: 1.12, y: 1.12)
+            self.collectionView.alpha = 1
+            self.collectionView.transform = .identity
+        }, completion: { _ in
+            self.yearOverview.isHidden = true
+            self.yearOverview.transform = .identity
+        })
     }
-
-    // MARK: - Month helpers
-    private func firstDay(of date: Date) -> Date {
-        let c = cal.dateComponents(in: tz, from: date)
-        return cal.date(from: DateComponents(timeZone: tz, year: c.year, month: c.month, day: 1))!
-    }
-    private func isAllowedMonth(_ monthFirst: Date) -> Bool {
-        return monthFirst >= allowedStartMonth && monthFirst <= allowedEndMonth
-    }
-    private func clampedToAllowed(_ monthFirst: Date) -> Date {
-        if monthFirst < allowedStartMonth { return allowedStartMonth }
-        if monthFirst > allowedEndMonth { return allowedEndMonth }
-        return monthFirst
-    }
-
-    private func setMonth(_ monthFirst: Date) {
-        currentMonth = monthFirst
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "ja_JP")
-        df.timeZone = tz
-        df.dateFormat = "yyyy年M月"
-        monthLabel.text = df.string(from: currentMonth)
-        grid = model.gridDays(for: currentMonth)
-
-        let allowed = isAllowedMonth(currentMonth)
-        collectionView.isHidden = !allowed
-        weekdayStack.isHidden = !allowed
-        hintLabel.isHidden = !allowed
-        legendColumn.isHidden = !allowed
-        disclaimerLabel.isHidden = !allowed
-        notAvailableLabel.isHidden = allowed
-    }
-
-    private func reload() { collectionView.reloadData() }
 
     // MARK: - Actions
     @objc private func campusChanged() {
         campus = (campusControl.selectedSegmentIndex == 0) ? .aoyama : .sagamihara
         UserDefaults.standard.set(campusControl.selectedSegmentIndex, forKey: lastCampusKey)
-        reload()
+        collectionView.reloadData()
+        yearOverview.refresh()
+    }
+
+    // MARK: - 月・日付の計算
+    /// 月曜はじまりで、その月の1日の前に空ける日数。
+    private func leadingBlanks(of monthFirst: Date) -> Int {
+        (cal.component(.weekday, from: monthFirst) + 5) % 7
+    }
+
+    private func daysIn(_ monthFirst: Date) -> Int {
+        cal.range(of: .day, in: .month, for: monthFirst)?.count ?? 30
+    }
+
+    private func date(at indexPath: IndexPath) -> Date? {
+        let monthFirst = months[indexPath.section]
+        let day = indexPath.item - leadingBlanks(of: monthFirst) + 1
+        guard day >= 1, day <= daysIn(monthFirst) else { return nil }
+        return cal.date(byAdding: .day, value: day - 1, to: monthFirst)
     }
 
     // MARK: - DataSource
-    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { grid.count }
+    func numberOfSections(in collectionView: UICollectionView) -> Int { months.count }
+
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        leadingBlanks(of: months[section]) + daysIn(months[section])
+    }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let date = grid[indexPath.item]
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "DayCell", for: indexPath) as! DayCell
-
-        let comps = cal.dateComponents(in: tz, from: date)
-        cell.dayLabel.text = "\(comps.day!)"
-
-        // 2026/4/1〜4/5 は非表示（3月カレンダー末尾に出る先取りセルを隠す）
-        let dayMonthFirst = firstDay(of: date)
-        cell.isHidden = (dayMonthFirst > allowedEndMonth)
-
-        let curMonth = cal.component(.month, from: currentMonth)
-        let isCurrentMonth = (comps.month == curMonth)
-
-        let category = model.category(of: date, campus: campus)
-        let isToday = cal.isDateInToday(date)
-
-        cell.configure(category: category, isCurrentMonth: isCurrentMonth, isToday: isToday)
+        guard let date = date(at: indexPath) else { cell.configureBlank(); return cell }
+        let day = cal.component(.day, from: date)
+        cell.configure(day: day, category: model.category(of: date, campus: campus), isToday: cal.isDateInToday(date))
         return cell
+    }
+
+    func collectionView(_ collectionView: UICollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> UICollectionReusableView {
+        let header = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "MonthHeader", for: indexPath) as! MonthHeaderView
+        let monthFirst = months[indexPath.section]
+        let c = cal.dateComponents([.year, .month], from: monthFirst)
+        let isCurrent = cal.isDate(monthFirst, equalTo: Date(), toGranularity: .month)
+        header.configure(text: "\(c.year!)年\(c.month!)月", isCurrent: isCurrent, leadingBlanks: leadingBlanks(of: monthFirst))
+        return header
+    }
+
+    // MARK: - FlowLayout
+    func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
+        CGSize(width: floor(collectionView.bounds.width / 7), height: 52)
+    }
+
+    func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, referenceSizeForHeaderInSection section: Int) -> CGSize {
+        CGSize(width: collectionView.bounds.width, height: 44)
     }
 
     // MARK: - Delegate（タップ → 分類に沿ったアラート）＋祝日名プレフィックス
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        let date = grid[indexPath.item]
+        collectionView.deselectItem(at: indexPath, animated: false)
+        guard let date = date(at: indexPath) else { return }
         let category = model.category(of: date, campus: campus)
 
         let df = DateFormatter()
@@ -618,7 +554,6 @@ final class ClassDayCalendarViewController: UIViewController,
 
         // ✅ 前期・後期どちらも第◯週を付ける（該当しない方は空文字）
         let titleText = "\(df.string(from: date))\(springWeekSuffix(for: date))\(autumnWeekSuffix(for: date))"
-
 
         let alert = UIAlertController(title: titleText, message: msg, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
@@ -742,100 +677,254 @@ final class ClassDayCalendarViewController: UIViewController,
     }
 }
 
-// MARK: - Cell
-private final class DayCell: UICollectionViewCell {
-    let dayLabel = UILabel()
-    private let todayBadge = UIView()    // 今日：数字の背後に赤い“塗り”丸
-    private let underlineView = UIView() // 補講日: 緑の下線
-
-    // 長期休業の統一色
-    private let unifiedBreakColor = UIColor.systemTeal.withAlphaComponent(0.22)
+// MARK: - Month header
+private final class MonthHeaderView: UICollectionReusableView {
+    private let label = UILabel()
+    private let line = UIView()
+    private var labelLeading: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-
-        // 真四角・隣接
-        contentView.layer.cornerRadius = 0
-        contentView.clipsToBounds = true
-
-        // 1pxの白い枠線（Retina対応）
-        contentView.layer.borderWidth = 1.0 / UIScreen.main.scale
-        contentView.layer.borderColor = UIColor.white.cgColor
-
-        dayLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        dayLabel.textAlignment = .center
-
-        todayBadge.backgroundColor = .systemRed
-        todayBadge.isHidden = true
-        todayBadge.isUserInteractionEnabled = false
-        todayBadge.layer.cornerRadius = 16 // 直径32pt
-
-        underlineView.backgroundColor = .systemGreen
-        underlineView.isHidden = true
-
-        contentView.addSubview(todayBadge)
-        contentView.addSubview(dayLabel)
-        contentView.addSubview(underlineView)
-
-        dayLabel.translatesAutoresizingMaskIntoConstraints = false
-        todayBadge.translatesAutoresizingMaskIntoConstraints = false
-        underlineView.translatesAutoresizingMaskIntoConstraints = false
-
+        label.font = .systemFont(ofSize: 20, weight: .bold)
+        line.backgroundColor = .separator
+        [label, line].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; addSubview($0) }
+        labelLeading = label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16)
         NSLayoutConstraint.activate([
-            dayLabel.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            dayLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-
-            todayBadge.centerXAnchor.constraint(equalTo: dayLabel.centerXAnchor),
-            todayBadge.centerYAnchor.constraint(equalTo: dayLabel.centerYAnchor),
-            todayBadge.widthAnchor.constraint(equalToConstant: 32),
-            todayBadge.heightAnchor.constraint(equalToConstant: 32),
-
-            underlineView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
-            underlineView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
-            underlineView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4),
-            underlineView.heightAnchor.constraint(equalToConstant: 2)
+            labelLeading,
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            line.leadingAnchor.constraint(equalTo: leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: trailingAnchor),
+            line.bottomAnchor.constraint(equalTo: bottomAnchor),
+            line.heightAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale)
         ])
-        contentView.sendSubviewToBack(todayBadge)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(text: String, isCurrent: Bool, leadingBlanks: Int) {
+        label.text = text
+        label.textColor = isCurrent ? .systemRed : .label
+    }
+}
+
+// MARK: - Cell
+private final class DayCell: UICollectionViewCell {
+    private let dayLabel = UILabel()
+    private let circle = UIView()     // 休講・試験などの印(丸)
+    private let dot = UIView()        // 授業日の青い点(Appleのカレンダーの予定の点と同じ)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        dayLabel.font = .systemFont(ofSize: 18, weight: .regular)
+        dayLabel.textAlignment = .center
+        circle.isUserInteractionEnabled = false
+        circle.layer.cornerRadius = 19
+        dot.backgroundColor = .systemBlue
+        dot.layer.cornerRadius = 2.5
+        [circle, dayLabel, dot].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; contentView.addSubview($0) }
+        NSLayoutConstraint.activate([
+            circle.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            circle.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: -4),
+            circle.widthAnchor.constraint(equalToConstant: 38),
+            circle.heightAnchor.constraint(equalToConstant: 38),
+            dayLabel.centerXAnchor.constraint(equalTo: circle.centerXAnchor),
+            dayLabel.centerYAnchor.constraint(equalTo: circle.centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 5),
+            dot.heightAnchor.constraint(equalToConstant: 5),
+            dot.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            dot.topAnchor.constraint(equalTo: circle.bottomAnchor, constant: 1)
+        ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(category: DayCategory, isCurrentMonth: Bool, isToday: Bool) {
-        // 背景色 & 文字色
+    func configureBlank() {
+        dayLabel.text = nil
+        circle.backgroundColor = .clear
+        circle.layer.borderWidth = 0
+        dot.isHidden = true
+        isUserInteractionEnabled = false
+    }
+
+    func configure(day: Int, category: DayCategory, isToday: Bool) {
+        isUserInteractionEnabled = true
+        dayLabel.text = "\(day)"
+        dayLabel.textColor = .label
+        dayLabel.font = .systemFont(ofSize: 18, weight: .regular)
+        circle.backgroundColor = .clear
+        circle.layer.borderWidth = 0
+        dot.isHidden = true
+
         switch category {
         case .classDay:
-            contentView.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.28)
-            dayLabel.textColor = .white
-            underlineView.isHidden = true
-
-        case .kyuko:
-            contentView.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.28)
-            dayLabel.textColor = isCurrentMonth ? UIColor.label : UIColor.secondaryLabel
-            underlineView.isHidden = true
-
-        case .makeup:
-            contentView.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.18)
-            dayLabel.textColor = isCurrentMonth ? UIColor.label : UIColor.secondaryLabel
-            underlineView.isHidden = false    // 緑の下線で補講日を強調
-
-        case .exam:
-            contentView.backgroundColor = UIColor.systemPurple.withAlphaComponent(0.22)
-            dayLabel.textColor = .white
-            underlineView.isHidden = true
-
-        case .summerBreak, .winterBreak, .springBreak:
-            contentView.backgroundColor = unifiedBreakColor // 統一色
-            dayLabel.textColor = .white
-            underlineView.isHidden = true
-
+            dot.isHidden = false
         case .sunday:
-            contentView.backgroundColor = UIColor.systemGray6
-            dayLabel.textColor = UIColor.secondaryLabel
-            underlineView.isHidden = true
+            dayLabel.textColor = .tertiaryLabel
+        case .kyuko:
+            circle.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.4)
+        case .makeup:
+            circle.layer.borderColor = UIColor.systemGreen.cgColor
+            circle.layer.borderWidth = 2
+        case .exam:
+            circle.backgroundColor = UIColor.systemPurple.withAlphaComponent(0.28)
+        case .summerBreak, .winterBreak, .springBreak:
+            circle.backgroundColor = UIColor.systemTeal.withAlphaComponent(0.28)
         }
 
-        // 今日バッジ（数字の背後に赤い塗り丸）
-        todayBadge.isHidden = !isToday
-        if isToday { dayLabel.textColor = .white }
+        if isToday {
+            circle.backgroundColor = .systemRed
+            circle.layer.borderWidth = 0
+            dayLabel.textColor = .white
+            dayLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        }
+    }
+}
+
+// MARK: - 年の一覧
+/// 1年を、3列×4行の小さな月で見せる(Appleのカレンダーを2本指でつまんだときの画面)。
+private final class YearOverviewView: UIScrollView {
+    var onSelect: ((Date) -> Void)?
+    private var months: [Date] = []
+    private var cal = Calendar(identifier: .gregorian)
+    private var categoryOf: ((Date) -> DayCategory)?
+    private var years: [Int] = []
+    private var yearLabels: [UILabel] = []
+    private var yearLines: [UIView] = []
+    private var minis: [Int: [MiniMonthView]] = [:]   // 年 → 12か月(範囲外はnil相当で飛ばす)
+    private var miniByMonth: [(date: Date, view: MiniMonthView)] = []
+
+    private let sideMargin: CGFloat = 16
+    private let columnGap: CGFloat = 14
+    private let miniHeight: CGFloat = 132
+    private let rowGap: CGFloat = 14
+
+    func configure(months: [Date], calendar: Calendar, categoryOf: @escaping (Date) -> DayCategory) {
+        self.months = months; self.cal = calendar; self.categoryOf = categoryOf
+        alwaysBounceVertical = true
+        showsVerticalScrollIndicator = false
+        years = Array(Set(months.map { calendar.component(.year, from: $0) })).sorted()
+        for year in years {
+            let label = UILabel()
+            label.text = "\(year)年"
+            label.font = .systemFont(ofSize: 34, weight: .bold)
+            label.textColor = year == calendar.component(.year, from: Date()) ? .systemRed : .label
+            let line = UIView(); line.backgroundColor = .separator
+            addSubview(label); addSubview(line)
+            yearLabels.append(label); yearLines.append(line)
+        }
+        for monthFirst in months {
+            let mini = MiniMonthView(monthFirst: monthFirst, calendar: calendar, categoryOf: categoryOf)
+            let tap = UITapGestureRecognizer(target: self, action: #selector(miniTapped(_:)))
+            mini.addGestureRecognizer(tap)
+            addSubview(mini)
+            miniByMonth.append((monthFirst, mini))
+        }
+        setNeedsLayout()
+    }
+
+    func refresh() { miniByMonth.forEach { $0.view.setNeedsDisplay() } }
+
+    @objc private func miniTapped(_ g: UITapGestureRecognizer) {
+        guard let mini = g.view as? MiniMonthView else { return }
+        onSelect?(mini.monthFirst)
+    }
+
+    private func yearTop(_ index: Int) -> CGFloat {
+        CGFloat(index) * (60 + 4 * (miniHeight + rowGap) + 24) + 8
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let width = bounds.width
+        guard width > 0 else { return }
+        let miniWidth = (width - sideMargin * 2 - columnGap * 2) / 3
+        for (i, year) in years.enumerated() {
+            let top = yearTop(i)
+            yearLabels[i].frame = CGRect(x: sideMargin, y: top, width: width - sideMargin * 2, height: 42)
+            yearLines[i].frame = CGRect(x: sideMargin, y: top + 50, width: width - sideMargin * 2, height: 1.0 / UIScreen.main.scale)
+            for entry in miniByMonth where cal.component(.year, from: entry.date) == year {
+                let m = cal.component(.month, from: entry.date) - 1
+                entry.view.frame = CGRect(x: sideMargin + CGFloat(m % 3) * (miniWidth + columnGap),
+                                          y: top + 62 + CGFloat(m / 3) * (miniHeight + rowGap),
+                                          width: miniWidth, height: miniHeight)
+            }
+        }
+        contentSize = CGSize(width: width, height: yearTop(years.count) + 40)
+    }
+
+    func scrollToYear(of date: Date, animated: Bool) {
+        let year = cal.component(.year, from: date)
+        guard let i = years.firstIndex(of: year) else { return }
+        layoutIfNeeded()
+        let maxOffset = max(0, contentSize.height - bounds.height)
+        setContentOffset(CGPoint(x: 0, y: min(yearTop(i) - 4, maxOffset)), animated: animated)
+    }
+
+    /// 今見えている範囲の、真ん中あたりの月(2本指で広げたとき、そこへ戻る)。
+    func monthNearCenter() -> Date? {
+        let center = CGPoint(x: bounds.midX, y: contentOffset.y + bounds.height / 2)
+        return miniByMonth.min { abs($0.view.frame.midY - center.y) + abs($0.view.frame.midX - center.x) * 0.2
+                               < abs($1.view.frame.midY - center.y) + abs($1.view.frame.midX - center.x) * 0.2 }?.date
+    }
+}
+
+private final class MiniMonthView: UIView {
+    let monthFirst: Date
+    private let cal: Calendar
+    private let categoryOf: (Date) -> DayCategory
+
+    init(monthFirst: Date, calendar: Calendar, categoryOf: @escaping (Date) -> DayCategory) {
+        self.monthFirst = monthFirst; self.cal = calendar; self.categoryOf = categoryOf
+        super.init(frame: .zero)
+        backgroundColor = .clear
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ rect: CGRect) {
+        let isCurrentMonth = cal.isDate(monthFirst, equalTo: Date(), toGranularity: .month)
+        let title = "\(cal.component(.month, from: monthFirst))月" as NSString
+        title.draw(at: .zero, withAttributes: [
+            .font: UIFont.systemFont(ofSize: 20, weight: .bold),
+            .foregroundColor: (isCurrentMonth ? UIColor.systemRed : UIColor.label).resolvedColor(with: traitCollection)
+        ])
+        let top: CGFloat = 30
+        let colW = bounds.width / 7
+        let rowH = (bounds.height - top) / 6
+        let blanks = (cal.component(.weekday, from: monthFirst) + 5) % 7
+        let days = cal.range(of: .day, in: .month, for: monthFirst)?.count ?? 30
+        let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+        for day in 1...days {
+            let slot = blanks + day - 1
+            let cell = CGRect(x: CGFloat(slot % 7) * colW, y: top + CGFloat(slot / 7) * rowH, width: colW, height: rowH)
+            let date = cal.date(byAdding: .day, value: day - 1, to: monthFirst)!
+            let category = categoryOf(date)
+            let isToday = cal.isDateInToday(date)
+            let side = min(colW, rowH) - 1
+            let mark = CGRect(x: cell.midX - side / 2, y: cell.midY - side / 2, width: side, height: side)
+            var textColor = UIColor.label
+            switch category {
+            case .sunday: textColor = .tertiaryLabel
+            case .kyuko: UIColor.systemYellow.withAlphaComponent(0.45).resolvedColor(with: traitCollection).setFill(); UIBezierPath(ovalIn: mark).fill()
+            case .exam: UIColor.systemPurple.withAlphaComponent(0.3).resolvedColor(with: traitCollection).setFill(); UIBezierPath(ovalIn: mark).fill()
+            case .summerBreak, .winterBreak, .springBreak: UIColor.systemTeal.withAlphaComponent(0.3).resolvedColor(with: traitCollection).setFill(); UIBezierPath(ovalIn: mark).fill()
+            case .makeup:
+                UIColor.systemGreen.resolvedColor(with: traitCollection).setStroke()
+                let ring = UIBezierPath(ovalIn: mark.insetBy(dx: 0.8, dy: 0.8)); ring.lineWidth = 1.2; ring.stroke()
+            case .classDay: break
+            }
+            if isToday {
+                UIColor.systemRed.resolvedColor(with: traitCollection).setFill(); UIBezierPath(ovalIn: mark).fill()
+                textColor = .white
+            }
+            let font = UIFont.systemFont(ofSize: 10.5, weight: isToday ? .semibold : .regular)
+            let text = "\(day)" as NSString
+            let size = text.size(withAttributes: [.font: font])
+            text.draw(in: CGRect(x: cell.minX, y: cell.midY - size.height / 2, width: colW, height: size.height),
+                      withAttributes: [.font: font, .foregroundColor: textColor.resolvedColor(with: traitCollection), .paragraphStyle: paragraph])
+        }
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        setNeedsDisplay()
     }
 }

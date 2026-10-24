@@ -57,6 +57,7 @@ final class CourseDetailViewController: UIViewController {
     private let course: Course
     private let location: SlotLocation
     private let titleHeader = UIView()   // 緑の帯コンテナ
+    private let sessionPickerButton = UIButton(type: .custom)   // チャット表示中、緑の帯を押すと、授業の回を選べる
     private let titleSubLabel = UILabel()   // チャット表示中だけ「第N回授業 · 9/29 火」を出す
     private var titleLabelBottomConstraint: NSLayoutConstraint?
     private var noteChatHeader: UIView?
@@ -80,6 +81,7 @@ final class CourseDetailViewController: UIViewController {
     /// 大きなカードが省略版(ヘッダーのボタン)に畳まれている状態か
     private var noteChatActionsCompact = false
     private var noteChatMorphing = false
+    private var noteChatOpensInstantly = false   // 時間割から直接開くときは、一覧からのスライドを付けない
     private var noteLastSentAt: [Int: Date] = [:]
     private let noteBackdrop = NoteBackdropView()
     private var noteSchedule: [NoteSessionCard] = []
@@ -238,7 +240,9 @@ final class CourseDetailViewController: UIViewController {
         loadNoteSessionCards()
         let usable = noteSchedule.filter { !$0.isCancelled }
         let day = usable.contains { $0.dayID == pending.dayID } ? pending.dayID : (usable.last?.dayID ?? pending.dayID)
+        noteChatOpensInstantly = true
         openNoteChat(session: day)
+        noteChatOpensInstantly = false
         if !pending.photos.isEmpty, let context = try? aiContext(day: day) {
             try? stageAIPhotosForPrefetch(pending.photos, context: context)
             restoreAIInput()
@@ -248,12 +252,20 @@ final class CourseDetailViewController: UIViewController {
         updateNoteChatSendButton(animated: false)
         if !pending.text.isEmpty || !pending.photos.isEmpty { noteChatSendTapped() }
         else {
-            // 時間割から授業を選んで開いたとき: そのまま打てるように、キーボードを上げる(画面が開く動きが落ち着いてから)。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                guard let self, self.noteShowsChatDetail else { return }
-                self.noteChatTextField.becomeFirstResponder()
-            }
+            // 時間割から授業を選んで開いたとき: そのまま打てるように、キーボードを上げる。
+            // 大きいカードが縮む動きは、先に済ませておく(キーボードで2回目の縮む動きを出さない)。
+            snapNoteChatActionsCompact()
+            wantsChatKeyboard = true
+            showChatKeyboardIfNeeded()
         }
+    }
+
+    private var wantsChatKeyboard = false
+    /// 画面が出ていて、チャットが開いていれば、入力欄にカーソルを置いてキーボードを上げる。
+    func showChatKeyboardIfNeeded() {
+        guard wantsChatKeyboard, view.window != nil, noteShowsChatDetail else { return }
+        wantsChatKeyboard = false
+        noteChatTextField.becomeFirstResponder()
     }
 
     private func prepareAIInputSession() {
@@ -663,7 +675,8 @@ final class CourseDetailViewController: UIViewController {
                     noteChatPendingRecordingsBySession[source.context.dayID, default: []].append(NoteRecordingResult(url: url, duration: Double(source.durationSeconds ?? 0)))
                 }
             }
-            loadNoteSessionCards()
+            // 画面が出る動きの最中に呼ばれても、一覧のカードが縮んだり伸びたりしないように、動きなしで作り直す。
+            UIView.performWithoutAnimation { loadNoteSessionCards(); if isViewLoaded { view.layoutIfNeeded() } }
             if noteShowsChatDetail {
                 let messages = noteChatMessagesBySession[noteChatCurrentSession] ?? []
                 rebuildNoteChatStack(session: noteChatCurrentSession)
@@ -777,7 +790,21 @@ final class CourseDetailViewController: UIViewController {
     private let lateBtn   = UIButton(type: .system)
     private let absentBtn = UIButton(type: .system)
 
-    private let webView = WKWebView()
+    // WKWebViewは作るだけで重い(数百ミリ秒)。シラバスのキャッシュがあるときは使わないので、必要になったときに作る。
+    private lazy var webView: WKWebView = {
+        let web = WKWebView()
+        web.translatesAutoresizingMaskIntoConstraints = false
+        web.scrollView.contentInsetAdjustmentBehavior = .never
+        web.scrollView.isScrollEnabled = false   // 外側 ScrollView に任せる
+        webContainer.addSubview(web)
+        NSLayoutConstraint.activate([
+            web.topAnchor.constraint(equalTo: webContainer.topAnchor),
+            web.leadingAnchor.constraint(equalTo: webContainer.leadingAnchor),
+            web.trailingAnchor.constraint(equalTo: webContainer.trailingAnchor),
+            web.bottomAnchor.constraint(equalTo: webContainer.bottomAnchor)
+        ])
+        return web
+    }()
     private let webContainer = UIView()          // ← プロパティのコンテナを使う（ローカルで再定義しない）
     private var webHeightConstraint: NSLayoutConstraint!
 
@@ -1072,6 +1099,20 @@ final class CourseDetailViewController: UIViewController {
         titleSubLabel.alpha = 0
         titleSubLabel.translatesAutoresizingMaskIntoConstraints = false
         titleHeader.addSubview(titleSubLabel)
+        sessionPickerButton.translatesAutoresizingMaskIntoConstraints = false
+        sessionPickerButton.isHidden = true
+        sessionPickerButton.showsMenuAsPrimaryAction = true
+        sessionPickerButton.accessibilityLabel = "授業の回を選ぶ"
+        sessionPickerButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            completion(self?.sessionPickerActions() ?? [])
+        }])
+        titleHeader.addSubview(sessionPickerButton)
+        NSLayoutConstraint.activate([
+            sessionPickerButton.leadingAnchor.constraint(equalTo: titleHeader.leadingAnchor, constant: 52),
+            sessionPickerButton.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -52),
+            sessionPickerButton.topAnchor.constraint(equalTo: titleHeader.topAnchor),
+            sessionPickerButton.bottomAnchor.constraint(equalTo: titleHeader.bottomAnchor)
+        ])
         NSLayoutConstraint.activate([
             titleSubLabel.leadingAnchor.constraint(equalTo: titleHeader.leadingAnchor, constant: 52),
             titleSubLabel.trailingAnchor.constraint(equalTo: titleHeader.trailingAnchor, constant: -52),
@@ -1226,16 +1267,6 @@ final class CourseDetailViewController: UIViewController {
 
         // WebView（プロパティの webContainer を使用）
         webContainer.translatesAutoresizingMaskIntoConstraints = false
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.scrollView.isScrollEnabled = false   // 外側 ScrollView に任せる
-        webContainer.addSubview(webView)
-        NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: webContainer.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: webContainer.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: webContainer.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: webContainer.bottomAnchor)
-        ])
         webHeightConstraint = webContainer.heightAnchor.constraint(equalToConstant: 600)
         webHeightConstraint.isActive = true
         stack.addArrangedSubview(webContainer)
@@ -3448,6 +3479,20 @@ final class CourseDetailViewController: UIViewController {
         noteChatHeaderFade.alpha = min(1, shift / 12)
     }
 
+    // MARK: 高画質カメラ(標準のカメラ。シャッター音あり)
+    @objc private func noteChatHighQualityCameraTapped() {
+        view.endEditing(true)
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            showNoteAlert(title: "カメラを使えません", message: "この端末ではカメラを使えません。")
+            return
+        }
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = self
+        picker.modalPresentationStyle = .fullScreen
+        present(picker, animated: true)
+    }
+
     // MARK: 無音カメラ
     @objc private func noteChatSilentCameraTapped() {
         view.endEditing(true)
@@ -3637,9 +3682,11 @@ final class CourseDetailViewController: UIViewController {
     }
 
     @objc private func noteChatSentPhotoTapped(_ gesture: UITapGestureRecognizer) {
-        guard let imageView = gesture.view as? UIImageView,
-              let row = imageView.superview?.superview as? NotePhotoRowScrollView else { return }
-        presentNotePhotoViewer(photoSet: CapturedPhotoSet(items: row.photos), index: imageView.tag, allowsDelete: false)
+        guard let imageView = gesture.view as? UIImageView else { return }
+        var ancestor: UIView? = imageView.superview
+        while let current = ancestor, !(current is NotePhotoGridView) { ancestor = current.superview }
+        guard let grid = ancestor as? NotePhotoGridView else { return }
+        presentNotePhotoViewer(photoSet: CapturedPhotoSet(items: grid.photos), index: imageView.tag, allowsDelete: false)
     }
 
     private func morphTransform(from source: CGRect, to target: CGRect) -> CGAffineTransform {
@@ -3647,11 +3694,23 @@ final class CourseDetailViewController: UIViewController {
             .scaledBy(x: target.width / max(source.width, 1), y: target.height / max(source.height, 1))
     }
 
+    /// 大きい2枚のカードを、動きなしで、省略ボタンの状態にする。
+    private func snapNoteChatActionsCompact() {
+        guard !noteChatActionsCompact, !noteChatMorphing else { return }
+        noteChatActionsCompact = true
+        noteChatActionRow.isHidden = true
+        noteChatGuideContainer.isHidden = true
+        noteChatCompactActions.isHidden = false
+        noteChatCompactActions.alpha = 1
+        noteChatCompactActions.arrangedSubviews.forEach { $0.transform = .identity; $0.alpha = 1 }
+        view.layoutIfNeeded()
+    }
+
     /// 大きいカードを出すべきか(会話が空でキーボードも閉じている)、省略ボタンに畳むべきか(会話がある/入力中)を合わせる。
     private func syncNoteChatActions() {
         guard noteShowsChatDetail, !noteChatMorphing else { return }
         let hasMessages = !(noteChatMessagesBySession[noteChatCurrentSession] ?? []).isEmpty
-        let desiredCompact = hasMessages || noteChatTextField.isFirstResponder
+        let desiredCompact = hasMessages || noteChatTextField.isFirstResponder || wantsChatKeyboard   // 時間割から開くときは、キーボードが上がる前提で、最初から小さく
         guard desiredCompact != noteChatActionsCompact else { return }
         noteChatActionsCompact = desiredCompact
         noteChatMorphing = true
@@ -3770,40 +3829,41 @@ final class CourseDetailViewController: UIViewController {
         return makeNoteTextBubble(message.previewText)
     }
 
-    /// 送信済みの写真は、横1列(はみ出す分は横スクロール)で右寄せに並べる。
+    /// 送信済みの写真は、2列で何行かに並べて、右寄せにする(横一列には並べない)。
     private func makeNotePhotoRow(_ photos: [CapturedPhoto]) -> UIView {
         let side: CGFloat = 128
-        let scroll = NotePhotoRowScrollView()
-        scroll.photos = photos
-        scroll.showsHorizontalScrollIndicator = false
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        let stack = UIStackView()
-        stack.axis = .horizontal
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(stack)
-        for (index, photo) in photos.enumerated() {
-            let imageView = UIImageView(image: photo.thumb)
-            imageView.contentMode = .scaleAspectFill
-            imageView.clipsToBounds = true
-            imageView.layer.cornerRadius = 16
-            imageView.isUserInteractionEnabled = true
-            imageView.tag = index
-            imageView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(noteChatSentPhotoTapped(_:))))
-            imageView.translatesAutoresizingMaskIntoConstraints = false
-            imageView.widthAnchor.constraint(equalToConstant: side).isActive = true
-            imageView.heightAnchor.constraint(equalToConstant: side).isActive = true
-            stack.addArrangedSubview(imageView)
+        let grid = NotePhotoGridView()
+        grid.photos = photos
+        grid.axis = .vertical
+        grid.spacing = 8
+        grid.alignment = .trailing
+        var index = 0
+        while index < photos.count {
+            let line = UIStackView()
+            line.axis = .horizontal
+            line.spacing = 8
+            for photo in photos[index..<min(index + 2, photos.count)] {
+                let imageView = UIImageView(image: photo.thumb)
+                imageView.contentMode = .scaleAspectFill
+                imageView.clipsToBounds = true
+                imageView.layer.cornerRadius = 16
+                imageView.isUserInteractionEnabled = true
+                imageView.tag = photos.firstIndex(where: { $0.jpeg == photo.jpeg }) ?? index
+                imageView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(noteChatSentPhotoTapped(_:))))
+                imageView.translatesAutoresizingMaskIntoConstraints = false
+                imageView.widthAnchor.constraint(equalToConstant: side).isActive = true
+                imageView.heightAnchor.constraint(equalToConstant: side).isActive = true
+                line.addArrangedSubview(imageView)
+            }
+            grid.addArrangedSubview(line)
+            index += 2
         }
-        NSLayoutConstraint.activate([
-            scroll.heightAnchor.constraint(equalToConstant: side),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
-            stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)
-        ])
-        return scroll
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [spacer, grid])
+        row.axis = .horizontal
+        row.alignment = .top
+        return row
     }
 
     private func makeNoteTextBubble(_ text: String) -> UIView {
@@ -4177,6 +4237,7 @@ final class CourseDetailViewController: UIViewController {
     private func showNoteChatDetail(_ show: Bool) {
         guard show != noteShowsChatDetail else { return }
         view.endEditing(true)
+        let instant = noteChatOpensInstantly || !show   // チャット一覧に戻るときも、動きを付けない
         if show { SourceIngestionService.shared.warmUp() }   // 送信前に、眠っているサーバー関数を起こしておく
 
         let incoming = show ? noteChatContainer : noteListContainer
@@ -4185,7 +4246,7 @@ final class CourseDetailViewController: UIViewController {
 
         // 退場側は見た目だけ(スナップショット)を残して即座にレイアウトから外す。
         // 両方がスタックに残ると、入場側が退場側の下に押し下げられて上に余白ができるため。
-        let snapshot = Self.blurSafeSnapshot(of: outgoing)
+        let snapshot = instant ? nil : Self.blurSafeSnapshot(of: outgoing)
         // noteSection自体がヘッダーの出入りで上下に動くため、動かない親(stack)に載せて位置を固定する
         let snapshotHost: UIView = stack
         snapshot?.frame = outgoing.convert(outgoing.bounds, to: snapshotHost)
@@ -4194,7 +4255,7 @@ final class CourseDetailViewController: UIViewController {
         let headerViews: [UIView] = [syllabusViewToggle, actionHeaderRow]
         var headerSnapshots: [UIView] = []
         if show {
-            for header in headerViews where !header.isHidden {
+            for header in headerViews where !header.isHidden && !instant {
                 guard let host = header.superview,
                       let snap = header.snapshotView(afterScreenUpdates: false) else { continue }
                 snap.frame = header.frame
@@ -4213,13 +4274,13 @@ final class CourseDetailViewController: UIViewController {
         noteSortButton.isHidden = show
         noteAttachmentsButton.isHidden = show
         noteMoreButton.isHidden = show
-        if !show {
+        if !show && !instant {
             headerViews.forEach { $0.transform = CGAffineTransform(translationX: -width, y: 0) }
         }
 
         outgoing.isHidden = true
         incoming.isHidden = false
-        incoming.transform = CGAffineTransform(translationX: show ? width : -width, y: 0)
+        incoming.transform = instant ? .identity : CGAffineTransform(translationX: show ? width : -width, y: 0)
         if let snapshot { snapshotHost.addSubview(snapshot) }
         view.layoutIfNeeded()
 
@@ -4271,23 +4332,14 @@ final class CourseDetailViewController: UIViewController {
         plus.accessibilityIdentifier = "ai-input-add"
         plus.showsMenuAsPrimaryAction = true
         plus.menu = UIMenu(children: [
-            UIAction(title: "撮影", image: UIImage(systemName: "camera")) { [weak self] _ in
+            UIAction(title: "無音カメラ", image: UIImage(systemName: "speaker.slash")) { [weak self] _ in
                 self?.noteChatSilentCameraTapped()
             },
-            UIAction(title: "写真から選ぶ", image: UIImage(systemName: "photo")) { [weak self] _ in self?.pickAIPhotos() },
-            UIAction(title: "ライブラリから追加", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in
-                self?.noteChatPickFromLibrary()
+            UIAction(title: "高画質カメラ(音あり)", image: UIImage(systemName: "camera")) { [weak self] _ in
+                self?.noteChatHighQualityCameraTapped()
             },
-            UIAction(title: "PDFを追加", image: UIImage(systemName: "doc")) { [weak self] _ in self?.pickAIPDF() },
-            UIAction(title: "入力した文章をメモとして保存", image: UIImage(systemName: "note.text")) { [weak self] _ in self?.saveAIMemo() },
-            UIAction(title: "授業メモ(AIが毎回読みます)", image: UIImage(systemName: "pencil.and.list.clipboard")) { [weak self] _ in self?.openCourseMemo() },
-            // 録音を文字にする言語。メニューを開くたびに、いまの選択を反映する。
-            UIDeferredMenuElement.uncached { completion in
-                completion([UIMenu(title: "録音の言語", image: UIImage(systemName: "globe"), children: RecordingLanguage.allCases.map { language in
-                    UIAction(title: language.title, state: RecordingLanguage.current == language ? .on : .off) { _ in RecordingLanguage.current = language }
-                })])
-            },
-            UIAction(title: "資料と送信状況", image: UIImage(systemName: "tray")) { [weak self] _ in self?.openAISources(allDays: false) }
+            UIAction(title: "写真", image: UIImage(systemName: "photo")) { [weak self] _ in self?.pickAIPhotos() },
+            UIAction(title: "ファイル", image: UIImage(systemName: "doc")) { [weak self] _ in self?.pickAIPDF() }
         ])
         plus.translatesAutoresizingMaskIntoConstraints = false
 
@@ -4779,6 +4831,26 @@ final class CourseDetailViewController: UIViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.scrollNoteChatToBottom(animated: false) }
     }
 
+    /// 緑の帯を押したときの、授業の回の一覧(新しい回が上)。今の回には印を付ける。
+    private func sessionPickerActions() -> [UIMenuElement] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ja_JP")
+        formatter.dateFormat = "M/d E"
+        return noteSchedule.filter { !$0.isCancelled }.sorted { $0.dayID > $1.dayID }.map { entry in
+            UIAction(title: "\(noteSessionTitle(dayID: entry.dayID))  \(formatter.string(from: entry.date))",
+                     state: entry.dayID == noteChatCurrentSession ? .on : .off) { [weak self] _ in
+                self?.switchNoteChatSession(to: entry.dayID)
+            }
+        }
+    }
+
+    private func switchNoteChatSession(to dayID: Int) {
+        guard dayID != noteChatCurrentSession else { return }
+        let keyboardUp = noteChatTextField.isFirstResponder
+        openNoteChat(session: dayID)
+        if keyboardUp { snapNoteChatActionsCompact() }
+    }
+
     /// チャット表示中は、緑の帯に「第N回授業 · 9/29 火」を小さく出す(どの回のチャットか分かるように)。
     private func updateTitleSubtitle(animated: Bool) {
         let show = noteShowsChatDetail
@@ -4786,8 +4858,15 @@ final class CourseDetailViewController: UIViewController {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "ja_JP")
             formatter.dateFormat = "M/d E"
-            titleSubLabel.text = "\(noteSessionTitle(dayID: entry.dayID)) · \(formatter.string(from: entry.date))"
+            // 押すと回を選べると分かるように、右に「⌄」を付ける。
+            let text = NSMutableAttributedString(string: "\(noteSessionTitle(dayID: entry.dayID)) · \(formatter.string(from: entry.date)) ")
+            let chevron = NSTextAttachment()
+            chevron.image = UIImage(systemName: "chevron.down.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))?
+                .withTintColor(UIColor.white.withAlphaComponent(0.9), renderingMode: .alwaysOriginal)
+            text.append(NSAttributedString(attachment: chevron))
+            titleSubLabel.attributedText = text
         }
+        sessionPickerButton.isHidden = !show
         titleLabelBottomConstraint?.constant = show ? -28 : -12
         let changes = {
             self.titleSubLabel.alpha = show ? 1 : 0
@@ -6386,6 +6465,11 @@ extension CourseDetailViewController: WKNavigationDelegate {
 
 
 /// 送信済みの写真を横1列に並べるスクロール。内容が幅に収まるときは右寄せにする。
+/// 送信した写真を、2列で並べる入れ物(タップしたとき、全部の写真を見せるために持っておく)。
+final class NotePhotoGridView: UIStackView {
+    var photos: [CapturedPhoto] = []
+}
+
 final class NotePhotoRowScrollView: UIScrollView {
     var photos: [CapturedPhoto] = []
 
@@ -6804,4 +6888,17 @@ extension CourseDetailViewController: PHPickerViewControllerDelegate {
             } catch { showNoteAlert(title: "写真を追加できませんでした", message: error.localizedDescription) }
         }
     }
+}
+
+extension CourseDetailViewController: UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+    func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        picker.dismiss(animated: true)
+        guard let image = info[.originalImage] as? UIImage,
+              let full = image.jpegData(compressionQuality: 0.9),
+              let downsized = PhotoCodec.downsample(full, maxPixel: 2048), let jpeg = downsized.jpegData(compressionQuality: 0.8),
+              let thumb = PhotoCodec.downsample(jpeg, maxPixel: 256) else { return }
+        addNotePhotosToComposer([CapturedPhoto(jpeg: jpeg, thumb: thumb)])
+    }
+
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { picker.dismiss(animated: true) }
 }

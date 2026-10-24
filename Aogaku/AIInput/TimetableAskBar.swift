@@ -9,9 +9,14 @@ final class TimetableAskBar: UIControl {
     private static let darkGreen = UIColor(red: 0.04, green: 0.31, blue: 0.21, alpha: 1)
     private let iconView = UIImageView(image: UIImage(systemName: "sparkles"))
     private let label = UILabel()
+    private let nextLabel = UILabel()      // 文字が入れ替わるとき、上から入ってくる次の文字
+    private let hintClip = UIView()        // 文字が動く範囲(バーの中だけ。外にははみ出さない)
     private let trailingIcon = UIImageView()
     private let trailingBackground = UIView()
     private(set) var mode: Mode = .idle
+    private static let hints = ["リアぺ書いて", "問題解いて", "授業解説して", "小テスト作って", "授業の評価方法は？"]
+    private var hintIndex = 0
+    private var hintTimer: Timer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -25,21 +30,23 @@ final class TimetableAskBar: UIControl {
         iconView.setContentHuggingPriority(.required, for: .horizontal)
         label.font = .systemFont(ofSize: 16)
         label.numberOfLines = 2
+        label.clipsToBounds = true   // 文字が入れ替わる動きが、はみ出さないように
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.85
         trailingBackground.layer.cornerRadius = 16
         trailingBackground.isUserInteractionEnabled = false
         trailingIcon.contentMode = .scaleAspectFit
         trailingBackground.addSubview(trailingIcon)
-        [iconView, label, trailingBackground].forEach { $0.isUserInteractionEnabled = false; $0.translatesAutoresizingMaskIntoConstraints = false; addSubview($0) }
+        [iconView, hintClip, trailingBackground].forEach { $0.isUserInteractionEnabled = false; $0.translatesAutoresizingMaskIntoConstraints = false; addSubview($0) }
         trailingIcon.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
             iconView.widthAnchor.constraint(equalToConstant: 20), iconView.heightAnchor.constraint(equalToConstant: 20),
-            label.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingBackground.leadingAnchor, constant: -8),
+            hintClip.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            hintClip.topAnchor.constraint(equalTo: topAnchor),
+            hintClip.bottomAnchor.constraint(equalTo: bottomAnchor),
+            hintClip.trailingAnchor.constraint(equalTo: trailingBackground.leadingAnchor, constant: -8),
             trailingBackground.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             trailingBackground.centerYAnchor.constraint(equalTo: centerYAnchor),
             trailingBackground.widthAnchor.constraint(equalToConstant: 32), trailingBackground.heightAnchor.constraint(equalToConstant: 32),
@@ -47,11 +54,53 @@ final class TimetableAskBar: UIControl {
             trailingIcon.centerYAnchor.constraint(equalTo: trailingBackground.centerYAnchor),
             trailingIcon.widthAnchor.constraint(equalToConstant: 16), trailingIcon.heightAnchor.constraint(equalToConstant: 16)
         ])
+        hintClip.clipsToBounds = true
+        [label, nextLabel].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            hintClip.addSubview($0)
+            NSLayoutConstraint.activate([
+                $0.leadingAnchor.constraint(equalTo: hintClip.leadingAnchor),
+                $0.trailingAnchor.constraint(equalTo: hintClip.trailingAnchor),
+                $0.centerYAnchor.constraint(equalTo: hintClip.centerYAnchor)
+            ])
+        }
+        nextLabel.font = label.font
+        nextLabel.numberOfLines = label.numberOfLines
+        nextLabel.alpha = 0
         apply()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func setMode(_ newMode: Mode) { mode = newMode; apply() }
+    func setMode(_ newMode: Mode) { mode = newMode; apply(); updateHintTimer() }
+
+    /// 押す前は、2秒ごとに、聞けることの例を入れ替えて見せる。
+    private func updateHintTimer() {
+        hintTimer?.invalidate(); hintTimer = nil
+        guard mode == .idle, window != nil, !UIAccessibility.isReduceMotionEnabled else { return }
+        hintTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self, self.mode == .idle else { return }
+            self.hintIndex = (self.hintIndex + 1) % Self.hints.count
+            // 新しい文字が上から入ってきて、前の文字が下へ出ていく(バーの高さぶん動くので、間が十分にあく)。
+            let distance = max(self.hintClip.bounds.height, 40)
+            self.nextLabel.text = Self.hints[self.hintIndex]
+            self.nextLabel.textColor = self.label.textColor
+            self.nextLabel.alpha = 1
+            self.nextLabel.transform = CGAffineTransform(translationX: 0, y: -distance)
+            UIView.animate(withDuration: 0.45, delay: 0, options: .curveEaseInOut, animations: {
+                self.label.transform = CGAffineTransform(translationX: 0, y: distance)
+                self.nextLabel.transform = .identity
+            }, completion: { _ in
+                self.label.text = Self.hints[self.hintIndex]
+                self.label.transform = .identity
+                self.nextLabel.alpha = 0
+            })
+        }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateHintTimer()
+    }
 
     private func apply() {
         switch mode {
@@ -59,7 +108,7 @@ final class TimetableAskBar: UIControl {
             backgroundColor = .systemBackground
             layer.borderColor = UIColor.separator.cgColor
             iconView.tintColor = Self.green
-            label.text = "AIに質問する"
+            label.text = Self.hints[hintIndex]
             label.textColor = .secondaryLabel
             trailingBackground.backgroundColor = Self.green
             trailingIcon.image = UIImage(systemName: "arrow.up")

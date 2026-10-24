@@ -403,7 +403,8 @@ final class timetable: UIViewController,
 
     // ===== AdMob =====
     // 下の「AIに質問する」入力欄(以前は、広告の帯があった場所)
-    private let askBarContainer = UIView()
+    private var settingsDrawer: (UINavigationController, UIControl)?
+    private let askBarContainer = AskBarPassThroughView()
     private let askBar = TimetableAskBar()
     private var askBarHeight: NSLayoutConstraint?
     private var askSelecting = false
@@ -453,7 +454,7 @@ final class timetable: UIViewController,
     private var lastDaysCount = 5
     private var lastPeriodsCount = 5
 
-    private var assigned: [Course?] = Array(repeating: nil, count: 25)
+    private var assigned: [Course?] = Array(repeating: nil, count: 25) { didSet { invalidateWarmDetails() } }
 
     // Layout constants
     private let spacing: CGFloat = 1
@@ -541,7 +542,7 @@ final class timetable: UIViewController,
         scrollView.backgroundColor = bg
         contentView.backgroundColor = bg
         gridContainerView.backgroundColor = bg
-        askBarContainer.backgroundColor = bg
+        askBarContainer.backgroundColor = .clear
     }
 
     
@@ -1381,6 +1382,7 @@ final class timetable: UIViewController,
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         publishWidgetSnapshot()   // フォアグラウンドに戻ったときも最新化
+        scheduleDetailWarmup()
         startNowTicker()                     // 追加
         updateNowHighlight()                 // 追加（すぐ反映）
         //debugPrintAllFontNames()
@@ -1668,7 +1670,7 @@ final class timetable: UIViewController,
             b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         }
         configureIcon(rightB, systemName: "square.and.arrow.up") // 共有
-        configureIcon(rightC, systemName: "gearshape")           // 設定
+        configureIcon(rightC, systemName: "line.3.horizontal")   // 設定(右から出る)
         rightB.addTarget(self, action: #selector(tapRightB), for: .touchUpInside)
         rightC.addTarget(self, action: #selector(tapRightC), for: .touchUpInside)
 
@@ -2094,11 +2096,24 @@ final class timetable: UIViewController,
 
     /// AIタブから、授業の詳細画面(AIハックのチャット)を、指定の回で開く。text や photos があれば、そのまま送る。
     func presentCourseChat(_ entry: QuickAskCourse, dayID: Int, text: String, photos: [CapturedPhoto], from presenter: UIViewController) {
-        let vc = CourseDetailViewController(course: entry.course, location: entry.location, term: currentTerm, showsReview: true, showsLectureNotes: true)
+        // チャットだけを使うので、友だち・課題・レビュー・色の変更など、裏で読み込むものは省く(開くのを軽くする)。
+        let vc = CourseDetailViewController(course: entry.course, location: entry.location, term: currentTerm,
+                                            showsAttendanceControls: false, allowsCourseManagement: false,
+                                            showsEnrolledFriends: false, showsMoodleAssignments: false,
+                                            showsReview: false, showsLectureNotes: true)
         vc.delegate = self
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController { sheet.detents = [.large()]; sheet.selectedDetentIdentifier = .large; sheet.prefersGrabberVisible = true }
-        presenter.present(vc, animated: true) { vc.startAIChat(dayID: dayID, text: text, photos: photos) }
+        // 授業の一覧を経由せず、すぐチャットを開く: 先に画面を読み込み、動きなしで出す。
+        // 画面を出す前に、出る大きさに合わせて、チャットまで組み立てておく(出たあとに、位置が動いたり、一覧が見えたりしない)。
+        vc.view.frame = (presenter.view.window ?? presenter.view).bounds
+        vc.loadViewIfNeeded()
+        vc.startAIChat(dayID: dayID, text: text, photos: photos)
+        vc.view.layoutIfNeeded()
+        // 下からせり上がる標準の動き(奥行きが出る)。キーボードも、同時に上げ始める。
+        presenter.present(vc, animated: true) { vc.showChatKeyboardIfNeeded() }
+        vc.showChatKeyboardIfNeeded()
+        if vc.view.window == nil { DispatchQueue.main.async { vc.showChatKeyboardIfNeeded() } }
     }
 
     private func presentCourseDetail(_ course: Course, at loc: SlotLocation) {
@@ -2109,7 +2124,7 @@ final class timetable: UIViewController,
             }
             return
         }
-        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm, showsReview: true, showsLectureNotes: true)
+        let vc = takeWarmDetail(course, at: loc)
         vc.delegate = self
         vc.modalPresentationStyle = .pageSheet
         if let sheet = vc.sheetPresentationController {
@@ -2121,7 +2136,53 @@ final class timetable: UIViewController,
             }
             sheet.prefersGrabberVisible = true
         }
-        present(vc, animated: true)
+        present(vc, animated: true) { [weak self] in self?.scheduleDetailWarmup() }
+    }
+
+    // MARK: - 授業の詳細画面の先読み
+    // アプリを開いたあと、時間割の授業の詳細画面を、裏で1つずつ作っておく(ポータルも先に読み込まれる)。
+    // コマを押したときは、できている画面をそのまま出すので、待たない。
+    private var warmDetails: [String: (vc: CourseDetailViewController, at: Date)] = [:]
+    private var warmupScheduled = false
+
+    private func warmKey(_ course: Course, _ loc: SlotLocation) -> String {
+        "\(course.id)|\(course.title)|\(loc.day)|\(loc.period)|\(currentTerm.year)\(currentTerm.semester.rawValue)"
+    }
+
+    private func makeDetail(_ course: Course, at loc: SlotLocation) -> CourseDetailViewController {
+        let vc = CourseDetailViewController(course: course, location: loc, term: currentTerm, showsReview: true, showsLectureNotes: true)
+        vc.view.frame = (view.window ?? view).bounds
+        vc.loadViewIfNeeded()
+        return vc
+    }
+
+    private func takeWarmDetail(_ course: Course, at loc: SlotLocation) -> CourseDetailViewController {
+        if let warm = warmDetails.removeValue(forKey: warmKey(course, loc)), Date().timeIntervalSince(warm.at) < 600 { return warm.vc }
+        return makeDetail(course, at: loc)
+    }
+
+    private func invalidateWarmDetails() {
+        guard !warmDetails.isEmpty else { return }
+        warmDetails.removeAll()
+        scheduleDetailWarmup()
+    }
+
+    /// 画面が落ち着いてから、まだ作っていない授業を、1つずつ作る(同時に作らず、操作の邪魔をしない)。
+    func scheduleDetailWarmup(after delay: TimeInterval = 1.5) {
+        guard !warmupScheduled, !viewOnly else { return }
+        warmupScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.warmupScheduled = false
+            self?.warmNextDetail()
+        }
+    }
+
+    private func warmNextDetail() {
+        guard isViewLoaded, view.window != nil, presentedViewController == nil, !askSelecting else { return }
+        let entries = quickAskEntries().entries
+        guard let next = entries.first(where: { warmDetails[warmKey($0.course, $0.location)] == nil }) else { return }
+        warmDetails[warmKey(next.course, next.location)] = (makeDetail(next.course, at: next.location), Date())
+        scheduleDetailWarmup(after: 0.4)
     }
     
     // MARK: - Online (OD) helpers
@@ -2426,9 +2487,8 @@ final class timetable: UIViewController,
             askBar.topAnchor.constraint(equalTo: askBarContainer.topAnchor, constant: 8),
             askBar.bottomAnchor.constraint(equalTo: askBarContainer.bottomAnchor, constant: -8)
         ])
-        scrollBottomConstraint?.isActive = false
-        scrollBottomConstraint = scrollView.bottomAnchor.constraint(equalTo: askBarContainer.topAnchor)
-        scrollBottomConstraint?.isActive = true
+        // 時間割は、バーの裏まで広げる(バーの周りは透明で、時間割が見える)。最下部までスクロールすると、バーに隠れない。
+        view.bringSubviewToFront(askBarContainer)
         updateAskBarVisibility()
     }
 
@@ -2436,6 +2496,8 @@ final class timetable: UIViewController,
     private func updateAskBarVisibility() {
         askBarContainer.isHidden = viewOnly
         askBarHeight?.constant = viewOnly ? 0 : 64
+        scrollView.contentInset.bottom = viewOnly ? 0 : 64
+        scrollView.verticalScrollIndicatorInsets.bottom = viewOnly ? 0 : 64
     }
 
     @objc private func askBarTapped() {
@@ -2461,7 +2523,10 @@ final class timetable: UIViewController,
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             overlay.layer.cornerRadius = button.layer.cornerRadius
             if assigned[index] == nil {
-                overlay.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.65)
+                // 空きコマを薄く見せる。ダークモードでは、背景(黒)をかぶせると真っ黒になるので、灰色をかぶせる。
+                overlay.backgroundColor = UIColor { trait in
+                    trait.userInterfaceStyle == .dark ? UIColor(white: 0.2, alpha: 0.55) : UIColor.systemBackground.withAlphaComponent(0.65)
+                }
             } else {
                 overlay.layer.borderWidth = 2.5
                 overlay.layer.borderColor = UIColor(red: 0.04, green: 0.42, blue: 0.28, alpha: 1).cgColor
@@ -2559,9 +2624,73 @@ final class timetable: UIViewController,
         present(action, animated: true)
     }
     @objc private func tapRightC() {
-        let vc = TimetableSettingsViewController()
-        if let nav = navigationController { nav.pushViewController(vc, animated: true) }
-        else { let nav = UINavigationController(rootViewController: vc); present(nav, animated: true) }
+        guard settingsDrawer == nil else { return }
+        NotificationCenter.default.addObserver(self, selector: #selector(closeSettingsDrawer), name: .closeTimetableSettingsDrawer, object: nil)
+        let nav = UINavigationController(rootViewController: TimetableSettingsViewController())
+        let host: UIViewController = tabBarController ?? self
+        let dim = UIControl(frame: host.view.bounds)
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0)
+        dim.addTarget(self, action: #selector(closeSettingsDrawer), for: .touchUpInside)
+        host.view.addSubview(dim)
+        dim.frame = host.view.bounds
+        let width = min(dim.bounds.width * 0.86, 420)
+        // 画面の上(時計・バッテリー)を避けるため、入れ物の中で、ステータスバーの分だけ下げて置く。
+        let top = view.window?.safeAreaInsets.top ?? view.safeAreaInsets.top
+        // 入れ物の画面(ViewController)の中に載せる。こうしないと、ナビゲーションバーの高さが、中の画面に伝わらない。
+        let container = UIViewController()
+        let panel = container.view!
+        panel.frame = CGRect(x: dim.bounds.width, y: 0, width: width, height: dim.bounds.height)
+        panel.backgroundColor = .systemGroupedBackground
+        panel.layer.shadowOpacity = 0.25; panel.layer.shadowRadius = 12
+        host.addChild(container)
+        host.view.addSubview(panel)
+        container.didMove(toParent: host)
+        container.addChild(nav)
+        nav.view.frame = CGRect(x: 0, y: top, width: width, height: panel.bounds.height - top)
+        nav.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        panel.addSubview(nav.view)
+        nav.didMove(toParent: container)
+        settingsDrawer = (nav, dim)
+        panel.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(drawerPanned(_:))))
+        UIView.animate(withDuration: 0.28, delay: 0, options: .curveEaseOut) {
+            panel.frame.origin.x = dim.bounds.width - width
+            dim.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        }
+    }
+
+    /// 右へスワイプして閉じる(指に追従し、離したときに、十分動いていたか速ければ閉じる)。
+    @objc private func drawerPanned(_ g: UIPanGestureRecognizer) {
+        guard let (nav, dim) = settingsDrawer, let panel = nav.view.superview else { return }
+        let width = panel.bounds.width
+        let openX = dim.bounds.width - width
+        let dx = max(0, g.translation(in: dim).x)
+        switch g.state {
+        case .changed:
+            panel.frame.origin.x = openX + dx
+            dim.backgroundColor = UIColor.black.withAlphaComponent(0.3 * (1 - min(dx / width, 1)))
+        case .ended, .cancelled:
+            if dx > width * 0.35 || g.velocity(in: dim).x > 600 { closeSettingsDrawer() }
+            else {
+                UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: []) {
+                    panel.frame.origin.x = openX
+                    dim.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+                }
+            }
+        default: break
+        }
+    }
+
+    @objc private func closeSettingsDrawer() {
+        guard let (nav, dim) = settingsDrawer, let panel = nav.view.superview else { return }
+        settingsDrawer = nil
+        UIView.animate(withDuration: 0.22, delay: 0, options: .curveEaseIn, animations: {
+            panel.frame.origin.x = dim.bounds.width
+            dim.backgroundColor = .clear
+        }, completion: { _ in
+            let container = nav.parent
+            nav.willMove(toParent: nil); nav.view.removeFromSuperview(); nav.removeFromParent()
+            container?.willMove(toParent: nil); panel.removeFromSuperview(); container?.removeFromParent(); dim.removeFromSuperview()
+        })
     }
 
     // MARK: - Share / Save
@@ -3002,4 +3131,13 @@ extension timetable {
     
     
     
+}
+
+
+/// 自分以外の場所は、タッチを下の時間割に通す(丸いバーだけが押せる)。
+final class AskBarPassThroughView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
 }

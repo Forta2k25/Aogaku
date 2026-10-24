@@ -1,5 +1,6 @@
 import Foundation
 import FirebaseAuth
+import FirebaseCore
 import FirebaseFirestore
 import FirebaseFunctions
 import UIKit
@@ -172,7 +173,14 @@ final class AuthManager {
 
     // MARK: - Google Sign-In
     // Returns true if the user is new and needs ID setup.
+    /// 接続先の設定にGoogleログイン用のIDが無いと、Googleの部品が例外で、アプリごと落ちる(開発用の接続先など)。先に止めて、説明を出す。
+    private func requireGoogleClientID() throws {
+        guard FirebaseApp.app()?.options.clientID?.isEmpty == false else {
+            throw NSError(domain: "AogakuAuth", code: 501, userInfo: [NSLocalizedDescriptionKey: "この環境(開発用)では、Googleログインを使えません。IDとパスワードでログインしてください。"])
+        }
+    }
     func signInWithGoogle(presenting vc: UIViewController) async throws -> Bool {
+        try requireGoogleClientID()
         let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: vc)
         let googleUser = result.user
         guard let idToken = googleUser.idToken?.tokenString else { throw AuthError.unknown }
@@ -192,6 +200,7 @@ final class AuthManager {
 
     // Link Google to the currently signed-in (password-based) account.
     func linkGoogle(presenting vc: UIViewController) async throws {
+        try requireGoogleClientID()
         guard let currentUser = Auth.auth().currentUser else { throw AuthError.unknown }
 
         let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: vc)

@@ -11,7 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AI_FUNCTIONS = ['aiCreateSource', 'aiCompleteSource', 'aiGetSource', 'aiListSources', 'aiGetEvidence', 'aiRetrySource',
-                'aiUpdateSource', 'aiLinkSourceOffering', 'aiDeleteSource', 'aiRetrieveContext', 'aiProcessSource', 'aiReconcileInputs', 'aiRejectLateUpload']
+                'aiUpdateSource', 'aiLinkSourceOffering', 'aiDeleteSource', 'aiRetrieveContext', 'aiProcessSource', 'aiReconcileInputs', 'aiRejectLateUpload',
+                'aiSaveMessages', 'aiListMessages', 'aiDeleteMessages']
 
 def validate(root=ROOT):
     manifest = json.loads((root / 'Config/firebase-development.json').read_text())
@@ -38,7 +39,7 @@ def validate_approved(root=ROOT):
 
 def main():
     action = sys.argv[1] if len(sys.argv) == 2 else ''
-    if action not in ['check', 'deploy', 'deploy-workers', 'deploy-processor', 'deploy-inputs', 'deploy-link', 'deploy-maintenance', 'deploy-private-profile', 'deploy-account-deletion', 'secret']:
+    if action not in ['check', 'deploy', 'deploy-workers', 'deploy-processor', 'deploy-inputs', 'deploy-conversations', 'deploy-link', 'deploy-maintenance', 'deploy-private-profile', 'deploy-account-deletion', 'secret']:
         raise ValueError('Usage: firebase_dev.py check|deploy|deploy-workers|deploy-processor|deploy-inputs|deploy-link|secret (no arbitrary Firebase arguments)')
     project = validate_approved()
     if action == 'check':
@@ -59,10 +60,13 @@ def main():
         command += ['functions:secrets:set', 'GROQ_API_KEY']  # Firebase CLI secure interactive prompt.
     elif action == 'deploy-account-deletion':
         command += ['deploy', '--only', ','.join('functions:aogaku-account-delete:' + name for name in NAMES)]
+    elif action == 'deploy-conversations':
+        # 会話の同期の3関数だけ(ほかの関数・Firestore・Storageには触れない)。
+        command += ['deploy', '--only', ','.join('functions:' + name for name in ['aiSaveMessages', 'aiListMessages', 'aiDeleteMessages'])]
     elif action == 'deploy-link':
         command += ['deploy', '--only', 'functions:aiLinkSourceOffering']
     elif action == 'deploy-inputs':
-        names = [name for name in AI_FUNCTIONS if name not in ['aiProcessSource', 'aiReconcileInputs', 'aiRejectLateUpload']]
+        names = [name for name in AI_FUNCTIONS if name not in ['aiProcessSource', 'aiReconcileInputs', 'aiRejectLateUpload', 'aiSaveMessages', 'aiListMessages', 'aiDeleteMessages']]
         command += ['deploy', '--only', ','.join('functions:' + name for name in names)]
     elif action == 'deploy-maintenance':
         command += ['deploy', '--only', 'functions:aiReconcileInputs']

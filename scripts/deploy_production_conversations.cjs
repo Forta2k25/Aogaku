@@ -31,6 +31,8 @@ function build() {
   const out = {name: 'aogaku-ai-conversations', version: pkg.version, main: 'lib/production-conversations.js', engines: pkg.engines, dependencies: pkg.dependencies};
   fs.writeFileSync(path.join(OUT, 'package.json'), JSON.stringify(out, null, 2) + '\n');
   fs.copyFileSync(path.join(FN, 'package-lock.json'), path.join(OUT, 'package-lock.json'));
+  // Firebase CLI は、公開の前に、手元で入口を読み込んで、関数の一覧を調べる。そのために、依存の部品が、このフォルダに要る(公開時には、アップロードしない)。
+  execFileSync('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {cwd: OUT, stdio: 'inherit'});
 }
 function liveConfig() {
   // 基準は、公開ずみの aiChat。環境変数の値は、読むだけで、表示しない。

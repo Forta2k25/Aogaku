@@ -35,3 +35,24 @@ test('会話の履歴: 本人だけが読める。書き込みと、ほかのデ
   // 会話の「親」の階層(授業の一覧など)も、読めない(読めるのは、発言の1件1件だけ)
   assert.equal((await req('GET', 'aiChats/alice', jwt('alice'))).status, 403);
 });
+
+test('時間割の共有URL: 長いIDなら誰でも1件だけ読める。一覧と、他人の書き換えは拒否', {skip: !enabled}, async () => {
+  const id = 'abcdefghijklmnopqrstuvwxyz012345';
+  const body = owner => ({fields: {ownerUid: text(owner), ownerName: text('れお')}});
+  assert.equal((await req('PATCH', `sharedTimetables/${id}`, jwt('alice'), body('alice'))).status, 200, '本人は作れる');
+  assert.equal((await req('GET', `sharedTimetables/${id}`, null)).status, 200, '未ログインでも1件は読める');
+  assert.equal((await req('GET', 'sharedTimetables', null)).status, 403, '一覧は読めない');
+  assert.equal((await req('PATCH', `sharedTimetables/${id}`, jwt('bob'), body('bob'))).status, 403, '他人は書き換えられない');
+  assert.equal((await req('PATCH', 'sharedTimetables/short', jwt('alice'), body('alice'))).status, 403, '短いIDは作れない');
+  assert.equal((await req('PATCH', 'sharedTimetables/' + id.replace('a', 'b'), jwt('alice'), body('bob'))).status, 403, '他人名義では作れない');
+  assert.equal((await req('DELETE', `sharedTimetables/${id}`, jwt('bob'))).status, 403);
+  assert.equal((await req('DELETE', `sharedTimetables/${id}`, jwt('alice'))).status, 200);
+});
+test('課題の置き場: 本人だけが読み書きできる', {skip: !enabled}, async () => {
+  const f = {fields: {submitted: {arrayValue: {values: [text('x')]}}}};
+  assert.equal((await req('PATCH', 'userAssignments/alice', jwt('alice'), f)).status, 200);
+  assert.equal((await req('GET', 'userAssignments/alice', jwt('alice'))).status, 200);
+  assert.equal((await req('GET', 'userAssignments/alice', jwt('bob'))).status, 403);
+  assert.equal((await req('GET', 'userAssignments/alice', null)).status, 403);
+  assert.equal((await req('PATCH', 'userAssignments/alice', jwt('bob'), f)).status, 403);
+});

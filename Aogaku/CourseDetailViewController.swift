@@ -189,6 +189,8 @@ final class CourseDetailViewController: UIViewController {
         }
     }
     private var aiAuthHandle: AuthStateDidChangeListenerHandle?
+    /// チャットを開いている間、別の端末(Web)の会話が届いていないかを、ときどき確かめる。
+    private var conversationSyncTimer: Timer?
     private var aiSessionUID: String?
     private var aiMessageIDs: [Int: [String]] = [:]
     private var noteChatMessagesBySession: [Int: [NoteChatMessage]] = [:]
@@ -227,7 +229,7 @@ final class CourseDetailViewController: UIViewController {
         return try SourceIngestionService.shared.store(uid: uid).contextForInput(context)
     }
 
-    deinit { if let handle = aiAuthHandle { Auth.auth().removeStateDidChangeListener(handle) } }
+    deinit { conversationSyncTimer?.invalidate(); if let handle = aiAuthHandle { Auth.auth().removeStateDidChangeListener(handle) } }
 
     /// AIタブからの質問。開いたら、AIハックに切り替えて、指定の回のチャットで、質問を送る(準備ができていなければ、できてから)。
     private struct PendingAIChat { let dayID: Int; let text: String; let photos: [CapturedPhoto] }
@@ -1000,6 +1002,7 @@ final class CourseDetailViewController: UIViewController {
         scroll.keyboardDismissMode = .onDrag
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.startGuideFloating()   // バックグラウンドから戻ると、アニメーションが止まっていることがあるため
+            self?.syncConversationHistory()   // 戻ってきたとき、別の端末(Web)の会話を取り込む
         }
         scroll.delegate = self
         NotificationCenter.default.addObserver(self, selector: #selector(noteKeyboardWillChangeFrame(_:)),
@@ -1020,6 +1023,7 @@ final class CourseDetailViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         view.endEditing(true)
+        conversationSyncTimer?.invalidate(); conversationSyncTimer = nil
         if isBeingDismissed || isMovingFromParent {
             aiReplyTasks.values.forEach { $0.cancel() }; aiReplyTasks.removeAll(); aiSessionTask?.cancel()
             // 授業詳細を閉じたら、録音と再生も止める(使用時間は加算される)
@@ -1032,6 +1036,13 @@ final class CourseDetailViewController: UIViewController {
         super.viewDidAppear(animated)
         restoreAIInput()
         syncConversationHistory()
+        if showsLectureNotes {
+            conversationSyncTimer?.invalidate()
+            conversationSyncTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                guard let self, self.noteShowsChatDetail, self.aiReplyTasks.isEmpty else { return }   // 返信を作っている最中は、触らない
+                self.syncConversationHistory()
+            }
+        }
         updateDetectionSources(restart: true)
         if let uid = aiSessionUID { SourceIngestionService.shared.resume(uid: uid) }
         if #available(iOS 16.0, *),

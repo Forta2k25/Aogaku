@@ -18,6 +18,7 @@ import {join} from "node:path";
 import {PIPELINE, InputError, validateCreate, id, offeringId, syllabusYear, courseSnapshot, CourseSnapshot, str, integer, hash, canRead, mayPublish, chunksFor, weekKey, selectContext, Extraction} from "./domain";
 import {extractAudio, extractImage, extractPDF, audioDuration} from "./extractors";
 import {AI_COLLECTIONS as collections} from "./schema";
+import {CONVERSATION, validateMessages, validateDeleteIds, validateListCursor} from "./conversations";
 import {admissionAllowed, INPUT_QUOTAS} from "./admission";
 import {CHAT, CHAT_CAPABILITY, validateChat, buildMessages, geminiChat, geminiChatStream, chooseContext, ContextItem} from "./chat";
 import {RecognitionError} from "./recognition";
@@ -523,6 +524,40 @@ async function recordingTask(uid: string, data: any) {
 }
 
 // Conversational reply over the caller's own ready sources. Nothing from the conversation is stored server-side.
+// ---- 会話の履歴の同期(文章だけ)。アプリとWebで、同じ授業の会話を引き継ぐ ----
+// 授業の特定は、資料と同じ仕組み(resolveContext)を使う。これで、両方の端末が、同じ授業の同じ保存先を指す。
+async function conversationRoot(uid: string, data: any) {
+  const context = validateCreate({clientRequestId: "resolve", type: "note", title: "resolve", mime: "text/plain", text: "resolve", context: data.context}).context;
+  const resolved = await resolveContext(uid, context);
+  return {context, offering: resolved.courseOfferingId,
+    messages: db().collection(`${collections.chats}/${uid}/offerings/${resolved.courseOfferingId}/messages`)};
+}
+export const aiSaveMessages = callable(async (uid, data) => {
+  const rows = validateMessages(data), {context, messages} = await conversationRoot(uid, data);
+  const batch = db().batch(), at = now();
+  for (const row of rows) {
+    batch.set(messages.doc(row.id), {role: row.role, kind: row.kind, text: row.text, imageCount: row.imageCount, dayID: context.dayID,
+      semester: context.semester, createdAt: row.createdAt, updatedAt: at, schemaVersion: 1});
+  }
+  await batch.commit();
+  return {saved: rows.length};
+});
+export const aiListMessages = callable(async (uid, data) => {
+  const after = validateListCursor(data), {offering, messages} = await conversationRoot(uid, data);
+  let query = messages.orderBy("createdAt").limit(CONVERSATION.maxList + 1);
+  if (after !== undefined) query = query.startAfter(after);
+  const snap = await query.get(), page = snap.docs.slice(0, CONVERSATION.maxList);
+  return {courseOfferingId: offering, nextCursor: snap.size > CONVERSATION.maxList ? page.at(-1)!.get("createdAt") : null,
+    items: page.map(d => ({id: d.id, role: d.get("role"), kind: d.get("kind"), text: d.get("text"), imageCount: d.get("imageCount") ?? 0,
+      dayID: d.get("dayID"), semester: d.get("semester"), createdAt: d.get("createdAt")}))};
+});
+export const aiDeleteMessages = callable(async (uid, data) => {
+  const ids = validateDeleteIds(data), {messages} = await conversationRoot(uid, data);
+  const batch = db().batch();
+  for (const messageId of ids) batch.delete(messages.doc(messageId));
+  await batch.commit();
+  return {deleted: ids.length};
+});
 export const aiChat = callable(async (uid, data, stream) => {
   if (data?.task !== undefined) return recordingTask(uid, data);
   const input = validateChat(data);

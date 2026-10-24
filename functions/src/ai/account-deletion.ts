@@ -48,6 +48,8 @@ export async function continueAIAccountDeletion(uid: string) {
     await batch.commit();
     if (memberships.size === 100) return;
     await db().recursiveDelete(db().doc(`${collections.usage}/${uid}`));
+    // 同期した会話の文章も、アカウントと一緒に消す。
+    await db().recursiveDelete(db().doc(`${collections.chats}/${uid}`));
     for (const prefix of [`ai-inputs/${aiDatabaseId()}/${uid}/`, `ai-derived/${aiDatabaseId()}/${uid}/`]) {
       await bucket().deleteFiles({prefix});
     }

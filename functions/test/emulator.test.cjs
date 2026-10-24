@@ -383,3 +383,27 @@ test('upload telemetry: optional, validated owner transfer time; old clients rem
  const bytes=require('../../scripts/visual_router_fixtures.cjs').pdf(['text']),uid='upload-telemetry-owner',source={sourceId:'upload-telemetry-pdf'};await recognitionSource(source.sourceId,uid,'pdf',bytes,'application/pdf');const ref=db.doc('aiSources/'+source.sourceId);await ref.update({status:'awaiting_upload',pipelineVersion:'pdf-auto-v1'});
  for(const bad of ['100',-1,3600001,null])await assert.rejects(call('aiCompleteSource',uid,{sourceId:source.sourceId,uploadMs:bad}),e=>e.message==='INVALID_UPLOAD_METRIC');assert.equal((await ref.get()).get('status'),'awaiting_upload');await call('aiCompleteSource',uid,{sourceId:source.sourceId,uploadMs:123.5});await api.aiProcessSource.run({data:{databaseId:'aogaku-ai',sourceId:source.sourceId}});const ready=await call('aiGetSource',uid,{sourceId:source.sourceId});assert.equal(ready.status,'ready');assert.equal(ready.latency.uploadMs,123.5);assert.equal(ready.latency.uploadTimingKind,'client-transfer');assert.equal(ready.recognition.routing.pages[0].route,'native_text');assert.equal(ready.latency.providerCalls,0);
 });
+test('conversation sync: save/list/delete, idempotent, isolated per user, removed with the account',{skip:!enabled},async()=>{
+ const ctx=(day,uuid='aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa')=>({localCourseId:uuid,localCourseUUID:uuid,year:2026,semester:'fall',courseName:'架空の授業',teacherName:'架空教員',syllabusUrl:'',dayID:day});
+ const uid='conv-owner',other='conv-other',base=1790000000000;
+ const row=(id,role,text,at,extra={})=>({id,role,text,createdAt:base+at,...extra});
+ assert.deepEqual(await call('aiSaveMessages',uid,{context:ctx(20000),messages:[row('c-q1','user','こんにちは',1000),row('c-a1','assistant','こんにちは!',2000)]}),{saved:2});
+ await call('aiSaveMessages',uid,{context:ctx(20007),messages:[row('c-img','user','',3000,{kind:'image',imageCount:3})]});
+ // 同じ内容をもう一度送っても、増えない(送り直しに強い)
+ await call('aiSaveMessages',uid,{context:ctx(20000),messages:[row('c-q1','user','こんにちは',1000)]});
+ const listed=await call('aiListMessages',uid,{context:ctx(20000)});
+ assert.deepEqual(listed.items.map(i=>[i.id,i.role,i.kind,i.dayID,i.imageCount]),[['c-q1','user','text',20000,0],['c-a1','assistant','text',20000,0],['c-img','user','image',20007,3]]);
+ assert.equal(listed.nextCursor,null);
+ // 別のアカウントには、見えない。別の授業にも、混ざらない
+ assert.equal((await call('aiListMessages',other,{context:ctx(20000)})).items.length,0);
+ assert.equal((await call('aiListMessages',uid,{context:ctx(20000,'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb')})).items.length,0);
+ // 不正な入力は、保存しない
+ await assert.rejects(call('aiSaveMessages',uid,{context:ctx(20000),messages:[row('c-bad','system','x',1)]}));
+ await assert.rejects(call('aiSaveMessages',null,{context:ctx(20000),messages:[row('c-no-auth','user','x',1)]}),e=>e.code==='unauthenticated');
+ assert.deepEqual(await call('aiDeleteMessages',uid,{context:ctx(20000),ids:['c-a1']}),{deleted:1});
+ assert.deepEqual((await call('aiListMessages',uid,{context:ctx(20000)})).items.map(i=>i.id),['c-q1','c-img']);
+ // アカウント削除で、会話もまとめて消える
+ await api.beginAIAccountDeletion(uid);await api.continueAIAccountDeletion(uid);
+ const left=await db.collectionGroup('messages').get();
+ assert.equal(left.docs.filter(d=>d.ref.path.startsWith(`aiChats/${uid}/`)).length,0);
+});

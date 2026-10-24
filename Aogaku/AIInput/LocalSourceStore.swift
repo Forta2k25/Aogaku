@@ -13,6 +13,8 @@ final class LocalSourceStore {
         var offeringBindings: [String: AICourseSnapshot]? = nil
         /// AIの返信。後から足した項目なので任意(以前のledgerもそのまま読める)。
         var replies: [AIStoredReply]? = nil
+        /// サーバーと同期ずみの発言・返信の id と、その授業回。消したときに、サーバーからも消すために覚えておく。
+        var syncedMessages: [String: AIInputContext]? = nil
     }
     private let root: URL
     private let uid: String
@@ -219,6 +221,80 @@ final class LocalSourceStore {
                               localCourseUUID: snapshot.localCourseUUID, syllabusUrl: snapshot.syllabusUrl,
                               courseName: snapshot.courseName, teacherName: snapshot.teacherName)
     }
+    // MARK: 会話の同期(文章だけ)
+    /// 同期の計画: サーバーへ送るもの、サーバーから消すもの。写真・録音・PDFは、種類と枚数だけを送る。
+    func conversationSyncPlan(courseKey: String) -> (upload: [(context: AIInputContext, row: [String: Any], id: String)], deletions: [(context: AIInputContext, id: String)]) {
+        let synced = ledger.syncedMessages ?? [:]
+        let visibleMessages = ledger.messages.filter { !$0.hidden && $0.context.courseKey == courseKey }
+        let visibleIDs = Set(visibleMessages.map(\.id))
+        let visibleReplies = (ledger.replies ?? []).filter { !$0.hidden && visibleIDs.contains($0.afterMessageID) && $0.context.courseKey == courseKey }
+        var upload: [(AIInputContext, [String: Any], String)] = []
+        func ms(_ date: Date) -> Int { Int(date.timeIntervalSince1970 * 1000) }
+        for message in visibleMessages where synced[message.id] == nil && message.imported != true {
+            let context = contextForInput(message.context)
+            var row: [String: Any] = ["id": message.id, "role": "user", "createdAt": ms(message.createdAt)]
+            if message.kind == "question" {
+                guard let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { continue }
+                row["kind"] = "text"; row["text"] = String(text.prefix(20000))
+            } else if ["image", "audio", "pdf", "note"].contains(message.kind) {
+                row["kind"] = message.kind; row["text"] = ""
+                if message.kind == "image" { row["imageCount"] = min(max(message.sourceIDs.count, 1), 20) }
+            } else { continue }
+            upload.append((context, row, message.id))
+        }
+        for reply in visibleReplies where synced[reply.id] == nil {
+            let text = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let row: [String: Any] = ["id": reply.id, "role": "assistant", "kind": "text", "text": String(text.prefix(20000)), "createdAt": Int(reply.createdAt.timeIntervalSince1970 * 1000)]
+            upload.append((contextForInput(reply.context), row, reply.id))
+        }
+        let alive = visibleIDs.union(visibleReplies.map(\.id))
+        let deletions = synced.filter { !alive.contains($0.key) && $0.value.courseKey == courseKey }.map { (context: contextForInput($0.value), id: $0.key) }
+        return (upload, deletions)
+    }
+    func markConversationSynced(uploaded: [(id: String, context: AIInputContext)], deleted: [String]) throws {
+        var value = ledger
+        var synced = value.syncedMessages ?? [:]
+        for item in uploaded { synced[item.id] = item.context }
+        for id in deleted { synced.removeValue(forKey: id) }
+        value.syncedMessages = synced; try commit(value)
+    }
+    /// サーバーの会話のうち、この端末にないものを取り込む。戻り値は、新しく取り込んだ件数。
+    /// 発言は「送った」だけを見せる形(imported)で入れる。返信は、直前の自分の発言(同じ授業回)につなげる。
+    func importConversation(context: AIInputContext, remote: [RemoteConversationRow]) throws -> Int {
+        guard context.ownerUID == uid else { return 0 }
+        var value = ledger
+        var synced = value.syncedMessages ?? [:]
+        var known = Set(value.messages.map(\.id)).union((value.replies ?? []).map(\.id)).union(synced.keys)
+        var lastUserByDay: [Int: String] = [:]
+        var added = 0
+        for row in remote.sorted(by: { $0.createdAt < $1.createdAt }) {
+            let dayContext = AIInputContext(ownerUID: uid, localCourseId: context.localCourseId, classDocId: context.classDocId, year: context.year,
+                                            semester: context.semester, dayID: row.dayID, localCourseUUID: context.localCourseUUID,
+                                            syllabusUrl: context.syllabusUrl ?? "", courseName: context.courseName ?? "", teacherName: context.teacherName ?? "")
+            let date = Date(timeIntervalSince1970: TimeInterval(row.createdAt) / 1000)
+            if row.role == "user" {
+                lastUserByDay[row.dayID] = row.id
+                guard !known.contains(row.id) else { continue }
+                let kind = row.kind == "text" ? "question" : row.kind
+                // 写真は、枚数を text に持つ(「画像を送りました(3枚)」と見せるため)。それ以外の添付は、種類だけ。
+                let text: String? = row.kind == "text" ? row.text : (row.kind == "image" && row.imageCount > 1 ? String(row.imageCount) : nil)
+                value.messages.append(AIChatSnapshot(id: row.id, context: dayContext, kind: kind, text: text,
+                                                      sourceIDs: [], createdAt: date, imported: true))
+            } else if row.role == "assistant" {
+                guard !known.contains(row.id), let anchor = lastUserByDay[row.dayID] else { continue }
+                var replies = value.replies ?? []
+                guard !replies.contains(where: { $0.afterMessageID == anchor }) else { continue }
+                replies.append(AIStoredReply(id: row.id, context: dayContext, afterMessageID: anchor, text: row.text, createdAt: date))
+                value.replies = replies
+            } else { continue }
+            known.insert(row.id); synced[row.id] = dayContext; added += 1
+        }
+        guard added > 0 else { return 0 }
+        value.syncedMessages = synced
+        try commit(value)
+        return added
+    }
     func messages(context: AIInputContext) -> [AIChatSnapshot] {
         ledger.messages.filter { sameSession($0.context, context) && !$0.hidden }
     }
@@ -250,4 +326,9 @@ final class LocalSourceStore {
         let root = base.appendingPathComponent("AIInput/\(key)", isDirectory: true)
         if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
     }
+}
+
+/// サーバーから届いた、会話の1件(文章、または、写真などを送った印)。
+struct RemoteConversationRow: Equatable {
+    let id: String, role: String, kind: String, text: String, imageCount: Int, dayID: Int, createdAt: Int
 }

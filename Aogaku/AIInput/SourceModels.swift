@@ -189,6 +189,9 @@ struct AIChatSnapshot: Codable, Identifiable {
     let sourceIDs: [String]
     let createdAt: Date
     var hidden = false
+    /// 別の端末(Webなど)で送った発言を、同期で取り込んだもの。写真などの中身は無く、「送った」ことだけを見せる。
+    /// 取り込んだものには、この端末のAIは、返信を作らない(返信も、同期で届く)。
+    var imported: Bool? = nil
 }
 
 /// サーバー(aiChat)へ渡す会話の1ターン。role は "user" / "assistant"。

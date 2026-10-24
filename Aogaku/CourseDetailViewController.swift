@@ -159,6 +159,8 @@ final class CourseDetailViewController: UIViewController {
         case document(String)
         case photos([CapturedPhoto])
         case recording(url: URL, duration: TimeInterval)
+        /// 別の端末(Webなど)で送った写真・録音・PDF・メモ。中身は無く、送ったことだけを見せる。
+        case remote(kind: String, count: Int)
 
         var previewSymbol: String {
             switch self {
@@ -166,6 +168,7 @@ final class CourseDetailViewController: UIViewController {
             case .text: return "text.bubble"
             case .photos: return "photo"
             case .recording: return "waveform"
+            case .remote(let kind, _): return kind == "image" ? "photo" : kind == "audio" ? "waveform" : "doc.text"
             }
         }
 
@@ -175,6 +178,13 @@ final class CourseDetailViewController: UIViewController {
             case .text(let t): return t
             case .photos(let items): return "写真 \(items.count)枚"
             case .recording(_, let duration): return "録音 \(CourseDetailViewController.timeText(duration))"
+            case .remote(let kind, let count):
+                switch kind {
+                case "image": return count > 1 ? "画像を送りました(\(count)枚)" : "画像を送りました"
+                case "audio": return "録音を送りました"
+                case "pdf": return "PDFを送りました"
+                default: return "資料メモを送りました"
+                }
             }
         }
     }
@@ -318,11 +328,21 @@ final class CourseDetailViewController: UIViewController {
     }
 
     /// 返信待ちのまま止まっている最後の送信があれば、返信を作り直す。
+    /// 会話の履歴(文章)を、Webなど別の端末と合わせる。別の端末の発言を取り込んだら、画面を読み直す。
+    private func syncConversationHistory(force: Bool = false) {
+        guard showsLectureNotes, let context = try? aiContext(day: noteChatCurrentSession) else { return }
+        Task { [weak self] in
+            let changed = await ConversationSyncService.shared.sync(context: context, force: force)
+            guard changed, let self else { return }
+            self.restoreAIInput()
+        }
+    }
+
     private func resumePendingAIReply() {
         guard noteShowsChatDetail, let uid = aiSessionUID, let context = try? aiContext(day: noteChatCurrentSession),
               let store = try? SourceIngestionService.shared.store(uid: uid),
               let anchor = store.messages(context: context).last, ["image", "pdf", "audio", "question"].contains(anchor.kind),
-              aiReplyTasks[anchor.id] == nil, store.reply(afterMessageID: anchor.id) == nil else { return }
+              anchor.imported != true, aiReplyTasks[anchor.id] == nil, store.reply(afterMessageID: anchor.id) == nil else { return }
         startAIReply(afterMessageID: anchor.id)
     }
 
@@ -586,6 +606,7 @@ final class CourseDetailViewController: UIViewController {
             try? store.addReply(AIStoredReply(id: UUID().uuidString, context: context, afterMessageID: id, text: reply.text, createdAt: Date(), metrics: metrics, suggestions: reply.suggestions))
             bubble.completeStream(fullText: reply.text, metrics: metrics, usdJPY: AIReplyBubbleView.displayUSDJPY)
             refreshAISuggestions()
+            syncConversationHistory(force: true)   // この発言と返信を、Webなど別の端末にも届ける
         } catch {
             if Task.isCancelled || error is CancellationError { return }
             let message = (error as? AIInputError)?.errorDescription
@@ -650,6 +671,8 @@ final class CourseDetailViewController: UIViewController {
                 let selected = message.sourceIDs.compactMap { id in visibleSources.first { $0.id == id } }
                 let rendered: NoteChatMessage
                 switch message.kind {
+                case _ where message.imported == true && ["image", "audio", "pdf", "note"].contains(message.kind):
+                    rendered = .remote(kind: message.kind, count: Int(message.text ?? "") ?? 1)
                 case "image":
                     let photos = selected.compactMap(photo)
                     rendered = photos.isEmpty ? .document("削除した写真") : .photos(photos)
@@ -1008,6 +1031,7 @@ final class CourseDetailViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         restoreAIInput()
+        syncConversationHistory()
         updateDetectionSources(restart: true)
         if let uid = aiSessionUID { SourceIngestionService.shared.resume(uid: uid) }
         if #available(iOS 16.0, *),
@@ -3182,6 +3206,7 @@ final class CourseDetailViewController: UIViewController {
         restoreAIInput()
         resetNoteChatIfEmpty()
         SourceIngestionService.shared.resume(uid: uid)   // サーバーに送ってあった資料を、サーバー側も消す
+        syncConversationHistory(force: true)   // 消した発言は、サーバーの会話からも消す
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
@@ -3826,6 +3851,9 @@ final class CourseDetailViewController: UIViewController {
             let row = makeNoteTextBubble(message.previewText)   // 文章の吹き出しには、すでにメニューが付いている
             return row
         }
+        if case .remote = message {
+            return makeNoteTextBubble(message.previewText, symbol: message.previewSymbol)
+        }
         return makeNoteTextBubble(message.previewText)
     }
 
@@ -3866,7 +3894,7 @@ final class CourseDetailViewController: UIViewController {
         return row
     }
 
-    private func makeNoteTextBubble(_ text: String) -> UIView {
+    private func makeNoteTextBubble(_ text: String, symbol: String? = nil) -> UIView {
         let label = UILabel()
         label.text = text
         label.font = .systemFont(ofSize: 15)
@@ -3880,9 +3908,24 @@ final class CourseDetailViewController: UIViewController {
         label.translatesAutoresizingMaskIntoConstraints = false
         bubble.translatesAutoresizingMaskIntoConstraints = false
         bubble.addSubview(label)
+        var leading = label.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 14)
+        if let symbol {
+            // 別の端末で送った写真などは、アイコンと「送りました」を並べる。
+            let icon = UIImageView(image: UIImage(systemName: symbol))
+            icon.tintColor = Self.noteBubbleText
+            icon.contentMode = .scaleAspectFit
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            bubble.addSubview(icon)
+            NSLayoutConstraint.activate([
+                icon.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 14),
+                icon.centerYAnchor.constraint(equalTo: bubble.centerYAnchor),
+                icon.widthAnchor.constraint(equalToConstant: 18), icon.heightAnchor.constraint(equalToConstant: 18)
+            ])
+            leading = label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8)
+        }
         NSLayoutConstraint.activate([
             label.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
-            label.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 14),
+            leading,
             label.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -14),
             label.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -10)
         ])
@@ -4708,6 +4751,8 @@ final class CourseDetailViewController: UIViewController {
             switch message {
             case .photos(let items): photoCount += items.count
             case .recording: recordingCount += 1
+            case .remote(let kind, let count):
+                if kind == "image" { photoCount += count } else if kind == "audio" { recordingCount += 1 }
             case .text, .document: break
             }
         }
@@ -4825,6 +4870,7 @@ final class CourseDetailViewController: UIViewController {
         noteChatMorphing = false
         showNoteChatDetail(true)
         resumePendingAIReply()
+        syncConversationHistory()
         // 普通のチャットアプリのように、開いたときは、一番新しいメッセージ(一番下)から始める。
         // 画面の切り替えと、文章の高さが決まるのを待って、2回合わせる。
         DispatchQueue.main.async { [weak self] in self?.scrollNoteChatToBottom(animated: false) }

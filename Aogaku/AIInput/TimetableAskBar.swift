@@ -14,7 +14,7 @@ final class TimetableAskBar: UIControl {
     private let trailingIcon = UIImageView()
     private let trailingBackground = UIView()
     private(set) var mode: Mode = .idle
-    private static let hints = ["リアぺ書いて", "問題解いて", "授業解説して", "小テスト作って", "授業の評価方法は？"]
+    static let hints = ["リアぺ書いて", "問題解いて", "授業解説して", "小テスト作って", "授業の評価方法は？"]
     private var hintIndex = 0
     private var hintTimer: Timer?
 

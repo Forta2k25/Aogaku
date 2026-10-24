@@ -59,7 +59,7 @@ final class TimetableAskBarTests: XCTestCase {
         bar.layoutIfNeeded()
         func labels(_ view: UIView) -> [UILabel] { view.subviews.flatMap { ($0 as? UILabel).map { [$0] } ?? [] + labels($0) } }
         let label = labels(bar).first
-        XCTAssertEqual(label?.text, "AIに質問する")
+        XCTAssertTrue(TimetableAskBar.hints.contains(label?.text ?? ""), "押す前は、聞けることの例が、順に出る")
         bar.setMode(.selecting); bar.layoutIfNeeded()
         XCTAssertTrue(label?.text?.contains("コマ") ?? false)
         XCTAssertLessThanOrEqual(label?.numberOfLines ?? 9, 2, "長い案内文は、2行まで(幅が狭い画面でも、バーからはみ出さない)")

@@ -108,7 +108,7 @@ function label(text){
   const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false,transparent:true}));
   s.scale.set(w/12,52/12,1);s.renderOrder=10;return s}
 const meshes=[],labels=[],byId={};
-// 14号館, 記念館, 15・17・18号館 are modelled from reference photos; every other building stays plain.
+// 14号館, 記念館, 3・7・15・17・18号館 are modelled from reference photos; every other building stays plain.
 // Walls are built edge by edge: long sides = window grid, west end = entrance face, east bulge = tiled cylinder.
 const wallPlain=()=>new THREE.MeshStandardMaterial({color:0xdadcd7,roughness:.95});
 const roofMat=new THREE.MeshStandardMaterial({color:0x8d908c,roughness:.95,metalness:0});
@@ -300,7 +300,32 @@ function build18(o,pt){
   const {c,w,d}=bbox(pt);if(Math.min(w,d)>10)bx(add,w-6,.3,d-6,c[0],pt.h+.15,c[1],0x7a6550);
   return out}
 
-const CUSTOM={b14:build14,kinen:buildKinen,b17:build17,b15:build15,b18:build18};
+// 7号館: older stucco block with piers and tall paired windows; the lower east wing (食堂) sits under white barrel vaults.
+function build7(o,pt){
+  const out=[],H=pt.h,F=3.8,WH=11;
+  const main=rect(260,680,383,711),wing=[[383,664],[462,664],[462,720],[386,720],[386,710],[383,710]];
+  const pier=mt(3.4,H,r=>{r(0,0,3.4,1.2,"#b9b3a6","#707070");
+    for(let k=0;k<4;k++){const y=1.2+k*F;r(.55,y+.7,.95,F-1.5,"#4e5660","#353535");r(1.9,y+.7,.95,F-1.5,"#4e5660","#353535");r(.55,y+F-.5,2.3,.25,"#cfc8b8","#b0b0b0")}
+    r(0,0,.35,H,"#e2dccd","#c0c0c0");r(3.05,0,.35,H,"#e2dccd","#c0c0c0");r(0,H-1.3,3.4,1.3,"#d6cfbf","#b8b8b8")},"#d8d1c1",3);
+  const {add}=shell(o,{p:main},H,()=>({m:pier,w:3.4}),out);
+  const mc=P(330,695);bx(add,10,3,7,mc[0],H+1.5,mc[1],0xd8d1c1);                         // rooftop penthouse
+  const wm=mt(3,WH,r=>{r(0,0,3,4.5,"#5d6872","#404040");r(.15,.3,2.7,3.9,"#73818e","#909090");r(0,4.5,3,.4,"#d0cabd","#b0b0b0");r(.4,6,2.2,3.2,"#4e5660","#353535")},"#dcd6c9");
+  shell(o,{p:wing},WH,()=>({m:wm,w:3}),out);
+  const x0=P(383,0)[0],x1=P(462,0)[0],z0=P(0,664)[1],z1=P(0,720)[1],n=4,vw=(x1-x0)/n,vm=new THREE.MeshStandardMaterial({color:0xeceeed,roughness:.5});
+  for(let i=0;i<n;i++){const g=new THREE.CylinderGeometry(vw/2,vw/2,z1-z0-1,20,1,false,-Math.PI/2,Math.PI);g.rotateX(-Math.PI/2);
+    const v=add(new THREE.Mesh(g,vm));v.scale.y=.35;v.position.set(x0+vw*(i+.5),WH,(z0+z1)/2)}
+  return out}
+
+// 3号館: plain cream five-storey block with even rows of small windows, flat roof with a stair tower.
+function build3(o,pt){
+  const out=[],F=4.1,win=mt(2.4,pt.h,r=>{r(0,0,2.4,1,"#bcb6aa","#707070");
+    for(let k=0;k<5;k++){const y=1+k*F;r(.55,y+1.1,1.3,1.6,"#59626c","#353535");r(.55,y+2.3,1.3,.4,"rgba(255,255,255,.18)","#8a8a8a");r(.45,y+1,1.5,.12,"#cfc9bc","#b0b0b0")}
+    r(0,pt.h-1,2.4,1,"#d9d3c6","#b8b8b8")},"#e3ddd0");
+  const {add}=shell(o,pt,pt.h,()=>({m:win,w:2.4}),out);
+  const {c,w}=bbox(pt);bx(add,4,3.5,4,c[0]-w*.15,pt.h+1.75,c[1],0xdcd6c9);bx(add,3,1.6,3,c[0]+w*.2,pt.h+.8,c[1],0xb9bcbd);
+  return out}
+
+const CUSTOM={b14:build14,kinen:buildKinen,b17:build17,b15:build15,b18:build18,b7:build7,b3:build3};
 const setEm=(m,hex)=>(Array.isArray(m.material)?m.material:[m.material]).forEach(x=>x.emissive&&x.emissive.setHex(hex));
 B.forEach(o=>{
   let big=0,bc=null;

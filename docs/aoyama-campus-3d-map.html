@@ -108,56 +108,52 @@ function label(text){
   const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false,transparent:true}));
   s.scale.set(w/12,52/12,1);s.renderOrder=10;return s}
 const meshes=[],labels=[],byId={};
-// Procedural facades: one tile = 2 bays x 2 floors (6m x 7.2m). The same canvas drives colour and bump so windows read as recesses.
-const KINDS={
-  brick:{wall:"#a8664a",grout:"#8c5238",win:"#2b3a4a",frame:"#d9cfc0",bay:3,noise:18},
-  stone:{wall:"#d8cdb4",grout:"#bfb399",win:"#3a4654",frame:"#efe8d6",bay:3,noise:10},
-  concrete:{wall:"#c4c6c2",grout:"#a9aca7",win:"#33414f",frame:"#dcdedb",bay:3,noise:12},
-  glass:{wall:"#6f8da3",grout:"#4d6578",win:"#9cc0d6",frame:"#3d5163",bay:2.4,noise:16},
-  tile:{wall:"#c9b49a",grout:"#ad9a82",win:"#2f3d4c",frame:"#e7ddca",bay:3,noise:14}
+// Facades are modelled per building from reference photos; every building not listed here stays plain.
+// One texture spans the full wall height (u: 2 bays, v: whole building) so the lobby base and window floors line up.
+const FACADES={
+  b14:{floors:12,baseFloors:2,bay:3.4,tile:"#96807c",tileDark:"#7d6763",reveal:"#4d3a37",granite:"#5b5f6b",lobby:"#516889",glass:"#6a7480",sill:"#c9bdb4"}
 };
-const KIND_BY_ID={b15:"stone",kinen:"stone",mj:"brick",hojin:"concrete",b14:"glass",b17:"glass",b18:"concrete",b10:"tile",b1:"tile",b7:"concrete"};
-const KIND_LIST=["tile","concrete","brick","stone"];
-const facadeCache={};
-function facade(kind){
-  if(facadeCache[kind])return facadeCache[kind];
-  const k=KINDS[kind],W=256,H=256,c=document.createElement("canvas"),b=document.createElement("canvas");
-  c.width=b.width=W;c.height=b.height=H;const g=c.getContext("2d"),bg=b.getContext("2d");
-  g.fillStyle=k.wall;g.fillRect(0,0,W,H);bg.fillStyle="#808080";bg.fillRect(0,0,W,H);
-  let seed=kind.length*97;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
-  for(let i=0;i<2600;i++){const v=(rnd()-.5)*k.noise;g.fillStyle=v>0?`rgba(255,255,255,${v/80})`:`rgba(0,0,0,${-v/80})`;g.fillRect(rnd()*W,rnd()*H,2+rnd()*5,2+rnd()*5);
-    bg.fillStyle=`rgba(${rnd()>.5?255:0},${rnd()>.5?255:0},128,.05)`;bg.fillRect(rnd()*W,rnd()*H,3,3)}
-  for(let fl=0;fl<2;fl++)for(let bay=0;bay<2;bay++){
-    const x=bay*128+22,y=fl*128+30,w=84,h=kind==="glass"?86:62;
-    g.fillStyle=k.frame;g.fillRect(x-5,y-5,w+10,h+10);                 // frame
-    const lit=rnd()>.8;g.fillStyle=lit?"#d9c27a":k.win;g.fillRect(x,y,w,h);
-    g.fillStyle="rgba(255,255,255,.18)";g.fillRect(x,y,w,h*.35);        // sky reflection
-    g.fillStyle=k.frame;g.fillRect(x+w/2-2,y,4,h);                     // mullion
-    g.fillStyle=k.grout;g.fillRect(0,fl*128+118,W,10);                 // floor slab line
-    bg.fillStyle="#303030";bg.fillRect(x-3,y-3,w+6,h+6);bg.fillStyle="#9a9a9a";bg.fillRect(x,y,w,h); // reveal then glass
-    bg.fillStyle="#e0e0e0";bg.fillRect(0,fl*128+118,W,10)}
-  const mk=cv=>{const t=new THREE.CanvasTexture(cv);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(1/(k.bay*2),1/7.2);t.anisotropy=4;return t};
-  return facadeCache[kind]={map:mk(c),bump:mk(b)};
-}
+const wallPlain=()=>new THREE.MeshStandardMaterial({color:0xdadcd7,roughness:.95});
 const roofMat=new THREE.MeshStandardMaterial({color:0x8d908c,roughness:.95,metalness:0});
-const unitMat=new THREE.MeshStandardMaterial({color:0xb9bcb8,roughness:.8,metalness:.1});
-const hash=s=>[...s].reduce((a,ch)=>(a*31+ch.charCodeAt(0))>>>0,7);
+const texCache={};
+function facade(id,h){
+  const k=FACADES[id],key=id+h;if(texCache[key])return texCache[key];
+  const W=256,FH=64,H=FH*k.floors,c=document.createElement("canvas"),b=document.createElement("canvas");
+  c.width=b.width=W;c.height=b.height=H;const g=c.getContext("2d"),bg=b.getContext("2d");
+  g.fillStyle=k.tile;g.fillRect(0,0,W,H);bg.fillStyle="#808080";bg.fillRect(0,0,W,H);
+  let seed=id.length*7919;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
+  for(let i=0;i<5000;i++){g.fillStyle=rnd()>.5?"rgba(255,255,255,.035)":"rgba(0,0,0,.05)";g.fillRect(rnd()*W,rnd()*H,3+rnd()*6,2)}   // tile mottling
+  for(let y=0;y<H;y+=4){g.fillStyle="rgba(0,0,0,.07)";g.fillRect(0,y,W,1)}                                                      // tile joints
+  for(let fl=0;fl<k.floors;fl++){
+    const top=H-(fl+1)*FH;                                              // canvas y of this floor's top (floor 0 = ground)
+    if(fl<k.baseFloors){                                                // granite base with glass lobby
+      g.fillStyle=k.granite;g.fillRect(0,top,W,FH);bg.fillStyle="#707070";bg.fillRect(0,top,W,FH);
+      if(fl===0||fl===1){for(let bay=0;bay<2;bay++){const x=bay*128+14;
+        g.fillStyle="#2c3036";g.fillRect(x-4,top+6,108,FH-6);g.fillStyle=k.lobby;g.fillRect(x,top+10,100,FH-10);
+        g.fillStyle="rgba(255,255,255,.22)";g.fillRect(x,top+10,100,16);
+        bg.fillStyle="#303030";bg.fillRect(x-4,top+6,108,FH-6);bg.fillStyle="#9a9a9a";bg.fillRect(x,top+10,100,FH-10)}}
+      continue}
+    g.fillStyle=k.tileDark;g.fillRect(0,top+FH-5,W,5);bg.fillStyle="#b0b0b0";bg.fillRect(0,top+FH-5,W,5);                  // floor band
+    for(let bay=0;bay<2;bay++){const x=bay*128+36,y=top+14,w=56,h=40;
+      g.fillStyle=k.reveal;g.fillRect(x-10,y-8,w+20,h+16);                                                                 // deep brick reveal
+      g.fillStyle=k.glass;g.fillRect(x,y,w,h);
+      g.fillStyle="rgba(255,255,255,.2)";g.fillRect(x,y,w,12);
+      g.fillStyle="#2a2f36";g.fillRect(x+w/2-1.5,y,3,h);                                                                  // mullion
+      g.fillStyle=k.sill;g.fillRect(x-6,y+h+2,w+12,4);                                                                    // sill
+      bg.fillStyle="#2a2a2a";bg.fillRect(x-10,y-8,w+20,h+16);bg.fillStyle="#8a8a8a";bg.fillRect(x,y,w,h)}}
+  const mk=cv=>{const t=new THREE.CanvasTexture(cv);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;
+    t.repeat.set(1/(k.bay*2),-1/h);t.offset.set(0,1/h);return t};      // negative v-repeat: three's wall UV runs top-down (v = 1 - z)
+  return texCache[key]={map:mk(c),bump:mk(b)};
+}
 const setEm=(m,hex)=>(Array.isArray(m.material)?m.material:[m.material]).forEach(x=>x.emissive&&x.emissive.setHex(hex));
 B.forEach(o=>{
   let big=0,bc=null;
   o.parts.forEach(pt=>{
     const pts=pt.p.map(([x,z])=>{const q=P(x,z);return new THREE.Vector2(q[0],-q[1])});
     const g=new THREE.ExtrudeGeometry(new THREE.Shape(pts),{depth:pt.h,bevelEnabled:false});g.rotateX(-Math.PI/2);
-    const kind=KIND_BY_ID[o.id]||KIND_LIST[hash(o.id)%KIND_LIST.length],fa=facade(kind);
-    const wall=new THREE.MeshStandardMaterial({map:fa.map,bumpMap:fa.bump,bumpScale:2.5,roughness:.9,metalness:kind==="glass"?.25:0});
+    const fa=FACADES[o.id];
+    const wall=fa?(t=>new THREE.MeshStandardMaterial({map:t.map,bumpMap:t.bump,bumpScale:3,roughness:.9,metalness:0}))(facade(o.id,pt.h)):wallPlain();
     const m=new THREE.Mesh(g,o.flat?new THREE.MeshStandardMaterial({color:0xc9b27a,roughness:.9}):[roofMat.clone(),wall]);m.userData=o;scene.add(m);
-    if(!o.flat&&pt.h>8){                                                   // rooftop units
-      const xs0=pt.p.map(a=>a[0]),zs0=pt.p.map(a=>a[1]),a0=(Math.max(...xs0)-Math.min(...xs0))*(Math.max(...zs0)-Math.min(...zs0))*S*S;
-      let sd=hash(o.id+pt.h);const r=()=>(sd=(sd*16807)%2147483647)/2147483647;
-      const cx0=P((Math.min(...xs0)+Math.max(...xs0))/2,(Math.min(...zs0)+Math.max(...zs0))/2);
-      for(let i=0;i<Math.min(4,1+Math.floor(a0/250));i++){
-        const u=new THREE.Mesh(new THREE.BoxGeometry(2+r()*4,1.5+r()*2,2+r()*3),unitMat);
-        u.position.set(cx0[0]+(r()-.5)*Math.sqrt(a0)*.4,pt.h+1,cx0[1]+(r()-.5)*Math.sqrt(a0)*.4);scene.add(u)}}
     m.add(new THREE.LineSegments(new THREE.EdgesGeometry(g,30),new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:.3})));
     const xs=pt.p.map(a=>a[0]),zs=pt.p.map(a=>a[1]),area=(Math.max(...xs)-Math.min(...xs))*(Math.max(...zs)-Math.min(...zs));
     if(area>big){big=area;bc=P((Math.min(...xs)+Math.max(...xs))/2,(Math.min(...zs)+Math.max(...zs))/2)}
@@ -175,7 +171,7 @@ const card=document.getElementById("card"),list=document.getElementById("list");
 function pick(id){
   const ms=byId[id];if(!ms)return;const o=ms[0].userData;
   if(sel.ms)sel.ms.forEach(m=>setEm(m,0));
-  sel.ms=ms;sel.id=id;ms.forEach(m=>setEm(m,0x1f6b4f));
+  sel.ms=ms;sel.id=id;ms.forEach(m=>setEm(m,0x0b2f22));
   card.innerHTML=`<div class="meta">高さ 約${Math.round(o.h)}m(PLATEAU実測)</div><h2>${o.n}</h2><p>国土交通省 PLATEAU の3D都市モデルに基づく形状と高さです。</p>`;
   list.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.id===id));
   const c=new THREE.Box3().setFromObject(ms[0]).getCenter(new THREE.Vector3());

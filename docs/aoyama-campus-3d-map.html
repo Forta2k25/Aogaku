@@ -108,19 +108,19 @@ function label(text){
   const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false,transparent:true}));
   s.scale.set(w/12,52/12,1);s.renderOrder=10;return s}
 const meshes=[],labels=[],byId={};
-// 14号館 and 記念館 are modelled from reference photos; every other building stays plain.
+// 14号館, 記念館, 15・17・18号館 are modelled from reference photos; every other building stays plain.
 // Walls are built edge by edge: long sides = window grid, west end = entrance face, east bulge = tiled cylinder.
 const wallPlain=()=>new THREE.MeshStandardMaterial({color:0xdadcd7,roughness:.95});
 const roofMat=new THREE.MeshStandardMaterial({color:0x8d908c,roughness:.95,metalness:0});
 const C14={tile:"#b8a39b",tileDark:"#9a8680",reveal:"#4d3d3a",granite:"#5d616c",glass:"#6f7a86",lobby:"#516889",sill:"#d9cdc4"};
 const F14=12;
-function pair(W,H,draw,base=C14.tile){
+function pair(W,H,draw,base=C14.tile,tiles=true){
   const c=document.createElement("canvas"),b=document.createElement("canvas");c.width=b.width=W;c.height=b.height=H;
   const g=c.getContext("2d"),bg=b.getContext("2d");
   let seed=W*31+H;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
   g.fillStyle=base;g.fillRect(0,0,W,H);bg.fillStyle="#808080";bg.fillRect(0,0,W,H);
   for(let i=0;i<W*H/50;i++){g.fillStyle=rnd()>.5?"rgba(255,255,255,.035)":"rgba(0,0,0,.05)";g.fillRect(rnd()*W,rnd()*H,3+rnd()*6,2)}   // tile mottling
-  for(let y=0;y<H;y+=4){g.fillStyle="rgba(0,0,0,.07)";g.fillRect(0,y,W,1)}                                                      // tile joints
+  if(tiles)for(let y=0;y<H;y+=4){g.fillStyle="rgba(0,0,0,.07)";g.fillRect(0,y,W,1)}                                                      // tile joints
   draw(g,bg,W,H);
   const mk=cv=>{const t=new THREE.CanvasTexture(cv);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;return t};
   return {map:mk(c),bump:mk(b)};
@@ -220,7 +220,87 @@ function buildKinen(o,pt){
   const roof=add(new THREE.Mesh(rg,new THREE.MeshStandardMaterial({color:0xd8dbde,roughness:.55,metalness:.1})));roof.scale.set((W+1.6)/Math.SQRT2,1,(D+1.6)/Math.SQRT2);roof.position.set(cx,hBody+.45+roofH/2,cz);
   return out;
 }
-const CUSTOM={b14:build14,kinen:buildKinen};
+// Shared helpers for the photo-modelled buildings: textures are drawn in metres (r(x,y,w,h) from the bottom-left), walls are laid edge by edge.
+function mt(wM,hM,draw,base,bump=2){const ppm=10,W=Math.max(8,Math.round(wM*ppm)),H=Math.round(hM*ppm);
+  const t=pair(W,H,(g,bg)=>draw((x,y,w,h,c,b="#808080")=>box2(g,bg,x*ppm,H-(y+h)*ppm,w*ppm,h*ppm,c,b)),base,false);
+  return new THREE.MeshStandardMaterial({map:t.map,bumpMap:t.bump,bumpScale:bump,roughness:.9,side:THREE.DoubleSide})}
+function shell(o,pt,h,pick,out){
+  const pts=pt.p.map(([x,z])=>P(x,z)),n=pts.length,G=new Map(),add=m=>{m.userData=o;scene.add(m);out.push(m);return m};
+  for(let i=0;i<n;i++){const a=pts[i],b=pts[(i+1)%n],len=Math.hypot(b[0]-a[0],b[1]-a[1]);if(len<.05)continue;
+    const f=pick(i,len);if(!G.has(f.m))G.set(f.m,[[],[],[]]);
+    const [pos,uv,idx]=G.get(f.m),k=pos.length/3,u=f.w?Math.max(1,Math.round(len/f.w)):1;     // w=0: one texture across the face
+    pos.push(a[0],0,a[1],b[0],0,b[1],b[0],h,b[1],a[0],h,a[1]);uv.push(0,0,u,0,u,1,0,1);idx.push(k,k+1,k+2,k,k+2,k+3)}
+  G.forEach(([pos,uv,idx],m)=>{const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(pos,3));g.setAttribute("uv",new THREE.Float32BufferAttribute(uv,2));g.setIndex(idx);g.computeVertexNormals();add(new THREE.Mesh(g,m))});
+  const cap=add(new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0],-p[1])))),new THREE.MeshStandardMaterial({color:0x8d908c,roughness:.95})));
+  cap.rotation.x=-Math.PI/2;cap.position.y=h;return {pts,add,cap}}
+const bx=(add,w,h,d,x,y,z,col)=>{const m=add(new THREE.Mesh(new THREE.BoxGeometry(w,h,d),new THREE.MeshStandardMaterial({color:col,roughness:.85})));m.position.set(x,y,z);return m};
+const bbox=pt=>{const xs=pt.p.map(a=>a[0]),zs=pt.p.map(a=>a[1]),x0=Math.min(...xs),x1=Math.max(...xs),z0=Math.min(...zs),z1=Math.max(...zs);
+  return {c:P((x0+x1)/2,(z0+z1)/2),w:(x1-x0)*S,d:(z1-z0)*S}};
+
+// 17号館: tall slab with a perforated lattice on the long sides and glass-edged end panels;
+// the lower east block has precast fins and the fan-shaped hall roof (centre on the west, arc bulging east).
+function build17(o,pt){
+  const out=[];
+  if(pt.h>60){
+    const H=pt.h,F=3.9;
+    const lat=mt(3.6,H,r=>{r(0,0,3.6,8,"#4a5560","#404040");r(.15,.4,3.3,7.2,"#5d6c7a","#909090");r(1.75,.4,.1,7.2,"#2c333a","#606060");
+      for(let k=0;8+(k+1)*F<=H-1.5;k++){const y=8+k*F,s=k%2?.3:0;r(0,y+F-.12,3.6,.12,"#bdb5a6","#b0b0b0");
+        for(let j=0;j<3;j++){const x=.25+s+j*1.1;r(x-.08,y+1.02,.76,1.66,"#8a8172","#303030");r(x,y+1.1,.6,1.5,"#3d454e","#8a8a8a")}}
+      r(0,H-1.5,3.6,1.5,"#c9c1b2","#a8a8a8")},"#d8d0c2");
+    const end=mt(20,H,r=>{r(0,0,20,8,"#4a5560","#404040");
+      for(let y=8;y<H-1.5;y+=F)r(0,y,20,.1,"#b7af9f","#b0b0b0");
+      for(let x=4;x<17;x+=4)r(x,8,.06,H-9.5,"#c4bcad","#9a9a9a");
+      for(const x of [0,17.4]){r(x,0,2.6,H-1.5,"#3c4752","#505050");for(let y=8;y<H;y+=F)r(x,y,2.6,.12,"#2a3038","#404040")}},"#d4ccbd");
+    const {add}=shell(o,pt,H,(i,len)=>len>30?{m:lat,w:3.6}:len>10?{m:end,w:0}:{m:lat,w:3.6},out);
+    const {c,d}=bbox(pt);                                                                   // rows of rooftop plant
+    for(let z=c[1]-d/2+5;z<c[1]+d/2-6;z+=4.2)for(const dx of [-4,3.5])bx(add,3,2.2,3,c[0]+dx,H+1.1,z,0xb9bcbd);
+    return out}
+  if(pt.h<40){shell(o,pt,pt.h,()=>({m:wallPlain(),w:0}),out);return out}
+  const H=36,F=4;
+  const fin=mt(3,H,r=>{r(0,0,3,5,"#55606a","#404040");r(.2,.3,2.6,4.4,"#6a7886","#909090");
+    for(let y=5;y<H-4;y+=F){r(.35,y+.4,2.3,F-.8,"#4c4a46","#303030");r(.35,y+F/2-.1,2.3,.2,"#cfc4b0","#b0b0b0");r(1.42,y+.4,.16,F-.8,"#cfc4b0","#b0b0b0")}},"#d3c8b4",3);
+  const {add,cap}=shell(o,pt,H,()=>({m:fin,w:3}),out);cap.material.color.setHex(0x8a8669);     // sedum roof around the hall
+  const c=P(346,572),R=24;
+  const dm=mt(4,3.2,r=>{r(0,0,4,.3,"#9ea2a5");for(const x of [.6,2.6])r(x,.8,.8,1.6,"#4d565f","#404040")},"#c9ccce");
+  dm.map.repeat.x=dm.bumpMap.repeat.x=16;
+  const drum=add(new THREE.Mesh(new THREE.CylinderGeometry(R,R,3.2,48,1,true,0,Math.PI),dm));drum.position.set(c[0],H+1.6,c[1]);
+  const rb=mt(1,1,r=>r(0,0,.3,1,"#a2a7ab","#606060"),"#c4c8cb",2);rb.map.repeat.x=rb.bumpMap.repeat.x=36;   // radial ribs
+  const roof=add(new THREE.Mesh(new THREE.ConeGeometry(R+.6,5.6,48,1,false,0,Math.PI),rb));roof.position.set(c[0],H+3.2+2.8,c[1]);
+  const back=new THREE.ExtrudeGeometry(new THREE.Shape([new THREE.Vector2(-R,0),new THREE.Vector2(R,0),new THREE.Vector2(R,3.2),new THREE.Vector2(0,8.8),new THREE.Vector2(-R,3.2)]),{depth:.4,bevelEnabled:false});
+  back.rotateY(Math.PI/2);const bw=add(new THREE.Mesh(back,new THREE.MeshStandardMaterial({color:0xc9ccce,roughness:.8})));bw.position.set(c[0]-.4,H,c[1]);
+  return out}
+
+// 15号館(ガウチャー記念館): white tower with close vertical ribs, a window lattice up the middle of both ends,
+// stepped crown and a pointed-arch entrance on the west (main-street) face.
+function build15(o,pt){
+  const out=[],H=pt.h,F=4.2,n=pt.p.length;
+  const rib=mt(1.8,H,r=>{r(0,0,1.8,6,"#b9b7b0","#707070");r(.4,.3,1,5.4,"#3e4650","#404040");
+    for(let y=6;y<H-6;y+=F)r(.55,y+.6,.7,F-1.2,"#47505b","#3a3a3a");
+    r(0,0,.32,H,"#f0efea","#c8c8c8");r(1.48,0,.32,H,"#f0efea","#c8c8c8");
+    r(0,H-6,1.8,.3,"#cfcdc6","#b0b0b0");r(.6,H-4.5,.6,2.6,"#5a626c","#404040")},"#e2e0da",3);
+  const end=mt(13,H,r=>{for(let x=.6;x<13;x+=1.8)r(x,0,.3,H,"#f0efea","#c8c8c8");
+    r(3.8,10,5.4,H-14,"#cfcdc6","#606060");
+    for(let y=10.3;y<H-4.5;y+=1.6)for(let x=4.1;x<9;x+=.9)r(x,y,.6,1.1,"#46505c","#3a3a3a")},"#e2e0da",3);
+  const ends=new Set([557,702]);
+  const {pts,add}=shell(o,pt,H,(i,len)=>{const a=pt.p[i],b=pt.p[(i+1)%n];return a[0]===b[0]&&ends.has(a[0])&&len>10?{m:end,w:0}:{m:rib,w:1.8}},out);
+  const {c,w,d}=bbox(pt);bx(add,w*.55,3,d*.45,c[0]+3,H+1.5,c[1]+2,0xe6e4de);bx(add,w*.3,2,d*.25,c[0]+3,H+4,c[1]+2,0xd9d7d0);
+  const wx=P(557,0)[0],zc=P(0,439.5)[1],arch=(aw,ah,dp,col)=>{const s=new THREE.Shape();
+    s.moveTo(-aw/2,0);s.lineTo(aw/2,0);s.lineTo(aw/2,ah*.6);s.quadraticCurveTo(aw/2,ah*.9,0,ah);s.quadraticCurveTo(-aw/2,ah*.9,-aw/2,ah*.6);s.lineTo(-aw/2,0);
+    const g=new THREE.ExtrudeGeometry(s,{depth:dp,bevelEnabled:false});g.rotateY(Math.PI/2);
+    const m=add(new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:col,roughness:.8})));m.position.set(wx-dp,0,zc);return m};
+  arch(8,11,1.2,0xd6d3cb);arch(5,8.6,1.3,0x262a30);
+  return out}
+
+// 18号館(マクレイ記念館): banded facade with ribbon windows; brown sedum mats on the two main wings.
+function build18(o,pt){
+  const out=[],F=3.8;
+  const band=mt(3.6,pt.h,r=>{r(0,0,3.6,4.5,"#5a6470","#404040");
+    for(let y=4.5;y<pt.h-1.2;y+=F){r(0,y+1,3.6,1.7,"#56606a","#3a3a3a");r(0,y+2.2,3.6,.5,"rgba(255,255,255,.15)","#8a8a8a");r(1.75,y+1,.1,1.7,"#c9c3b6","#a0a0a0")}},"#dcd6c9");
+  const {add}=shell(o,pt,pt.h,()=>({m:band,w:3.6}),out);
+  const {c,w,d}=bbox(pt);if(Math.min(w,d)>10)bx(add,w-6,.3,d-6,c[0],pt.h+.15,c[1],0x7a6550);
+  return out}
+
+const CUSTOM={b14:build14,kinen:buildKinen,b17:build17,b15:build15,b18:build18};
 const setEm=(m,hex)=>(Array.isArray(m.material)?m.material:[m.material]).forEach(x=>x.emissive&&x.emissive.setHex(hex));
 B.forEach(o=>{
   let big=0,bc=null;

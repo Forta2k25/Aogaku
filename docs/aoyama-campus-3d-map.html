@@ -83,7 +83,7 @@ R.setPixelRatio(Math.min(devicePixelRatio,2));
 view.prepend(R.domElement);
 const ctl=new THREE.OrbitControls(cam,R.domElement);
 ctl.enableDamping=true;ctl.maxPolarAngle=Math.PI/2.05;ctl.minDistance=30;ctl.maxDistance=900;
-scene.add(new THREE.HemisphereLight(0xffffff,0x778877,.55));
+scene.add(new THREE.HemisphereLight(0xffffff,0x8a9a8a,.75));
 const sun=new THREE.DirectionalLight(0xfff4e0,.7);sun.position.set(-80,200,150);scene.add(sun);
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const groundMat=new THREE.MeshLambertMaterial(),roadMat=new THREE.MeshLambertMaterial();
@@ -108,7 +108,7 @@ function label(text){
   const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false,transparent:true}));
   s.scale.set(w/12,52/12,1);s.renderOrder=10;return s}
 const meshes=[],labels=[],byId={};
-// 14号館, 記念館, 3・7・15・17・18号館 are modelled from reference photos; every other building stays plain.
+// 14号館, 記念館, 3・7・15・17・18号館 are modelled from reference photos; the rest get a simple colour + window style (STYLES).
 // Walls are built edge by edge: long sides = window grid, west end = entrance face, east bulge = tiled cylinder.
 const wallPlain=()=>new THREE.MeshStandardMaterial({color:0xdadcd7,roughness:.95});
 const roofMat=new THREE.MeshStandardMaterial({color:0x8d908c,roughness:.95,metalness:0});
@@ -325,7 +325,33 @@ function build3(o,pt){
   const {c,w}=bbox(pt);bx(add,4,3.5,4,c[0]-w*.15,pt.h+1.75,c[1],0xdcd6c9);bx(add,3,1.6,3,c[0]+w*.2,pt.h+.8,c[1],0xb9bcbd);
   return out}
 
-const CUSTOM={b14:build14,kinen:buildKinen,b17:build17,b15:build15,b18:build18,b7:build7,b3:build3};
+// Everything else gets a simple, recognisable style: wall colour + one window pattern per floor (fl draws floor k at height y).
+const win=(r,x,y,w,h)=>{r(x,y,w,h,"#4f5862","#353535");r(x,y+h*.7,w,h*.3,"rgba(255,255,255,.15)","#8a8a8a")};
+function styled(s){return (o,pt)=>{const out=[],F=s.F||3.8,H=pt.h-(s.roofH||0);
+  const m=mt(s.w,H,r=>{const n=Math.max(1,Math.floor((H-.8)/F));for(let k=0;k<n;k++)s.fl(r,k*F,F,k);r(0,H-.8,s.w,.8,s.top||"#d9d9d4","#b0b0b0")},s.base,s.bump||2);
+  const {add,cap}=shell(o,pt,H,()=>({m,w:s.w}),out);if(s.roof)cap.material.color.setHex(s.roof);if(s.extra)s.extra(add,pt,H);return out}}
+const ribbon=styled({w:3.6,base:"#e6e6e1",fl:(r,y,F,k)=>{win(r,0,y+1,3.6,1.5);r(1.75,y+1,.1,1.5,"#d6d6d1","#a0a0a0")}});
+const punched=styled({w:2.4,F:4,base:"#ebe9e3",fl:(r,y)=>win(r,.55,y+1.1,1.3,1.6)});
+const hipRoof=(add,pt,H,h,col)=>{const {c,w,d}=bbox(pt),g=new THREE.CylinderGeometry(.35,1,h,4);g.rotateY(Math.PI/4);
+  const m=add(new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:col,roughness:.8})));m.scale.set(w*.8/Math.SQRT2,1,d*.8/Math.SQRT2);m.position.set(c[0],H+h/2,c[1])};
+const STYLES={
+  // 法人本部: the ornate stone building in the park; tall windows, dark hip roof
+  hojin:styled({w:2.6,F:4.2,roofH:3.5,base:"#b9a68c",bump:3,fl:(r,y,F,k)=>{if(k===0)r(0,y,2.6,1,"#9a8a74","#707070");win(r,.75,y+.9,1.1,F-1.7);r(.65,y+F-.8,1.3,.3,"#d6c8b2","#c0c0c0")},
+    top:"#cbbba2",extra:(add,pt,H)=>hipRoof(add,pt,H,3.5,0x5b5552)}),
+  // 2号館: historic grey-stone block on 青山通り; pilasters between tall windows
+  b2:styled({w:3,F:4.2,base:"#c7c2b6",bump:3,fl:(r,y,F,k)=>{r(0,y,.45,F,"#d8d3c8","#c0c0c0");win(r,.95,y+.8,1.6,F-1.6);if(k===0)r(0,y,3,.8,"#a9a497","#707070")}}),
+  // 8号館: precast X-braced frames
+  b8:styled({w:4,F:4,base:"#d6d4cf",bump:3,fl:(r,y,F)=>{r(.35,y+.35,3.3,F-.7,"#59626c","#353535");
+    for(let t=0;t<=1;t+=.04){r(.35+3.05*t,y+.35+(F-.95)*t,.25,.25,"#e2e0db","#c8c8c8");r(.35+3.05*t,y+F-.6-(F-.95)*t,.25,.25,"#e2e0db","#c8c8c8")}}}),
+  // 16号館: slim beige tower with vertical slit windows
+  b16:styled({w:1.8,base:"#d9c8ab",fl:(r,y,F)=>r(.65,y+.5,.5,F-1,"#55565a","#353535")}),
+  // 11号館: tan tower on 青山通り
+  b11:styled({w:2.4,base:"#b59c84",top:"#a38b74",fl:(r,y)=>win(r,.5,y+1,1.4,1.6)}),
+  b1:punched,b10:punched,mj:punched,
+  bek:ribbon,tK:ribbon,tS:ribbon,tN:ribbon,sk:ribbon,
+  // 短大体育館: green roof as seen from above
+  tgym:styled({w:3.6,F:6,base:"#e3e3de",roof:0x3f8f5a,fl:(r,y)=>win(r,.3,y+3.5,3,1.6)})};
+const CUSTOM={b14:build14,kinen:buildKinen,b17:build17,b15:build15,b18:build18,b7:build7,b3:build3,...STYLES};
 const setEm=(m,hex)=>(Array.isArray(m.material)?m.material:[m.material]).forEach(x=>x.emissive&&x.emissive.setHex(hex));
 B.forEach(o=>{
   let big=0,bc=null;

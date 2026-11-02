@@ -108,17 +108,17 @@ function label(text){
   const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false,transparent:true}));
   s.scale.set(w/12,52/12,1);s.renderOrder=10;return s}
 const meshes=[],labels=[],byId={};
-// 14号館 (総研ビル) is modelled from reference photos; every other building stays plain.
+// 14号館 and 記念館 are modelled from reference photos; every other building stays plain.
 // Walls are built edge by edge: long sides = window grid, west end = entrance face, east bulge = tiled cylinder.
 const wallPlain=()=>new THREE.MeshStandardMaterial({color:0xdadcd7,roughness:.95});
 const roofMat=new THREE.MeshStandardMaterial({color:0x8d908c,roughness:.95,metalness:0});
 const C14={tile:"#b8a39b",tileDark:"#9a8680",reveal:"#4d3d3a",granite:"#5d616c",glass:"#6f7a86",lobby:"#516889",sill:"#d9cdc4"};
 const F14=12;
-function pair(W,H,draw){
+function pair(W,H,draw,base=C14.tile){
   const c=document.createElement("canvas"),b=document.createElement("canvas");c.width=b.width=W;c.height=b.height=H;
   const g=c.getContext("2d"),bg=b.getContext("2d");
   let seed=W*31+H;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
-  g.fillStyle=C14.tile;g.fillRect(0,0,W,H);bg.fillStyle="#808080";bg.fillRect(0,0,W,H);
+  g.fillStyle=base;g.fillRect(0,0,W,H);bg.fillStyle="#808080";bg.fillRect(0,0,W,H);
   for(let i=0;i<W*H/50;i++){g.fillStyle=rnd()>.5?"rgba(255,255,255,.035)":"rgba(0,0,0,.05)";g.fillRect(rnd()*W,rnd()*H,3+rnd()*6,2)}   // tile mottling
   for(let y=0;y<H;y+=4){g.fillStyle="rgba(0,0,0,.07)";g.fillRect(0,y,W,1)}                                                      // tile joints
   draw(g,bg,W,H);
@@ -198,14 +198,37 @@ function build14(o,pt){
   const ch=add(new THREE.Mesh(new THREE.BoxGeometry(.15,.3,1.5),br));ch.position.set(xw-.1,7.8,sz);
   return out;
 }
+
+// 青山学院記念館 (大学体育館): shallow hip roof, small window row under the eaves, dark plinth.
+function buildKinen(o,pt){
+  const out=[],add=m=>{m.userData=o;scene.add(m);out.push(m);return m};
+  const roofH=4.5,hBody=pt.h-roofH,pts=pt.p.map(([x,z])=>P(x,z));
+  const xs=pts.map(p=>p[0]),zs=pts.map(p=>p[1]),W=Math.max(...xs)-Math.min(...xs),D=Math.max(...zs)-Math.min(...zs),cx=(Math.max(...xs)+Math.min(...xs))/2,cz=(Math.max(...zs)+Math.min(...zs))/2;
+  const ppm=14,t=pair(6*ppm,Math.round(hBody*ppm),(g,bg,w,h)=>{
+    const y=m=>h-m*ppm;                                                    // metres above ground -> canvas y
+    box2(g,bg,0,y(4),w,4*ppm,"#6b6a66","#707070");                         // dark plinth
+    box2(g,bg,0,y(hBody),w,(hBody-14.5)*ppm,"#b9b4a8","#a0a0a0");          // eaves band
+    for(let k=0;k<2;k++){const x=k*3*ppm+ .7*ppm;                           // small windows, 2 per 6 m tile
+      box2(g,bg,x-3,y(11),1.9*ppm+6,1.9*ppm+6,"#8e887c","#303030");box2(g,bg,x,y(11)+3,1.9*ppm,1.9*ppm,"#3a424c","#8a8a8a");box2(g,bg,x,y(11)+3,1.9*ppm,6,"rgba(255,255,255,.2)","#8a8a8a")}
+    box2(g,bg,0,y(14.5),w,3,"#a39e92","#b0b0b0")                           // string course
+  },"#d1cbbd");
+  const mp=t.map,bp=t.bump;[mp,bp].forEach(x=>{x.repeat.set(1/6,-1/hBody);x.offset.set(0,1/hBody)});
+  const g=new THREE.ExtrudeGeometry(new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0],-p[1]))),{depth:hBody,bevelEnabled:false});g.rotateX(-Math.PI/2);
+  add(new THREE.Mesh(g,[new THREE.MeshStandardMaterial({color:0x9a958a,roughness:.9}),new THREE.MeshStandardMaterial({map:mp,bumpMap:bp,bumpScale:3,roughness:.9})]));
+  const eaves=add(new THREE.Mesh(new THREE.BoxGeometry(W+2,.7,D+2),new THREE.MeshStandardMaterial({color:0xb5b0a4,roughness:.8})));eaves.position.set(cx,hBody+.1,cz);
+  const rg=new THREE.CylinderGeometry(.5,1,roofH,4);rg.rotateY(Math.PI/4);
+  const roof=add(new THREE.Mesh(rg,new THREE.MeshStandardMaterial({color:0xd8dbde,roughness:.55,metalness:.1})));roof.scale.set((W+1.6)/Math.SQRT2,1,(D+1.6)/Math.SQRT2);roof.position.set(cx,hBody+.45+roofH/2,cz);
+  return out;
+}
+const CUSTOM={b14:build14,kinen:buildKinen};
 const setEm=(m,hex)=>(Array.isArray(m.material)?m.material:[m.material]).forEach(x=>x.emissive&&x.emissive.setHex(hex));
 B.forEach(o=>{
   let big=0,bc=null;
   o.parts.forEach(pt=>{
-    if(o.id==="b14"){
+    if(CUSTOM[o.id]){
       const xs=pt.p.map(a=>a[0]),zs=pt.p.map(a=>a[1]),area=(Math.max(...xs)-Math.min(...xs))*(Math.max(...zs)-Math.min(...zs));
       if(area>big){big=area;bc=P((Math.min(...xs)+Math.max(...xs))/2,(Math.min(...zs)+Math.max(...zs))/2)}
-      build14(o,pt).forEach(m=>{meshes.push(m);(byId[o.id]=byId[o.id]||[]).push(m)});return}
+      CUSTOM[o.id](o,pt).forEach(m=>{meshes.push(m);(byId[o.id]=byId[o.id]||[]).push(m)});return}
     const pts=pt.p.map(([x,z])=>{const q=P(x,z);return new THREE.Vector2(q[0],-q[1])});
     const g=new THREE.ExtrudeGeometry(new THREE.Shape(pts),{depth:pt.h,bevelEnabled:false});g.rotateX(-Math.PI/2);
     const wall=wallPlain();

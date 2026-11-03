@@ -100,12 +100,12 @@ function clipHalf(poly,q,d,side){const f=p=>side*((p[0]-q[0])*d[0]+(p[1]-q[1])*d
   for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length],fa=f(a),fb=f(b);
     if(fa>=0)out.push(a);if((fa>=0)!==(fb>=0)){const t=fa/(fa-fb);out.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t])}}
   return out.length>=3?out:null}
-[{from:"b8",id:"b9",n:"9号館",parts:[0],q:[660,330],d:[1,0],side:1},                       // 9号館 = east half of the 8/9 block (towards 西門)
+[{from:"b8",id:"b9",n:"9号館",parts:[0],q:[660,330],d:[1,0],side:1,h:26},                       // 9号館 = east half of the 8/9 block (towards 西門)
  {from:"tN",id:"tChapel",n:"短大礼拝堂",parts:[0],q:[258,132],d:[.84,.545],side:-1},         // west end of the 短大N校舎 wing
  {from:"tN",id:"tHonkan",n:"短大本館",parts:[0],q:[365,185],d:[.84,.545],side:1}            // east end of the 短大N校舎 wing
 ].forEach(s=>{const i=B.findIndex(o=>o.id===s.from),par=B[i],kid=[];
   par.parts=par.parts.flatMap((pt,k)=>{if(!s.parts.includes(k))return [pt];
-    const a=clipHalf(pt.p,s.q,s.d,s.side),b=clipHalf(pt.p,s.q,s.d,-s.side);if(a)kid.push({p:a,h:pt.h});return b?[{p:b,h:pt.h}]:[]});
+    const a=clipHalf(pt.p,s.q,s.d,s.side),b=clipHalf(pt.p,s.q,s.d,-s.side);if(a)kid.push({p:a,h:s.h||pt.h});return b?[{p:b,h:pt.h}]:[]});
   par.h=Math.max(...par.parts.map(p=>p.h));
   B.splice(i+1,0,{id:s.id,n:s.n,h:Math.max(...kid.map(p=>p.h)),parts:kid})});
 const GATES=[["正門",520,758],["記念館門",205,758],["東門",60,497],["西門",770,415]];
@@ -200,6 +200,15 @@ function forest(list,crown,hue,trunkH){if(!list.length)return;
  forest(conifers,cone,[.38,.35,.2,.04],2.5);
  forest(ginkgo,blob([[0,6.2,0,2.4],[1.1,5.4,.5,1.8],[-1,5.6,-.6,1.9],[.2,7.6,-.2,1.7]]),[.13,.7,.47,.025],3.6);
  forest(street,blob([[0,5.6,0,2.6],[1.4,5,.6,2],[-1.3,5.2,-.7,2.1],[.3,7,-.3,1.9]]),[.25,.42,.3,.05],3.2)}
+// ロータリーの大木: the campus landmark cedar — broad, layered tiers on a thick trunk.
+{const c=P(519,326),tiers=[],trunk=new THREE.Mesh(new THREE.CylinderGeometry(.45,.85,8,12).translate(0,4,0),new THREE.MeshStandardMaterial({color:0x5a4637,roughness:.9}));
+ for(let i=0;i<7;i++){const R0=8.8*(1-i/7.6),y=5.5+i*2.7,cnt=Math.max(3,Math.round(R0*1.1));          // each tier = an irregular ring of foliage clumps
+   tiers.push(new THREE.IcosahedronGeometry(R0*.5,2).scale(1,.55,1).translate(0,y+.7,0));
+   for(let j=0;j<cnt;j++){const t=j/cnt*6.283+i*.9,rr=R0*(.58+.12*Math.sin(j*2.7+i*1.3)),sz=R0*.38+.7;
+     tiers.push(new THREE.IcosahedronGeometry(sz,2).scale(1,.42,1).translate(Math.cos(t)*rr,y-.35*Math.cos(j*1.9+i),Math.sin(t)*rr))}}
+ tiers.push(new THREE.IcosahedronGeometry(1.3,2).scale(.8,1.9,.8).translate(0,24.5,0));
+ const crown=new THREE.Mesh(mergeGeometries(tiers),new THREE.MeshStandardMaterial({color:0x3b5c47,roughness:.85}));
+ for(const m of [trunk,crown]){m.position.set(c[0],0,c[1]);m.castShadow=m.receiveShadow=true;scene.add(m)}}
 
 // ---- building textures: drawn on canvas (colour + bump), glass gets low roughness / some metalness so it reflects the sky
 const C14={tile:"#b8a39b",tileDark:"#9a8680",reveal:"#4d3d3a",granite:"#5d616c",glass:"#6f7a86",lobby:"#516889",sill:"#d9cdc4"};
@@ -419,6 +428,30 @@ function build7(o,pt){
     const v=add(new THREE.Mesh(g,vm));v.scale.y=.35;v.position.set(x0+vw*(i+.5),WH,(z0+z1)/2)}
   return out}
 
+// 9号館: white block; the long east face (西門 side) has deep concrete fins with scissor stairs (the X shapes) between them,
+// stepped terraces on the south face and a tall service shaft on the roof. Height from the photo (~6 floors), not PLATEAU.
+function build9(o,pt){
+  const out=[],H=pt.h,F=4.2,pts=pt.p.map(([x,z])=>P(x,z)),n=pts.length;
+  const xs=pts.map(p=>p[0]),zs=pts.map(p=>p[1]),xmin=Math.min(...xs),xmax=Math.max(...xs),zmin=Math.min(...zs),zmax=Math.max(...zs);
+  const white=mt(3.6,H,r=>{r(0,0,3.6,3,"#d3d1cb","#707070");for(let y=3;y<H-1.5;y+=F)r(.3,y+1.2,3,1.4,"#4a5561","#353535")},"#efede8");
+  const back=mt(3.4,H,r=>{for(let y=0;y<H-1.5;y+=F)r(.6,y+.8,2.2,2.2,"#3e3734","#353535")},"#8c6559");   // recessed brick-red wall behind the stairs
+  let east=null;
+  const {add,cap}=shell(o,pt,H,(i,len)=>{const a=pts[i],b=pts[(i+1)%n],isE=len>20&&Math.abs(b[0]-a[0])<Math.abs(b[1]-a[1])&&(a[0]+b[0])/2>(xmin+xmax)/2;
+    if(isE)east=[a,b];return isE?{m:back,w:3.4}:{m:white,w:3.6}},out,{clutter:false,rimCol:0xeceae5});
+  cap.material.color.setHex(0xd6d5cf);
+  const con=new THREE.MeshStandardMaterial({color:0xebe9e3,roughness:.85});
+  if(east){const [a,b]=east,len=Math.hypot(b[0]-a[0],b[1]-a[1]),e=[(b[0]-a[0])/len,(b[1]-a[1])/len];let nn=[e[1],-e[0]];if(nn[0]<0)nn=[-nn[0],-nn[1]];
+    const ang=Math.atan2(e[1],e[0]),bays=6,bw=len/bays,dep=2.6,parts=[],at=(t,off)=>[a[0]+e[0]*t+nn[0]*off,a[1]+e[1]*t+nn[1]*off];
+    for(let k=0;k<=bays;k++){const [x,z]=at(k*bw,dep/2);parts.push(new THREE.BoxGeometry(.8,H+.6,dep).rotateY(-ang).translate(x,(H+.6)/2,z))}   // fins
+    for(let k=0;k<bays;k++)for(let y0=F;y0<H-F*.6;y0+=F){const t0=k*bw+.7,t1=(k+1)*bw-.7,run=t1-t0,L=Math.hypot(run,F),sl=Math.atan2(F,run),[x,z]=at((t0+t1)/2,dep*.5);
+      for(const sg of [1,-1])parts.push(new THREE.BoxGeometry(L,.3,1.3).rotateZ(sg*sl).rotateY(-ang).translate(x,y0+F/2,z));                         // scissor flights
+      parts.push(new THREE.BoxGeometry(run+1.2,.28,1.6).rotateY(-ang).translate(x,y0,z))}                                                       // landings
+    add(new THREE.Mesh(mergeGeometries(parts),con))}
+  const tw=(xmax-xmin)*.7,tx=xmin+(xmax-xmin)*.4;                                           // stepped terraces towards 15号館
+  [[9,3],[6,6],[3,9]].forEach(([h,d])=>{bx(add,tw,h,3,tx,h/2,zmax+d-1.5,0xe6e4de);bx(add,tw,.9,.15,tx,h+.45,zmax+d,0xd6d4ce)});
+  bx(add,1.6,8,1.6,xmin+4,H+4,zmin+(zmax-zmin)*.55,0xeeece7);                               // service shaft
+  return out}
+
 // 3号館: plain cream five-storey block with even rows of small windows, flat roof with a stair tower.
 function build3(o,pt){
   const out=[],F=4.1,win=mt(2.4,pt.h,r=>{r(0,0,2.4,1,"#c0baae","#707070");
@@ -452,13 +485,11 @@ const STYLES={
   b11:styled({w:2.4,base:"#b8a08a",top:"#a68f79",fl:(r,y)=>win(r,.5,y+1,1.4,1.6)}),
   b1:punched,b10:punched,mj:punched,
   bek:ribbon,tK:ribbon,tS:ribbon,tN:ribbon,sk:ribbon,tHonkan:ribbon,
-  // 9号館: plain white block with a flat, uncluttered roof (top-down photo)
-  b9:styled({w:3,F:4,base:"#efede8",roof:0xc4c5c0,fl:(r,y)=>{win(r,.4,y+1,2.2,1.7);r(1.45,y+1,.1,1.7,"#e2e0db","#a0a0a0")}}),
   // 短大礼拝堂: tall narrow windows
   tChapel:styled({w:2.4,F:8,base:"#ece8df",fl:(r,y)=>win(r,.8,y+1.5,.8,5.2)}),
   // 短大体育館: green roof as seen from above
   tgym:styled({w:3.6,F:6,base:"#e6e6e1",roof:0x4f9a68,fl:(r,y)=>win(r,.3,y+3.5,3,1.6)})};
-const CUSTOM={b14:build14,kinen:buildKinen,b17:build17,b15:build15,b18:build18,b7:build7,b3:build3,...STYLES};
+const CUSTOM={b14:build14,kinen:buildKinen,b17:build17,b15:build15,b18:build18,b7:build7,b3:build3,b9:build9,...STYLES};
 
 // ---- labels (HTML, crisp at any zoom); short names drop the parenthetical
 function tag(text,cls,pos,id){const d=document.createElement("div");d.className="tag "+cls;d.textContent=text;

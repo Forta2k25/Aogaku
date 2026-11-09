@@ -32,6 +32,7 @@ extension CareerListing {
         self.isTrial = false
         self.sourceName = nil
         self.isSponsored = sponsored
+        self.affiliate = nil
     }
 }
 

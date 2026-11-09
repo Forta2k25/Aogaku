@@ -56,6 +56,9 @@ final class CareerDetailViewController: UIViewController {
         super.viewDidAppear(animated)
         ScreenTracker.shared.appear("インターン詳細")
         AppAnalytics.logCareerDetailView(jobID: listing.id)
+        if let link = listing.affiliate {
+            AffiliateTracker.recordImpression(listingID: listing.id, link: link)
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -115,10 +118,29 @@ final class CareerDetailViewController: UIViewController {
         titleLabel.numberOfLines = 0
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let stack = UIStackView(arrangedSubviews: [badge, companyLabel, titleLabel])
+        // 広告掲載は「PR」を必ず出す（ステルスマーケティング規制）
+        var badgeViews: [UIView] = [badge]
+        if listing.isSponsored {
+            let pr = PaddingLabel(padding: UIEdgeInsets(top: 4, left: 7, bottom: 4, right: 7))
+            pr.text = "PR"
+            pr.accessibilityLabel = "広告"
+            pr.font = .systemFont(ofSize: 11, weight: .heavy)
+            pr.textColor = UIColor(red: 122/255, green: 78/255, blue: 0, alpha: 1)
+            pr.backgroundColor = UIColor(red: 1, green: 241/255, blue: 209/255, alpha: 1)
+            pr.layer.cornerRadius = 6
+            pr.layer.masksToBounds = true
+            badgeViews.append(pr)
+        }
+        badgeViews.append(UIView())
+        let badgeRow = UIStackView(arrangedSubviews: badgeViews)
+        badgeRow.axis = .horizontal
+        badgeRow.spacing = 6
+        badgeRow.alignment = .center
+
+        let stack = UIStackView(arrangedSubviews: [badgeRow, companyLabel, titleLabel])
         stack.axis = .vertical
         stack.spacing = 6
-        stack.setCustomSpacing(10, after: badge)
+        stack.setCustomSpacing(10, after: badgeRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
         hero.addSubview(stack)
 
@@ -271,7 +293,13 @@ final class CareerDetailViewController: UIViewController {
         wrap.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(wrap)
 
-        applyButton.setTitle(listing.sourceName.map { "\($0)で応募・詳細を見る" } ?? "応募・詳細を見る", for: .normal)
+        let applyTitle: String
+        if listing.affiliate != nil {
+            applyTitle = "公式サイトで申し込む"
+        } else {
+            applyTitle = listing.sourceName.map { "\($0)で応募・詳細を見る" } ?? "応募・詳細を見る"
+        }
+        applyButton.setTitle(applyTitle, for: .normal)
         applyButton.setTitleColor(.white, for: .normal)
         applyButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
         applyButton.backgroundColor = listing.category.tintColor
@@ -296,6 +324,10 @@ final class CareerDetailViewController: UIViewController {
     }
 
     private func didTapApply() {
+        if let link = listing.affiliate {
+            AffiliateTracker.open(listingID: listing.id, link: link)
+            return
+        }
         AppAnalytics.logCareerApplyClick(jobID: listing.id)
 
         guard let url = URL(string: listing.applicationUrl) else { return }

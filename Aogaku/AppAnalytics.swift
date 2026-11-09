@@ -44,10 +44,13 @@ enum AppAnalytics {
         log("career_save", parameters: parameters)
     }
 
-    static func logCareerApplyClick(jobID: String, companyID: String? = nil) {
+    static func logCareerApplyClick(jobID: String, companyID: String? = nil, affiliateNetwork: String? = nil) {
         var parameters: [String: Any] = ["job_id": jobID]
         if let companyID {
             parameters["company_id"] = companyID
+        }
+        if let affiliateNetwork {
+            parameters["affiliate_network"] = affiliateNetwork
         }
         log("career_apply_click", parameters: parameters)
     }

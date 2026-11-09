@@ -358,6 +358,10 @@ final class GakuchikaViewController: UIViewController,
     }
 
     private func openApplication(for item: CareerListing) {
+        if let link = item.affiliate {
+            AffiliateTracker.open(listingID: item.id, link: link)
+            return
+        }
         AppAnalytics.logCareerApplyClick(jobID: item.id)
         guard let url = URL(string: item.applicationUrl) else { return }
         present(SFSafariViewController(url: url), animated: true)
@@ -454,6 +458,13 @@ final class GakuchikaViewController: UIViewController,
     }
 
     // MARK: - UITableViewDelegate
+    func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        let item = items[indexPath.row]
+        if let link = item.affiliate {
+            AffiliateTracker.recordImpression(listingID: item.id, link: link)
+        }
+    }
+
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let vc = CareerDetailViewController(listing: items[indexPath.row])

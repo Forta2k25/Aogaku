@@ -132,7 +132,7 @@ private extension SceneDelegate {
         if typeName.contains("Assignment") || typeName.contains("Moodle") || title.contains("課題") || title.contains("Moodle") {
             return .moodle
         }
-        if typeName.contains("Career") || title.contains("インターン") {
+        if typeName.contains("Career") || typeName.contains("Gakuchika") || title.contains("インターン") || title.contains("ガクチカ") {
             return .career
         }
         if typeName.contains("Circle") || title.contains("サークル") {

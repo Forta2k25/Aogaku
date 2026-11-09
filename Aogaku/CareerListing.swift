@@ -104,6 +104,8 @@ struct CareerListing: Hashable {
     let isTrial: Bool
     /// 掲載元サイト名（例: "Wantedly"）。応募ボタンに表示し、将来のアフィリエイト集計にも使う
     let sourceName: String?
+    /// 広告（アフィリエイト）掲載。一覧で「PR」を表示し、応募ボタンを出す
+    let isSponsored: Bool
 
     init?(document: QueryDocumentSnapshot) {
         let data = document.data()
@@ -131,6 +133,7 @@ struct CareerListing: Hashable {
         self.expiresAt = (data["expiresAt"] as? Timestamp)?.dateValue()
         self.isTrial = data["isTrial"] as? Bool ?? false
         self.sourceName = data["sourceName"] as? String
+        self.isSponsored = data["isSponsored"] as? Bool ?? false
     }
 
     /// 締切の日付のみ（例: 11月1日(日)）
